@@ -35,6 +35,7 @@ docs/ui-demo.html   界面设计单文件 Demo（HTML + Tailwind CDN，已移植
 ```bash
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
+pnpm test:web         # 手牌扇形布局等前端纯函数测试（同样 node:test）
 pnpm check            # 引擎 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
@@ -43,11 +44,18 @@ pnpm start            # 跑构建产物（默认端口 3000，见下）
 
 环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）。
 
+> ⚠️ **不要设置空的 `ORIGIN`。** 留空（例如 Compose 里的 `ORIGIN=${ORIGIN:-}`、`ORIGIN=` 或 `ORIGIN=""`）会让
+> adapter-node 直接拒绝启动：
+> `Error: Invalid ORIGIN: ''. ORIGIN must be a valid URL with http:// or https:// protocol.`
+> 不定义该变量时服务端会按请求头推导来源，反代部署正是想要这种行为；确实需要固定来源时，写成完整 URL
+> （如 `ORIGIN=https://game.example.com`）。留空 ≠ 不设置，这是两回事。
+
 端到端冒烟（需先启动服务端）：
 
 ```bash
 BASE=http://127.0.0.1:5178 pnpm --filter web smoke     # 3 个身份打完 N 副（DEALS=n），含 SSE 推送校验
 BASE=http://127.0.0.1:5178 pnpm --filter web lobby     # 开局回归：未开局必须渲染「开始第一副」按钮
+BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面守卫：position 工具类不得混用、座位卡必须 absolute
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
 ```
 
@@ -69,7 +77,8 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 
 - 镜像：`node:24-bookworm-slim` 两阶段构建（装依赖+构建 → 只带产物与运行期依赖），非 root 运行。
 - 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
-- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`ORIGIN`（反代下需要绝对地址时才填）、`DOMAIN`（仅 https profile）。
+- 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）。
+  **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
 - 升级：`git pull && docker compose up -d --build`。
 - 备份 / 恢复：

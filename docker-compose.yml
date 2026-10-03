@@ -18,8 +18,11 @@ services:
       - HOST=${HOST:-0.0.0.0}
       - SIXTY_DB=${SIXTY_DB:-/data/sixty.db}
       - NODE_ENV=production
-      # 反向代理下如需绝对地址生成，填公网地址（本应用非必需）
-      - ORIGIN=${ORIGIN:-}
+      # ⚠️ 不要写 ORIGIN=${ORIGIN:-}：宿主未设置时它会注入「空字符串」，
+      # adapter-node 会直接拒绝启动：Error: Invalid ORIGIN: ''.
+      # 不定义 ORIGIN 时服务端按请求头推导（反代场景正是想要的行为）；
+      # 确实需要绝对地址时，取消下一行注释并填完整 URL：
+      # - ORIGIN=${ORIGIN:-https://game.example.com}
     volumes:
       # 牌局、身份、事件日志都在这里；容器重建不丢
       - sixty-data:/data
