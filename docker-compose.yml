@@ -1,0 +1,73 @@
+# 六十分 —— 一键部署
+#   docker compose up -d --build              # 直接跑在 3000 端口
+#   DOMAIN=game.example.com docker compose --profile https up -d --build   # 带自动 HTTPS（需 80/443 与域名解析）
+#
+# Coolify：直接用它添加本仓库的 compose 资源即可；域名端口填容器端口 3000
+# （Domain 里的端口是“容器端口”，不是公网端口）。
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sixty-points-ol:latest
+    restart: unless-stopped
+    environment:
+      # 形如 ${X:-默认值} 的写法在 Coolify 面板里可直接编辑
+      - PORT=${PORT:-3000}
+      - HOST=${HOST:-0.0.0.0}
+      - SIXTY_DB=${SIXTY_DB:-/data/sixty.db}
+      - NODE_ENV=production
+      # 反向代理下如需绝对地址生成，填公网地址（本应用非必需）
+      - ORIGIN=${ORIGIN:-}
+    volumes:
+      # 牌局、身份、事件日志都在这里；容器重建不丢
+      - sixty-data:/data
+    ports:
+      - '${PUBLIC_PORT:-3000}:${PORT:-3000}'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      # SSE（text/event-stream）最怕中间层 gzip/缓冲：Coolify 会注入 gzip 中间件，
+      # 这行把它关掉，否则页面正常但实时推送永远不来。应用侧已带 X-Accel-Buffering: no。
+      - 'traefik.http.middlewares.gzip.compress=false'
+    # Coolify 自动域名（可选）：把 <hostname> 换成你自己的域名
+    # environment 里再加一行即可：
+    #   - SERVICE_FQDN_APP_3000=<hostname>
+
+  # 可选：自带 HTTPS 的反向代理，启用方式 docker compose --profile https up -d
+  # Caddy 会自动申请并续期证书；SSE 路径单独设置 flush_interval -1 关闭缓冲。
+  caddy:
+    image: caddy:2-alpine
+    profiles: ['https']
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      # 默认 localhost：直接 --profile https 也能起（Caddy 用本地 CA 签本地证书）；
+      # 公网部署时用 DOMAIN=game.example.com 覆盖。
+      - DOMAIN=${DOMAIN:-localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  sixty-data:
+  caddy-data:
+  caddy-config:

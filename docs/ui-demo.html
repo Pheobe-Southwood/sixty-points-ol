@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>六十分 · UI Demo</title>
+
+  <!-- Tailwind v4 浏览器版（需联网）。主题色与 apps/web/src/app.css 完全一致，方便日后搬回 Svelte。 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      --color-felt-950: #04190f;
+      --color-felt-900: #06281d;
+      --color-felt-800: #0b3d2e;
+      --color-felt-700: #12513c;
+      --color-felt-600: #1b6a4f;
+      --color-ivory: #f6f3e8;
+      --color-ink: #16211c;
+      --color-gold: #d8b45a;
+      --font-sans: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+    }
+
+    body { font-family: var(--font-sans); }
+
+    /* ---------- 牌桌 ---------- */
+    .felt {
+      background: radial-gradient(120% 95% at 50% 28%, #17714f 0%, #0d4432 48%, #072b1f 100%);
+      box-shadow: inset 0 0 150px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.06), 0 24px 60px -20px rgba(0,0,0,.7);
+    }
+    .felt::before {
+      content: ''; position: absolute; inset: 14px; border-radius: calc(2.5rem - 10px);
+      border: 1px solid rgba(216,180,90,.16); pointer-events: none;
+    }
+
+    /* ---------- 扑克牌 ---------- */
+    .card {
+      position: relative; flex: none; display: flex; align-items: center; justify-content: center;
+      width: var(--cw, 68px); height: calc(var(--cw, 68px) * 1.52);
+      border-radius: calc(var(--cw, 68px) * .1);
+      background: linear-gradient(160deg, #fcfaf2, #efe9da);
+      border: 1px solid rgba(0,0,0,.25);
+      box-shadow: 0 1px 0 rgba(0,0,0,.3), 0 6px 12px -5px rgba(0,0,0,.55);
+      color: #23303f; cursor: default; user-select: none;
+      transition: transform .16s ease, box-shadow .16s ease;
+    }
+    .card.red { color: #c2412f; }
+    .card .idx {
+      position: absolute; top: 6%; left: 8%;
+      display: flex; flex-direction: column; align-items: center; line-height: 1;
+      font-weight: 700; font-size: calc(var(--cw, 68px) * .26);
+    }
+    .card .idx i { font-style: normal; font-size: calc(var(--cw, 68px) * .2); margin-top: 2px; }
+    .card .idx.br { top: auto; left: auto; bottom: 6%; right: 8%; transform: rotate(180deg); }
+    .card .pip { font-size: calc(var(--cw, 68px) * .5); }
+    /* 主牌：金边 + 右上金点（级牌/王/将牌花色一眼可辨） */
+    .card.trump { border-color: rgba(216,180,90,.85); box-shadow: 0 0 0 1px rgba(216,180,90,.5), 0 6px 12px -5px rgba(0,0,0,.55); }
+    .card.trump::after {
+      content: ''; position: absolute; top: 6%; right: 6%;
+      width: calc(var(--cw, 68px) * .13); height: calc(var(--cw, 68px) * .13);
+      border-radius: 9999px; background: #d8b45a; box-shadow: 0 0 6px rgba(216,180,90,.95);
+    }
+    /* 分牌（5/10/K）：左下小金点 */
+    .card.pt::before {
+      content: ''; position: absolute; bottom: 6%; left: 6%;
+      width: 6px; height: 6px; border-radius: 9999px; background: #b8923a;
+    }
+
+    /* ---------- 手牌扇形 ---------- */
+    .fan { display: flex; justify-content: center; align-items: flex-end; }
+    .fan .card { margin-left: calc(var(--cw, 68px) * -.6); }
+    .fan .card:first-child { margin-left: 0; }
+    .fan.selectable .card { cursor: pointer; }
+    .fan.selectable .card:hover { transform: translateY(-10px); }
+    /* 选中：整体上移 + 顶部金条指示；不抬 z-index，避免盖住左右邻牌的牌角 */
+    .fan.selectable .card.sel { transform: translateY(-26px); box-shadow: 0 -3px 0 0 #d8b45a; filter: brightness(1.06); }
+    @media (max-width: 640px) { .fan { --cw: 52px; } }
+
+    /* ---------- 桌面上的墩 ---------- */
+    .cluster { display: flex; justify-content: center; gap: 6px; --cw: 56px; }
+    .cluster .card:nth-child(2) { transform: rotate(4deg) translateY(-2px); }
+    .cluster .card:nth-child(3) { transform: rotate(-3deg); }
+    @media (max-width: 640px) { .cluster { --cw: 38px; } }
+
+    @keyframes drop-in { from { transform: translateY(-26px) scale(1.06); opacity: 0; } to { transform: none; opacity: 1; } }
+    .drop-in { animation: drop-in .28s ease both; }
+
+    @keyframes shake { 25% { translate: -4px 0; } 75% { translate: 4px 0; } }
+    .shake { animation: shake .16s 2; }
+
+    /* ---------- 埋底槽位 ---------- */
+    .slot {
+      width: 56px; height: 85px; border-radius: 7px;
+      border: 1.5px dashed rgba(246,243,232,.35);
+      display: grid; place-items: center;
+      color: rgba(246,243,232,.4); font-size: 18px;
+      transition: border-color .15s ease;
+    }
+    .slot.filled { border-color: rgba(216,180,90,.65); color: transparent; }
+
+    /* ---------- 叫品按钮 ---------- */
+    .bidbtn { transition: transform .1s ease, background-color .15s ease; }
+    .bidbtn:active { transform: scale(.94); }
+    .bidbtn.on { background: #d8b45a !important; color: #16211c !important; font-weight: 700; }
+
+    .turn-ring { box-shadow: 0 0 0 2px #d8b45a, 0 0 18px rgba(216,180,90,.55); }
+
+    /* 结算算式下的底牌小牌：轻微叠排 */
+    #kittyRow .card { margin-left: -12px; }
+    #kittyRow .card:first-child { margin-left: 0; }
+  </style>
+</head>
+
+<body class="h-dvh overflow-hidden bg-felt-900 text-ivory flex flex-col">
+
+  <!-- ═══════════ 演示切换栏（仅 Demo 用，正式 UI 没有） ═══════════ -->
+  <div class="flex justify-center py-2">
+    <div class="flex items-center gap-1 rounded-full bg-black/40 p-1 ring-1 ring-white/10" id="demoBar">
+      <span class="px-2 text-[10px] tracking-widest text-white/35">演示</span>
+      <button data-go="lobby"   class="rounded-full px-3 py-1 text-xs text-white/70 hover:text-white">大厅</button>
+      <button data-go="auction" class="rounded-full px-3 py-1 text-xs text-white/70 hover:text-white">叫牌</button>
+      <button data-go="bury"    class="rounded-full px-3 py-1 text-xs text-white/70 hover:text-white">埋底</button>
+      <button data-go="play"    class="rounded-full px-3 py-1 text-xs text-white/70 hover:text-white">打牌</button>
+      <button data-go="summary" class="rounded-full px-3 py-1 text-xs text-white/70 hover:text-white">结算</button>
+    </div>
+  </div>
+
+  <!-- ═══════════ 顶栏 ═══════════ -->
+  <header class="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-4 pb-2">
+    <div class="flex items-center gap-3 text-sm">
+      <a href="#" class="text-white/50 hover:text-white">← 大厅</a>
+      <span class="font-mono text-lg font-bold tracking-[.3em] text-gold">69GAF4</span>
+      <button id="btnCopy" class="rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/70 hover:bg-white/10">复制链接</button>
+    </div>
+    <div class="flex items-center gap-2 text-[11px]">
+      <span class="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,.8)]" title="已连接"></span>
+      <span class="text-white/60">阿豪</span>
+    </div>
+  </header>
+
+  <!-- ═══════════ 牌桌 ═══════════ -->
+  <main class="mx-auto w-full max-w-6xl flex-1 px-4" style="min-height: 0;">
+    <div class="felt relative h-full rounded-[2.5rem]">
+
+      <!-- 西家（左上）：头像角标 = 在线状态点 -->
+      <div class="absolute left-3 top-3 w-36 rounded-2xl bg-black/30 p-2.5 ring-1 ring-white/10 backdrop-blur-sm sm:left-5 sm:top-5 sm:w-44 sm:p-3" id="seatW">
+        <div class="flex items-center gap-2.5">
+          <div class="relative shrink-0">
+            <div class="grid h-9 w-9 place-items-center rounded-full bg-felt-600 text-sm font-bold ring-2 ring-white/15">薇</div>
+            <span class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-black/60"></span>
+          </div>
+          <p class="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">薇薇</p>
+          <div class="shrink-0 text-center">
+            <p class="text-base font-bold leading-none tabular-nums">5</p>
+            <span class="mt-0.5 inline-block whitespace-nowrap rounded-full bg-gold px-1 text-[9px] font-bold leading-[13px] text-ink shadow-sm">+2</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 东家（右上） -->
+      <div class="absolute right-3 top-3 w-36 rounded-2xl bg-black/30 p-2.5 ring-1 ring-white/10 backdrop-blur-sm sm:right-5 sm:top-5 sm:w-44 sm:p-3" id="seatE">
+        <div class="flex items-center gap-2.5">
+          <div class="relative shrink-0">
+            <div class="grid h-9 w-9 place-items-center rounded-full bg-felt-600 text-sm font-bold ring-2 ring-white/15">陈</div>
+            <span class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-black/60"></span>
+          </div>
+          <p class="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">老陈</p>
+          <div class="shrink-0 text-center">
+            <p class="text-base font-bold leading-none tabular-nums">5</p>
+            <span class="mt-0.5 inline-block whitespace-nowrap rounded-full bg-gold px-1 text-[9px] font-bold leading-[13px] text-ink shadow-sm">+1</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 我（左下）：庄家 = 金冠 + 卡片金调；“我”= 右上角浮标 -->
+      <div class="absolute bottom-3 left-3 w-36 rounded-2xl bg-gold/10 p-2.5 ring-1 ring-gold/40 backdrop-blur-sm sm:bottom-5 sm:left-5 sm:w-44 sm:p-3" id="seatS">
+        <span title="庄家" class="absolute -top-3 left-3 text-lg leading-none text-gold drop-shadow-[0_1px_2px_rgba(0,0,0,.9)]">♛</span>
+        <span class="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full bg-gold text-[10px] font-bold text-ink shadow">我</span>
+        <div class="flex items-center gap-2.5">
+          <div class="relative shrink-0">
+            <div id="avatarS" class="grid h-9 w-9 place-items-center rounded-full bg-gold/90 text-sm font-bold text-ink ring-2 ring-gold/60">豪</div>
+            <span class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-black/60"></span>
+          </div>
+          <p class="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">阿豪</p>
+          <div class="shrink-0 text-center">
+            <p class="text-base font-bold leading-none tabular-nums">7</p>
+            <span class="mt-0.5 inline-block whitespace-nowrap rounded-full bg-gold px-1 text-[9px] font-bold leading-[13px] text-ink shadow-sm">+1</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 桌面中央：各阶段内容 ── -->
+
+      <!-- 大厅 -->
+      <section data-zone="lobby" data-center class="absolute inset-0 hidden place-items-center">
+        <div class="text-center">
+          <p class="text-[11px] tracking-[.4em] text-gold/70">SIXTY POINTS</p>
+          <h1 class="mt-1 text-5xl font-black tracking-[.2em] text-ivory [text-shadow:0_2px_20px_rgba(0,0,0,.5)]">六十分</h1>
+          <p class="mt-5 text-xs text-white/60">把邀请码 <b class="font-mono tracking-[.3em] text-gold">69GAF4</b> 发给朋友，三人到齐即可开局</p>
+          <div class="mt-4 flex flex-wrap justify-center gap-1.5">
+            <span class="flex items-center gap-1.5 rounded-full bg-black/30 px-3 py-1 text-[11px] ring-1 ring-white/10"><span class="h-2 w-2 rounded-full bg-emerald-400"></span>薇薇</span>
+            <span class="flex items-center gap-1.5 rounded-full bg-black/30 px-3 py-1 text-[11px] ring-1 ring-white/10"><span class="h-2 w-2 rounded-full bg-emerald-400"></span>老陈</span>
+            <span class="flex items-center gap-1.5 rounded-full bg-gold/20 px-3 py-1 text-[11px] ring-1 ring-gold/40"><span class="h-2 w-2 rounded-full bg-emerald-400"></span>阿豪（我）</span>
+          </div>
+          <button data-go="auction" class="mt-6 rounded-xl bg-gold px-8 py-2.5 text-sm font-bold text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.7)] transition hover:brightness-110 active:scale-95">开始第一副</button>
+        </div>
+      </section>
+
+      <!-- 叫牌 -->
+      <section data-zone="auction" data-center class="absolute inset-0 hidden place-items-center">
+        <div class="w-[21rem] max-w-[94%] rounded-2xl bg-black/35 p-4 ring-1 ring-white/10 backdrop-blur-sm sm:w-[24rem] sm:p-5">
+          <div class="flex items-baseline justify-between">
+            <h2 class="text-sm font-bold">叫牌</h2>
+            <span class="text-[11px] text-white/45">第 1 副 · 东家发牌</span>
+          </div>
+
+          <div class="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+            <span class="rounded-md bg-white/10 px-2 py-1"><span class="text-white/50">东</span> 40♠</span>
+            <span class="rounded-md bg-gold/25 px-2 py-1 ring-1 ring-gold/40">轮到你</span>
+          </div>
+
+          <div class="mt-4 space-y-1.5" id="bidGrid">
+            <div class="flex items-center gap-1.5"><span class="w-7 text-right text-xs tabular-nums text-white/55">40</span>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="40NT">无主</button>
+            </div>
+            <div class="flex items-center gap-1.5"><span class="w-7 text-right text-xs tabular-nums text-white/55">45</span>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="45C">♣</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px] text-rose-300" data-bid="45D">♦</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px] text-rose-300" data-bid="45H">♥</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="45S">♠</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="45NT">无主</button>
+            </div>
+            <div class="flex items-center gap-1.5"><span class="w-7 text-right text-xs tabular-nums text-white/55">50</span>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="50C">♣</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px] text-rose-300" data-bid="50D">♦</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px] text-rose-300" data-bid="50H">♥</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="50S">♠</button>
+              <button class="bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px]" data-bid="50NT">无主</button>
+            </div>
+          </div>
+
+          <div class="mt-4 flex items-center gap-2">
+            <button id="btnPass" class="rounded-lg border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10">不叫</button>
+            <button id="btnBidOk" disabled class="ml-auto rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30">确认叫牌</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 埋底 -->
+      <section data-zone="bury" class="absolute inset-0 hidden">
+        <div class="absolute left-1/2 top-[14%] w-[21rem] max-w-[94%] -translate-x-1/2">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-bold">埋底 <span class="ml-1 font-normal text-[11px] text-white/50">选 3 张扣入暗底</span></h2>
+            <button id="btnHelp" class="grid h-6 w-6 place-items-center rounded-full bg-white/10 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:bg-white/20" title="埋底规则">?</button>
+          </div>
+          <div class="mt-4 flex justify-center gap-2" id="kittySlots">
+            <div class="slot" data-slot>✦</div>
+            <div class="slot" data-slot>✦</div>
+            <div class="slot" data-slot>✦</div>
+          </div>
+
+          <!-- 帮助弹层：点 ? 展开，点其他处收起 -->
+          <div id="helpPop" class="absolute right-0 top-9 z-40 hidden w-80 max-w-full rounded-xl bg-black/85 p-4 text-left text-xs leading-relaxed text-white/80 ring-1 ring-white/15 backdrop-blur">
+            <p class="mb-2 text-sm font-bold text-ivory">埋底规则</p>
+            <ul class="list-disc space-y-1.5 pl-4">
+              <li>庄家从 20 张手牌中扣 3 张为<b>暗底</b>，其他两家看不见，结算时才翻开。</li>
+              <li>可以埋分牌（5 / 10 / K），底分不丢：按 <b class="text-gold">末轮张数 ×</b> 结算给末轮赢家。</li>
+            </ul>
+            <div class="mt-2.5 space-y-2 rounded-lg bg-white/5 p-2.5">
+              <p><b class="text-emerald-300">保底</b>：你埋了 ♥5 ♦5（10 分），末轮每人出 2 张、<b>你</b>赢下末轮 → 10 × 2 = <b class="text-emerald-300">+20</b> 计入总分。</p>
+              <p><b class="text-rose-300">抠底</b>：同样 10 分底，末轮被<b>闲家</b>赢走 → 10 × 2 = <b class="text-rose-300">−20</b>，从你的总分里扣（可扣成负数）。</p>
+            </div>
+            <p class="mt-2.5 text-white/50">埋多少分、留多少牌护底，是庄家的核心博弈。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 打牌 -->
+      <section data-zone="play" class="absolute inset-0 hidden">
+        <!-- 状态行：inset-x-0 全宽居中（shrink-to-fit 盒配 left-1/2 会被限制在右半边，窄屏挤成三行） -->
+        <div class="absolute inset-x-0 top-[5.5rem] flex flex-wrap justify-center gap-1.5 px-2 text-[10px] sm:top-6 sm:text-[11px]">
+          <span class="rounded-full bg-black/35 px-3 py-1 ring-1 ring-white/10">第 <b>5</b> 轮</span>
+          <span class="rounded-full bg-black/35 px-3 py-1 ring-1 ring-white/10"><b class="text-gold">60♠</b> 定约</span>
+          <span class="rounded-full bg-black/35 px-3 py-1 ring-1 ring-white/10">级牌 <b>7</b></span>
+          <span class="rounded-full bg-black/35 px-3 py-1 ring-1 ring-white/10">庄已抓 <b class="text-gold tabular-nums">45</b> / 60 分</span>
+        </div>
+
+        <!-- 西家出牌：窄屏时与东家上下错开，避免两墩重叠 -->
+        <div class="absolute left-[6%] top-36 sm:left-[24%] sm:top-[36%]">
+          <p class="mb-1 text-center text-[10px] text-white/45">西</p>
+          <div class="cluster drop-in">
+            <div class="card red"><div class="idx"><span>A</span><i>♥</i></div><div class="pip">♥</div><div class="idx br"><span>A</span><i>♥</i></div></div>
+            <div class="card red pt"><div class="idx"><span>K</span><i>♥</i></div><div class="pip">♥</div><div class="idx br"><span>K</span><i>♥</i></div></div>
+          </div>
+        </div>
+
+        <!-- 东家出牌 -->
+        <div class="absolute right-[6%] top-56 sm:right-[24%] sm:top-[36%]">
+          <p class="mb-1 text-center text-[10px] text-white/45">东</p>
+          <div class="cluster drop-in">
+            <div class="card red"><div class="idx"><span>8</span><i>♥</i></div><div class="pip">♥</div><div class="idx br"><span>8</span><i>♥</i></div></div>
+            <div class="card red"><div class="idx"><span>3</span><i>♥</i></div><div class="pip">♥</div><div class="idx br"><span>3</span><i>♥</i></div></div>
+          </div>
+        </div>
+
+        <!-- 我的出牌位 -->
+        <div class="absolute inset-x-0 bottom-[20%] text-center" id="mePlay">
+          <div class="rounded-xl border border-dashed border-gold/40 px-6 py-4 text-[11px] text-gold/70">轮到你跟牌 · 需 2 张 ♥</div>
+        </div>
+
+        <!-- 赢墩浮标：手机端放在西家牌右侧，避开状态面板 -->
+        <div id="winChip" class="absolute left-[32%] top-36 hidden rounded-full bg-gold px-3 py-1 text-[11px] font-bold text-ink shadow-lg sm:left-[24%] sm:top-[30%]">赢墩 +20 分</div>
+      </section>
+
+      <!-- 结算（弹窗覆盖在桌面上，可关闭查看终局桌面） -->
+      <section data-zone="summary" data-center class="absolute inset-0 hidden place-items-center">
+        <p class="text-xs text-white/50">结算弹窗已弹出（可点右上 × 收起看桌面）</p>
+      </section>
+    </div>
+  </main>
+
+  <!-- ═══════════ 操作条（随阶段变化） ═══════════ -->
+  <div class="mx-auto w-full max-w-6xl px-4 pt-3">
+    <div class="flex min-h-[2.6rem] items-center gap-3">
+      <div data-act="lobby"   class="hidden text-xs text-white/45">三人到齐后开局。</div>
+      <div data-act="auction" class="hidden text-xs text-white/45">结合手牌选择叫品，也可不叫。</div>
+      <div data-act="bury" class="hidden items-center gap-3">
+        <span class="text-xs text-white/70">已选 <b class="tabular-nums text-gold" id="buryCnt">0</b> / 3 张入底</span>
+        <button id="btnBuryOk" disabled class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30">确认埋底</button>
+      </div>
+      <div data-act="play" class="hidden items-center gap-3">
+        <span class="text-xs text-white/70">已选 <b class="tabular-nums text-gold" id="playCnt">0</b> 张（本墩需 2 张）</span>
+        <button id="btnPlay" disabled class="rounded-lg bg-gold px-6 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30">出 牌</button>
+        <button id="btnClear" class="rounded-lg border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10">清空</button>
+        <button id="btnToSummary" class="ml-auto hidden rounded-lg border border-gold/50 px-4 py-1.5 text-xs font-bold text-gold hover:bg-gold/10">演示下一阶段：结算 →</button>
+      </div>
+      <div data-act="summary" class="hidden text-xs text-white/45">本副结束，见结算弹窗。</div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 我的手牌 ═══════════ -->
+  <section class="px-4 pb-4 pt-2" id="handArea">
+    <div class="mb-1.5 text-center text-[11px] text-white/40" id="handInfo">我的手牌</div>
+    <div class="fan" id="fan"></div>
+  </section>
+
+  <!-- ═══════════ 结算弹窗 ═══════════ -->
+  <div id="modal" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+    <div class="w-[24rem] max-w-[94vw] rounded-2xl bg-felt-800 p-4 ring-1 ring-gold/30 sm:p-5">
+      <div class="flex items-start justify-between">
+        <h2 class="text-base font-bold">本副结算 <span class="ml-1 text-xs font-normal text-white/50">60♠ · 庄家阿豪</span></h2>
+        <button id="modalClose" class="rounded-md px-2 text-white/50 hover:bg-white/10 hover:text-white">×</button>
+      </div>
+
+      <!-- 一条算式，各项下标注含义 -->
+      <div class="mt-5 flex items-start justify-center gap-1.5">
+        <div class="w-14 text-center">
+          <p class="text-[26px] font-black leading-none tabular-nums">65</p>
+          <p class="mt-1.5 text-[10px] text-white/50">墩分</p>
+        </div>
+        <span class="mt-2 text-lg leading-none text-white/40">+</span>
+        <div class="w-14 text-center">
+          <p class="text-[26px] font-black leading-none tabular-nums">10</p>
+          <p class="mt-1.5 text-[10px] text-white/50">底牌 3 张</p>
+          <div class="mt-1 flex justify-center" id="kittyRow"></div>
+        </div>
+        <span class="mt-2 text-lg leading-none text-white/40">×</span>
+        <div class="w-10 text-center">
+          <p class="text-[26px] font-black leading-none tabular-nums text-gold">2</p>
+          <p class="mt-1.5 text-[10px] text-white/50">末轮张数</p>
+        </div>
+        <span class="mt-2 text-lg leading-none text-white/40">=</span>
+        <div class="w-14 text-center">
+          <p class="text-[26px] font-black leading-none tabular-nums text-gold">85</p>
+          <p class="mt-1.5 text-[10px] text-white/50">最终得分</p>
+        </div>
+      </div>
+      <p class="mt-2 text-center text-[10px] text-emerald-300/90">保底 · 末轮由庄家赢下，底分 ×2 计入</p>
+
+      <div class="mt-4 rounded-xl bg-emerald-500/15 px-4 py-2 text-center ring-1 ring-emerald-400/30">
+        <p class="text-sm font-bold text-emerald-300">打成 · 85 ≥ 60</p>
+      </div>
+
+      <div class="mt-3 space-y-1 text-xs">
+        <p class="rounded-lg bg-gold/15 px-3 py-2 ring-1 ring-gold/30">阿豪（庄）升 4 级：<b>4 → 8</b></p>
+        <p class="rounded-lg bg-white/5 px-3 py-2 text-white/60">薇薇 / 老陈（闲）：级别不变</p>
+      </div>
+
+      <div class="mt-4 flex items-center justify-between">
+        <span class="text-[11px] text-white/40">下一副：西家发牌</span>
+        <div class="flex gap-2">
+          <button id="modalClose2" class="rounded-lg border border-white/20 px-4 py-1.5 text-xs text-white/70 hover:bg-white/10">看看桌面</button>
+          <button data-go="auction" class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink hover:brightness-110">下一副</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="pointer-events-none fixed bottom-40 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink/90 px-4 py-2 text-xs text-ivory opacity-0 shadow-xl ring-1 ring-white/10 transition-all duration-300"></div>
+
+<script>
+/* ═══════════════════ 数据与工具 ═══════════════════
+   牌: {s:'S'|'H'|'D'|'C', r:2..14} 或 {j:'big'|'small'}
+   主牌 = ♠ + 级牌 7 + 双王（本副 60♠ · 级 7）        */
+const RANK_LBL = { 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
+const SUIT_GLYPH = { S: '♠', H: '♥', D: '♦', C: '♣' };
+const rl = r => RANK_LBL[r] ?? String(r);
+const isTrump = c => !!c.j || c.s === 'S' || c.r === 7;
+const pts = c => (c.j || !c.r) ? 0 : (c.r === 5 ? 5 : (c.r === 10 || c.r === 13 ? 10 : 0));
+const keyOf = c => c.j ? c.j : c.s + c.r;
+
+/* 各阶段手牌快照 */
+const HAND_AUCTION = [
+  {j:'big'},{j:'small'},
+  {s:'S',r:14},{s:'S',r:13},{s:'S',r:9},{s:'S',r:8},{s:'S',r:7},{s:'S',r:3},
+  {s:'H',r:14},{s:'H',r:13},{s:'H',r:10},{s:'H',r:7},{s:'H',r:5},
+  {s:'C',r:13},{s:'C',r:11},
+  {s:'D',r:10},{s:'D',r:5},
+];
+const HAND_BURY = [...HAND_AUCTION, {s:'D',r:8},{s:'C',r:6},{s:'C',r:4}];
+/* 埋掉 S3/C6/D8；前 4 轮打出 S9/H13/D10/C11 → 手剩 13 张 */
+const HAND_PLAY = HAND_BURY
+  .filter(c => !['S3','C6','D8','S9','H13','D10','C11'].includes(keyOf(c)));
+
+const $ = s => document.querySelector(s);
+const fan = $('#fan');
+const state = { phase: 'play', selected: new Set(), played: false, bid: null };
+
+/* ═══════════════════ 渲染 ═══════════════════ */
+function cardEl(c) {
+  const el = document.createElement('div');
+  el.dataset.k = keyOf(c);
+  el.className = 'card' + ((c.j || c.s === 'H' || c.s === 'D') ? ' red' : '')
+                       + (isTrump(c) ? ' trump' : '') + (pts(c) ? ' pt' : '');
+  if (c.j) {
+    el.innerHTML = `<div class="idx"><span>${c.j === 'big' ? '大' : '小'}</span></div>
+                    <div class="pip">${c.j === 'big' ? '☀' : '☾'}</div>`;
+    if (c.j === 'small') el.classList.remove('red');
+  } else {
+    const g = SUIT_GLYPH[c.s], r = rl(c.r);
+    el.innerHTML = `<div class="idx"><span>${r}</span><i>${g}</i></div>
+                    <div class="pip">${g}</div>
+                    <div class="idx br"><span>${r}</span><i>${g}</i></div>`;
+  }
+  return el;
+}
+
+function renderFan(cards, selectable) {
+  fan.innerHTML = '';
+  cards.forEach(c => fan.appendChild(cardEl(c)));
+  fan.classList.toggle('selectable', selectable);
+  state.selected.clear();
+  $('#handInfo').textContent = selectable
+    ? '点选牌面组牌（演示不校验规则）'
+    : `我的手牌 · ${cards.length} 张 · ${cards.reduce((s, c) => s + pts(c), 0)} 分`;
+  updateAct();
+}
+
+function updateAct() {
+  /* 操作条随阶段显隐 */
+  document.querySelectorAll('[data-act]').forEach(el => {
+    const on = el.dataset.act === state.phase;
+    el.classList.toggle('hidden', !on);
+    el.classList.toggle('flex', on);
+  });
+  if (state.phase === 'bury') {
+    $('#buryCnt').textContent = state.selected.size;
+    $('#btnBuryOk').disabled = state.selected.size !== 3;
+    /* 埋底槽位回显 */
+    const cards = [...state.selected].map(k => HAND_BURY.find(c => keyOf(c) === k));
+    document.querySelectorAll('[data-slot]').forEach((slot, i) => {
+      slot.innerHTML = '';
+      slot.classList.toggle('filled', !!cards[i]);
+      if (cards[i]) { const c = cardEl(cards[i]); c.style.setProperty('--cw', '50px'); slot.appendChild(c); }
+    });
+  }
+  if (state.phase === 'play') {
+    $('#playCnt').textContent = state.selected.size;
+    $('#btnPlay').disabled = state.played || state.selected.size !== 2;
+  }
+}
+
+function go(phase) {
+  state.phase = phase;
+  $('#avatarS').classList.remove('turn-ring', 'animate-pulse');
+  document.querySelectorAll('[data-zone]').forEach(el => {
+    const on = el.dataset.zone === phase;
+    el.classList.toggle('hidden', !on);
+    el.classList.toggle('grid', on && el.hasAttribute('data-center'));
+  });
+  /* 演示栏高亮 */
+  document.querySelectorAll('#demoBar [data-go]').forEach(b => {
+    const on = b.dataset.go === phase;
+    b.className = 'rounded-full px-3 py-1 text-xs ' + (on ? 'bg-gold font-bold text-ink' : 'text-white/70 hover:text-white');
+  });
+  $('#handArea').style.visibility = phase === 'lobby' ? 'hidden' : 'visible';
+
+  if (phase === 'auction') {
+    state.bid = null;
+    document.querySelectorAll('.bidbtn').forEach(b => b.classList.remove('on'));
+    $('#btnBidOk').disabled = true;
+    renderFan(HAND_AUCTION, false);
+  }
+  if (phase === 'bury') renderFan(HAND_BURY, true);
+  if (phase === 'play') {
+    state.played = false;
+    /* 轮到我：头像金圈脉动提示 */
+    $('#avatarS').classList.add('turn-ring', 'animate-pulse');
+    $('#mePlay').innerHTML = '<div class="rounded-xl border border-dashed border-gold/40 px-6 py-4 text-[11px] text-gold/70">轮到你跟牌 · 需 2 张 ♥</div>';
+    $('#winChip').classList.add('hidden');
+    $('#btnToSummary').classList.add('hidden');
+    renderFan(HAND_PLAY, true);
+  }
+  if (phase === 'summary') {
+    renderFan(HAND_PLAY, false);
+    const row = $('#kittyRow'); row.innerHTML = '';
+    [{s:'H',r:5},{s:'D',r:5},{s:'C',r:4}].forEach(c => { const e = cardEl(c); e.style.setProperty('--cw','26px'); row.appendChild(e); });
+    $('#modal').classList.remove('hidden'); $('#modal').classList.add('flex');
+  } else { $('#modal').classList.add('hidden'); $('#modal').classList.remove('flex'); }
+  updateAct();
+}
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.opacity = 1; t.style.translate = '-50% -6px';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => { t.style.opacity = 0; t.style.translate = '-50% 0'; }, 2200);
+}
+
+/* ═══════════════════ 交互 ═══════════════════ */
+/* 阶段切换（演示栏 + 带 data-go 的按钮） */
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-go]');
+  if (!b) return;
+  go(b.dataset.go);
+  if (b.dataset.go === 'auction') toast('发牌完成 · 进入叫牌（演示）');
+});
+
+/* 手牌选牌 */
+fan.addEventListener('click', e => {
+  const el = e.target.closest('.card');
+  if (!el || !fan.classList.contains('selectable')) return;
+  const k = el.dataset.k;
+  if (state.selected.has(k)) {
+    state.selected.delete(k); el.classList.remove('sel');
+  } else {
+    if (state.phase === 'bury' && state.selected.size >= 3) {
+      el.classList.add('shake'); setTimeout(() => el.classList.remove('shake'), 400);
+      toast('底牌只能埋 3 张'); return;
+    }
+    if (state.phase === 'play' && state.played) return;
+    if (state.phase === 'play' && state.selected.size >= 2) {
+      el.classList.add('shake'); setTimeout(() => el.classList.remove('shake'), 400);
+      toast('本墩需 2 张'); return;
+    }
+    state.selected.add(k); el.classList.add('sel');
+  }
+  updateAct();
+});
+
+/* 叫牌 */
+$('#bidGrid').addEventListener('click', e => {
+  const b = e.target.closest('.bidbtn'); if (!b) return;
+  document.querySelectorAll('.bidbtn').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); state.bid = b.dataset.bid;
+  $('#btnBidOk').disabled = false;
+});
+$('#btnBidOk').addEventListener('click', () => {
+  toast(`已叫 ${state.bid.replace(/(NT)/,'无主').replace(/C/,'♣').replace(/D/,'♦').replace(/H/,'♥').replace(/S/,'♠')}，两家不叫后你成为庄家（演示）`);
+  setTimeout(() => go('bury'), 600);
+});
+$('#btnPass').addEventListener('click', () => {
+  toast('不叫（演示：直接看埋底阶段）');
+  setTimeout(() => go('bury'), 600);
+});
+
+/* 埋底确认 */
+$('#btnBuryOk').addEventListener('click', () => { toast('已埋 3 张底牌 · 进入打牌'); setTimeout(() => go('play'), 500); });
+
+/* 出牌 */
+$('#btnPlay').addEventListener('click', () => {
+  if (state.selected.size !== 2) return;
+  state.played = true;
+  const cards = [...state.selected].map(k => HAND_PLAY.find(c => keyOf(c) === k));
+  const zone = $('#mePlay');
+  zone.innerHTML = '<div class="cluster drop-in"></div>';
+  cards.forEach(c => zone.firstChild.appendChild(cardEl(c)));
+  /* 手牌中隐藏已打出的牌 */
+  fan.querySelectorAll('.card.sel').forEach(el => { el.style.visibility = 'hidden'; });
+  fan.classList.remove('selectable');
+  updateAct();
+  setTimeout(() => {
+    $('#winChip').classList.remove('hidden');
+    toast('副级相等 · 先出为大 → 西家赢墩 +20 分');
+    $('#btnToSummary').classList.remove('hidden');
+  }, 800);
+});
+$('#btnClear').addEventListener('click', () => {
+  state.selected.clear();
+  fan.querySelectorAll('.card.sel').forEach(el => el.classList.remove('sel'));
+  updateAct();
+});
+$('#btnToSummary').addEventListener('click', () => go('summary'));
+
+/* 弹窗与杂项 */
+const closeModal = () => { $('#modal').classList.add('hidden'); $('#modal').classList.remove('flex'); };
+$('#modalClose').addEventListener('click', closeModal);
+$('#modalClose2').addEventListener('click', closeModal);
+
+/* 埋底帮助弹层：点 ? 开关，点别处收起 */
+$('#btnHelp').addEventListener('click', e => {
+  e.stopPropagation();
+  $('#helpPop').classList.toggle('hidden');
+});
+document.addEventListener('click', e => {
+  const pop = $('#helpPop');
+  if (!pop.classList.contains('hidden') && !e.target.closest('#helpPop')) pop.classList.add('hidden');
+});
+
+$('#btnCopy').addEventListener('click', () => {
+  navigator.clipboard?.writeText('http://127.0.0.1:5178/table/69GAF4').catch(() => {});
+  toast('已复制邀请链接');
+});
+
+/* 初始：直接展示信息量最大的打牌阶段 */
+go('play');
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Caddy 反向代理：自动 HTTPS + SSE 不缓冲
+{$DOMAIN} {
+	encode zstd gzip
+
+	# SSE 流必须即时透传，不能被缓冲或压缩
+	@sse path /api/tables/*/stream
+	reverse_proxy @sse app:3000 {
+		flush_interval -1
+	}
+
+	reverse_proxy app:3000
+}

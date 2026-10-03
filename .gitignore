@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.svelte-kit/
+build/
+.pnpm-store/
+*.db
+*.db-shm
+*.db-wal
+data/
+.env
+.env.*
+!.env.example
+vite.config.ts.timestamp-*
+.deploy-check/

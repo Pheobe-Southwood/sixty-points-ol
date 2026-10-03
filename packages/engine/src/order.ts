@@ -1,0 +1,181 @@
+import { isJoker, SUITS, type Card, type Rank, type Suit, type Strain } from './cards.ts';
+
+/** 本副的将牌模型：叫到的花色 + 庄家级别点数（级牌） */
+export interface TrumpModel {
+  readonly strain: Strain;
+  readonly rank: Rank;
+}
+
+/** 牌在打牌中的“门”：'T' 表示主牌门，其余为副牌门 */
+export type CardClass = 'T' | Suit;
+
+export const TRUMP_OFF_RANK_LEVEL = 13;
+export const TRUMP_MAIN_RANK_LEVEL = 14;
+export const TRUMP_SMALL_JOKER_LEVEL = 15;
+export const TRUMP_BIG_JOKER_LEVEL = 16;
+export const TRUMP_TOP_LEVEL = TRUMP_BIG_JOKER_LEVEL;
+
+export function cardClass(c: Card, t: TrumpModel): CardClass {
+  if (isJoker(c)) return 'T';
+  if (c.rank === t.rank) return 'T';
+  if (t.strain !== 'NT' && c.suit === t.strain) return 'T';
+  return c.suit;
+}
+
+/** 副牌/主花色内按“跳过级牌”连续编号：2→1 … 去掉级牌后 A→12 */
+function skipLevel(rank: Rank, removed: Rank): number {
+  return rank < removed ? rank - 1 : rank - 2;
+}
+
+/**
+ * 同门内大小层号，数值越大越强。
+ * 主牌：主花色 1..12 < 副级(13，三张相等) < 主级(14) < 小王(15) < 大王(16)
+ * 无主：级牌(1，四张相等) < 小王(2) < 大王(3)
+ * 副牌：1..12（跳过级牌）
+ */
+export function cardLevel(c: Card, t: TrumpModel): number {
+  if (t.strain === 'NT') {
+    // 无主：四张级牌相等（层号 1）< 小王(2) < 大王(3)
+    if (isJoker(c)) return c.joker === 'small' ? 2 : 3;
+    return c.rank === t.rank ? 1 : skipLevel(c.rank, t.rank);
+  }
+  if (isJoker(c)) return c.joker === 'small' ? TRUMP_SMALL_JOKER_LEVEL : TRUMP_BIG_JOKER_LEVEL;
+  if (c.suit === t.strain) {
+    return c.rank === t.rank ? TRUMP_MAIN_RANK_LEVEL : skipLevel(c.rank, t.rank);
+  }
+  return c.rank === t.rank ? TRUMP_OFF_RANK_LEVEL : skipLevel(c.rank, t.rank);
+}
+
+/** 一组同门牌按大小升序；用于比较与拆分 */
+export function sortByLevel<T extends Card>(cards: readonly T[], t: TrumpModel): T[] {
+  return [...cards].sort((a, b) => cardLevel(a, t) - cardLevel(b, t));
+}
+
+/**
+ * 一组同门牌的连续段长度（降序）。
+ * 采用「每次抽取最长连续链」的贪心分解：每层号取一张，长度按层号严格 +1 递增。
+ * 层号相等的牌（副级、无主级牌）不能同链，但可以被不同链分别使用——
+ * 例：持 A + 两张副级 + 主级（层号 12,13,13,14）分解为 [3,1]，
+ * 因此 3 张即可取出 A-副级-主级 三连。
+ */
+export function segments(cards: readonly Card[], t: TrumpModel): number[] {
+  const counts = new Map<number, number>();
+  for (const card of cards) {
+    const lv = cardLevel(card, t);
+    counts.set(lv, (counts.get(lv) ?? 0) + 1);
+  }
+  const out: number[] = [];
+  let remaining = cards.length;
+  while (remaining > 0) {
+    const levels = [...counts.entries()]
+      .filter(([, n]) => n > 0)
+      .map(([lv]) => lv)
+      .sort((a, b) => a - b);
+    let bestStart = 0;
+    let bestLen = 0;
+    let i = 0;
+    while (i < levels.length) {
+      let j = i;
+      while (j + 1 < levels.length && levels[j + 1] === levels[j]! + 1) j += 1;
+      const len = j - i + 1;
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = i;
+      }
+      i = j + 1;
+    }
+    for (let k = bestStart; k < bestStart + bestLen; k++) {
+      const lv = levels[k]!;
+      counts.set(lv, counts.get(lv)! - 1);
+    }
+    out.push(bestLen);
+    remaining -= bestLen;
+  }
+  return out.sort((a, b) => b - a);
+}
+
+export function compareProfiles(a: readonly number[], b: readonly number[]): number {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av !== bv) return av - bv;
+  }
+  return 0;
+}
+
+/**
+ * 结构优先：从 holding 中取 n 张，使连续段分解字典序最大。
+ * 贪心：先整段取最长，预算不足时从下一段取等长连续片。
+ * 例：持 3+2 跟 4 张 → 3 顺 + 任意 1 张；持 2+2 跟 4 张 → 两顺跟完；
+ *     持 3+3+2 跟 5 张 → 一个 3 顺 + 一个 2 顺段（原 2 顺或拆 3 顺）。
+ */
+export function bestProfile(holding: readonly Card[], t: TrumpModel, n: number): number[] {
+  if (holding.length > 0 && classOfSet(holding, t) === null) {
+    throw new Error('bestProfile 只接受同一门的牌');
+  }
+  const segs = segments(holding, t);
+  const out: number[] = [];
+  let budget = n;
+  for (const len of segs) {
+    if (budget <= 0) break;
+    if (len <= budget) {
+      out.push(len);
+      budget -= len;
+    } else {
+      out.push(budget);
+      budget = 0;
+    }
+  }
+  return out;
+}
+
+/** 单段顺子判定：同门、无重复层号、严格相邻；单张也视为可领出 */
+export function isRun(cards: readonly Card[], t: TrumpModel): boolean {
+  if (cards.length < 2) return false;
+  return segments(cards, t).length === 1;
+}
+
+/** 顶张层号（用于比较同长度单段顺子） */
+export function topLevel(cards: readonly Card[], t: TrumpModel): number {
+  return cards.reduce((max, c) => Math.max(max, cardLevel(c, t)), -1);
+}
+
+const SUIT_DISPLAY_ORDER: Record<Suit, number> = { S: 0, H: 1, C: 2, D: 3 };
+
+/** 手牌排序：主牌在前，随后 ♠♥♣♦，同门内由大到小；无将牌信息时双王在前 */
+export function sortHand(cards: readonly Card[], t: TrumpModel | null): Card[] {
+  const group = (c: Card): number => {
+    if (isJoker(c)) return -1;
+    if (t !== null && cardClass(c, t) === 'T') return -1;
+    return SUIT_DISPLAY_ORDER[c.suit] + 1;
+  };
+  const level = (c: Card): number => {
+    if (!t) return isJoker(c) ? (c.joker === 'big' ? 2 : 1) : c.rank;
+    return cardLevel(c, t);
+  };
+  return [...cards].sort((a, b) => {
+    const ga = group(a);
+    const gb = group(b);
+    if (ga !== gb) return ga - gb;
+    return level(b) - level(a);
+  });
+}
+
+export function classOfSet(cards: readonly Card[], t: TrumpModel): CardClass | null {
+  let cls: CardClass | null = null;
+  for (const c of cards) {
+    const cc = cardClass(c, t);
+    if (cls === null) cls = cc;
+    else if (cls !== cc) return null;
+  }
+  return cls;
+}
+
+/** 一副牌里某门的全部张数（用于校验牌集完整性） */
+export function classSize(t: TrumpModel, cls: CardClass): number {
+  if (cls === 'T') return t.strain === 'NT' ? 6 : 18;
+  return 12;
+}
+
+export const ALL_CLASSES: readonly CardClass[] = ['T', ...SUITS];
