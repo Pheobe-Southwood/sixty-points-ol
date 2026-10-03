@@ -1,49 +1,63 @@
 /**
- * 牌面映射单测：角落与正中必须指向同一张牌。
+ * 牌面映射单测：牌名只能出现在**角落索引**里，正面正中是图案/花色，不再写名字。
  *
- * 回归点是原始缺陷——王牌的角落写「大/小」、正中却只写一个「王」字，
- * 于是同一张牌在牌面上读出两种意思。
+ * 走过两次弯路，两个回归点都留在这里：
+ *   ① 角落写「大/小」、正中只写一个「王」—— 同一张牌读出两种意思；
+ *   ② 角落与正中都写名字 —— 一张牌上「小王」重复三遍（更抽象）。
  *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cardFace } from '../src/lib/card-face.ts';
+import { JOKER_PIP, cardFace } from '../src/lib/card-face.ts';
 import { handOf } from '../src/lib/tutorial/scenarios.ts';
 
-test('大王：角落「大 + 王」，正中「大王」，红字', () => {
+test('大王：角落「大 + 王」，正中红日，红字', () => {
   const face = cardFace(handOf('j1')[0]!);
   assert.equal(face.joker, true);
   assert.equal(face.rank, '大');
   assert.equal(face.glyph, '王');
-  assert.equal(face.pip, '大王');
+  assert.equal(face.pip, '☀');
   assert.equal(face.red, true);
   assert.equal(face.aria, '大王');
 });
 
-test('小王：角落「小 + 王」，正中「小王」，黑字', () => {
+test('小王：角落「小 + 王」，正中素月，黑字', () => {
   const face = cardFace(handOf('j0')[0]!);
   assert.equal(face.joker, true);
   assert.equal(face.rank, '小');
   assert.equal(face.glyph, '王');
-  assert.equal(face.pip, '小王');
+  assert.equal(face.pip, '☾');
   assert.equal(face.red, false);
   assert.equal(face.aria, '小王');
 });
 
-test('回归：正中不再单独出现一个「王」字（角落与正中会读成两张牌）', () => {
+test('不变量：角落两排拼起来正好是牌名', () => {
   for (const key of ['j0', 'j1']) {
     const face = cardFace(handOf(key)[0]!);
-    assert.notEqual(face.pip, '王', `${key} 的正中仍是孤零零的「王」`);
-    assert.ok(face.pip.startsWith(face.rank), `${key} 的正中应包含角落的「${face.rank}」`);
-    assert.equal(face.pip, `${face.rank}王`);
+    assert.equal(face.rank + face.glyph, face.aria, `${key} 的角落索引拼不出牌名`);
   }
-  // 角落两排拼起来必须正好等于正中
+  assert.equal(cardFace(handOf('j1')[0]!).rank + cardFace(handOf('j1')[0]!).glyph, '大王');
+  assert.equal(cardFace(handOf('j0')[0]!).rank + cardFace(handOf('j0')[0]!).glyph, '小王');
+});
+
+test('回归 ①：正中不再只写一个「王」（角落写大、正中写王，会读成两张牌）', () => {
+  for (const key of ['j0', 'j1']) {
+    assert.notEqual(cardFace(handOf(key)[0]!).pip, '王');
+  }
+});
+
+test('回归 ②：正中不再是文字名（否则「小王」在一张牌上重复三遍）', () => {
   for (const key of ['j0', 'j1']) {
     const face = cardFace(handOf(key)[0]!);
-    assert.equal(face.rank + face.glyph, face.pip);
+    for (const ch of ['大', '小', '王']) {
+      assert.equal(face.pip.includes(ch), false, `${key} 的正中仍含「${ch}」：${face.pip}`);
+    }
+    assert.equal(face.pip, JOKER_PIP[key === 'j1' ? 'big' : 'small']);
   }
+  // 两张王的图案必须不同，否则分不出大小
+  assert.notEqual(cardFace(handOf('j0')[0]!).pip, cardFace(handOf('j1')[0]!).pip);
 });
 
 test('普通牌：角落与正中沿用花色字形，点数用 A/J/Q/K', () => {

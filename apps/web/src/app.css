@@ -138,10 +138,12 @@ button:disabled {
   font-size: calc(var(--cw, 56px) * 0.5);
 }
 
-/* 王：正中写「大王」/「小王」两字，字号要收一档，50px 窄屏牌上也放得下 */
+/* 王：正中是一枚图案（☀ / ☾）而不是文字名 —— 名字只在角落索引里。
+   早先让正中写「大王/小王」，加上两处角落索引，一张牌上就重复了三遍名字。 */
 .card .pip.joker {
-  font-size: calc(var(--cw, 56px) * 0.3);
-  white-space: nowrap;
+  font-size: calc(var(--cw, 56px) * 0.56);
+  /* 个别平台会把 ☀ 当 emoji 渲染成彩色图片；这里明确要求文字呈现（不支持的浏览器会忽略） */
+  font-variant-emoji: text;
 }
 
 /* 主牌：只靠金边区分（不再有右上金点——角落的装饰点看着像另一张牌） */
