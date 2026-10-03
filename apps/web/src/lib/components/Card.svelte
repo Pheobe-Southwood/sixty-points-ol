@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { cardClass, cardPoints, isJoker, rankLabel, SUIT_LABEL, type Card, type TrumpModel } from '@sixty/engine';
+  import { cardClass, type Card, type TrumpModel } from '@sixty/engine';
+  import { cardFace } from '$lib/card-face';
 
   let {
     card,
@@ -17,30 +18,12 @@
     onclick?: () => void;
   } = $props();
 
-  const face = $derived.by(() => {
-    const c = card;
-    if (isJoker(c)) {
-      return {
-        rank: c.joker === 'big' ? '大' : '小',
-        glyph: c.joker === 'big' ? '☀' : '☾',
-        pip: '王',
-        red: c.joker === 'big',
-        aria: c.joker === 'big' ? '大王' : '小王'
-      };
-    }
-    return {
-      rank: rankLabel(c.rank),
-      glyph: SUIT_LABEL[c.suit],
-      pip: SUIT_LABEL[c.suit],
-      red: c.suit === 'H' || c.suit === 'D',
-      aria: `${SUIT_LABEL[c.suit]}${rankLabel(c.rank)}`
-    };
-  });
-
+  const face = $derived(cardFace(card));
   const isTrump = $derived(trump !== null && cardClass(card, trump) === 'T');
-  const isPoint = $derived(cardPoints(card) > 0);
 </script>
 
+<!-- 除了主牌金边，牌上没有第二个装饰性标记：角落只有点数 + 花色（王则是「大/小」+「王」），
+     正中只有那一门的字形（王则是「大王」/「小王」）。分牌靠点数自己认。 -->
 <button
   type="button"
   class={[
@@ -49,7 +32,6 @@
     size === 'lg' && 'card-lg',
     face.red && 'red',
     isTrump && 'trump',
-    isPoint && 'pt',
     muted && 'muted'
   ]}
   data-selected={selected}
@@ -59,13 +41,11 @@
 >
   <span class="idx">
     <span>{face.rank}</span>
-    {#if !isJoker(card)}<i>{face.glyph}</i>{/if}
+    <i>{face.glyph}</i>
   </span>
-  <span class="pip">{face.pip}</span>
-  {#if !isJoker(card)}
-    <span class="idx br">
-      <span>{face.rank}</span>
-      <i>{face.glyph}</i>
-    </span>
-  {/if}
+  <span class="pip" class:joker={face.joker}>{face.pip}</span>
+  <span class="idx br">
+    <span>{face.rank}</span>
+    <i>{face.glyph}</i>
+  </span>
 </button>

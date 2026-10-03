@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { cardKey, type PersonalView } from '@sixty/engine';
-  import CardView from './Card.svelte';
-  import { seatLabel } from '$lib/labels';
+  import type { PersonalView } from '@sixty/engine';
+  import { whoLabel } from '$lib/labels';
+  import TrickCluster from './TrickCluster.svelte';
 
-  let { view, seat }: { view: PersonalView; seat: number } = $props();
+  let {
+    view,
+    seat,
+    names = []
+  }: { view: PersonalView; seat: number; names?: readonly (string | null)[] } = $props();
 
   const deal = $derived(view.deal);
   const trump = $derived(deal?.trump ?? null);
@@ -29,26 +33,14 @@
   }
 </script>
 
-{#if plays.length === 0}
-  <p class="absolute inset-x-0 top-[38%] px-4 text-center text-xs text-white/45">
-    等待庄家埋底并领出第一轮…
-  </p>
-{:else}
-  {#each plays as play (play.seat)}
-    <div class={spotOf(play.seat)}>
-      <p class="mb-1 text-center text-[10px] text-white/45">{seatLabel(play.seat)}</p>
-      <div class="cluster drop-in">
-        {#each play.cards as card (cardKey(card))}
-          <CardView {card} {trump} size="sm" />
-        {/each}
-      </div>
-      {#if winnerSeat === play.seat}
-        <p class="mt-1 text-center">
-          <span class="rounded-full bg-gold px-2 py-0.5 text-[10px] font-bold text-ink shadow"
-            >上一轮 · 赢墩 +{trickPoints} 分</span
-          >
-        </p>
-      {/if}
-    </div>
-  {/each}
-{/if}
+<!-- 首次领出前桌面是空的：不写任何提示，规则说明只在「?」弹层里 -->
+{#each plays as play (play.seat)}
+  <div class={spotOf(play.seat)}>
+    <TrickCluster
+      cards={play.cards}
+      {trump}
+      caption={whoLabel(names, seat, play.seat)}
+      badge={winnerSeat === play.seat ? `上一轮 · 赢墩 +${trickPoints} 分` : null}
+    />
+  </div>
+{/each}

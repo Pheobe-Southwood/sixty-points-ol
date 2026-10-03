@@ -11,11 +11,9 @@ import {
   type Seat
 } from '@sixty/engine';
 import type { SeatInfo, TableView } from '$lib/shared';
+import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '$lib/invite';
 import { db, now, transaction } from './db';
 import { broadcast, isUserOnline } from './hub';
-
-const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const CODE_LENGTH = 6;
 
 export interface TableInfo {
   readonly id: number;
@@ -42,7 +40,7 @@ const cryptoRng = (): number => randomInt(0, 2 ** 32) / 2 ** 32;
 function makeCode(): string {
   for (let attempt = 0; attempt < 50; attempt++) {
     let code = '';
-    for (let i = 0; i < CODE_LENGTH; i++) code += CODE_ALPHABET[randomInt(0, CODE_ALPHABET.length)];
+    for (let i = 0; i < INVITE_CODE_LENGTH; i++) code += INVITE_CODE_ALPHABET[randomInt(0, INVITE_CODE_ALPHABET.length)];
     const exists = db.prepare('SELECT 1 FROM tables WHERE code = ?').get(code);
     if (!exists) return code;
   }

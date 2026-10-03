@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
+  import InviteCode from './InviteCode.svelte';
 
   let { client, code }: { client: TableClient; code: string } = $props();
 
   const table = $derived(client.table);
   const seats = $derived(table?.seats ?? []);
-  const seated = $derived(table?.seatedCount ?? 0);
   const ready = $derived(table?.ready ?? false);
 </script>
 
@@ -17,13 +17,14 @@
     >
       六十分
     </h1>
-    <p class="mt-4 text-xs text-white/60">
-      把邀请码 <b class="font-mono tracking-[.3em] text-gold">{code}</b> 发给朋友，三人到齐即可开局
-    </p>
 
-    <p class="mt-3 text-xs font-semibold text-white/70">已入座 {seated}/3</p>
+    <!-- 点邀请码即复制邀请链接；不写阶段说明（那在左下的「?」里） -->
+    <p class="mt-4 text-xs text-white/60">点邀请码即可复制邀请链接，发给朋友：</p>
+    <div class="mt-1.5 flex justify-center">
+      <InviteCode {code} class="font-mono text-lg font-bold tracking-[.3em] text-gold" />
+    </div>
 
-    <div class="mt-3 flex flex-wrap justify-center gap-1.5 text-[11px]">
+    <div class="mt-4 flex flex-wrap justify-center gap-1.5 text-[11px]">
       {#each seats as seat (seat.seat)}
         <span
           class={[
@@ -43,8 +44,12 @@
       disabled={!ready || client.busy}
       onclick={() => void client.deal()}
     >
-      {ready ? '开始第一副' : `还差 ${3 - seated} 人`}
+      {ready ? '开始第一副' : `还差 ${3 - seats.filter((seat) => seat.userId !== null).length} 人`}
     </button>
+
+    <p class="mt-3">
+      <a class="text-[11px] text-white/45 hover:text-white" href="/rules">第一次玩？看新手教程 →</a>
+    </p>
 
     {#if client.error}
       <p class="mt-2 rounded-lg bg-red-500/20 px-3 py-1 text-xs text-red-200">{client.error}</p>

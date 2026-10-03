@@ -138,36 +138,18 @@ button:disabled {
   font-size: calc(var(--cw, 56px) * 0.5);
 }
 
-/* 主牌：金边 + 右上金点 */
+/* 王：正中写「大王」/「小王」两字，字号要收一档，50px 窄屏牌上也放得下 */
+.card .pip.joker {
+  font-size: calc(var(--cw, 56px) * 0.3);
+  white-space: nowrap;
+}
+
+/* 主牌：只靠金边区分（不再有右上金点——角落的装饰点看着像另一张牌） */
 .card.trump {
   border-color: rgba(216, 180, 90, 0.85);
   box-shadow:
     0 0 0 1px rgba(216, 180, 90, 0.5),
     0 6px 12px -5px rgba(0, 0, 0, 0.55);
-}
-
-.card.trump::after {
-  content: '';
-  position: absolute;
-  top: 6%;
-  right: 6%;
-  width: calc(var(--cw, 56px) * 0.13);
-  height: calc(var(--cw, 56px) * 0.13);
-  border-radius: 9999px;
-  background: #d8b45a;
-  box-shadow: 0 0 6px rgba(216, 180, 90, 0.95);
-}
-
-/* 分牌（5/10/K）：左下金点 */
-.card.pt::before {
-  content: '';
-  position: absolute;
-  bottom: 6%;
-  left: 6%;
-  width: 6px;
-  height: 6px;
-  border-radius: 9999px;
-  background: #b8923a;
 }
 
 /* ---------- 手牌扇形 ---------- */

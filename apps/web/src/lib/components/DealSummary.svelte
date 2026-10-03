@@ -2,7 +2,8 @@
   import { levelLabel } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
   import CardView from './Card.svelte';
-  import { seatLabel, strainGlyph } from '$lib/labels';
+  import { whoLabel } from '$lib/labels';
+  import { strainGlyph } from '$lib/labels';
 
   let {
     client,
@@ -13,6 +14,9 @@
   const view = $derived(client.view);
   const summary = $derived(view?.deal?.summary ?? null);
   const finished = $derived(view?.status === 'finished');
+  const mySeat = $derived(view?.you.seat ?? 0);
+  const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
+  const who = (seat: number): string => whoLabel(names, mySeat, seat);
 </script>
 
 {#if open && summary !== null && view !== null}
@@ -23,7 +27,7 @@
           本副结算
           <span class="ml-1 text-xs font-normal text-white/50">
             {summary.contract.points}{strainGlyph(summary.contract.strain)} · 庄家
-            {seatLabel(summary.contract.declarerSeat)}家
+            {who(summary.contract.declarerSeat)}
           </span>
         </h2>
         <button
@@ -78,14 +82,18 @@
             ? `打成 · ${summary.finalScore} ≥ ${summary.contract.points}`
             : `打输 · 差 ${summary.shortfall} 分`}
         </p>
+        <!-- 把升级依据写出来：升级只看实际得分档位，不看叫了多少分 -->
+        <p class="mt-0.5 text-[10px] text-white/55">
+          {summary.made
+            ? `按 ${summary.finalScore} 分档位：庄家升 ${summary.levelChanges[0]?.levels ?? 0} 级（升几级只看得分，与叫分无关）`
+            : `两名闲家各升 ceil(${summary.shortfall} / 10) = ${summary.levelChanges[0]?.levels ?? 0} 级；庄家级别不变`}
+        </p>
       </div>
 
       <div class="mt-3 space-y-1 text-xs">
         {#each summary.levelChanges as change (change.seat)}
           <p class="rounded-lg bg-gold/15 px-3 py-2 ring-1 ring-gold/30">
-            {seatLabel(change.seat)}家 升 {change.levels} 级：<b
-              >{levelLabel(change.from)} → {levelLabel(change.to)}</b
-            >
+            {who(change.seat)} 升 {change.levels} 级：<b>{levelLabel(change.from)} → {levelLabel(change.to)}</b>
           </p>
         {/each}
         {#if !summary.made}
@@ -96,20 +104,17 @@
       {#if finished && view.result}
         <div class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">
           <h3 class="mb-1 text-sm font-semibold text-gold">
-            对局结束 · 冠军 {seatLabel(view.result.ranking[0]!)}家
+            对局结束 · 冠军 {who(view.result.ranking[0]!)}
           </h3>
           <ol class="space-y-0.5 text-xs text-white/80">
             {#each view.result.ranking as seat, index (seat)}
-              <li>第 {index + 1} 名：{seatLabel(seat)}家（总进度 {view.result.progress[seat]}）</li>
+              <li>第 {index + 1} 名：{who(seat)}（总进度 {view.result.progress[seat]}）</li>
             {/each}
           </ol>
         </div>
       {/if}
 
-      <div class="mt-4 flex items-center justify-between gap-2">
-        <span class="text-[11px] text-white/40">
-          {finished ? '本对局已结束' : `下一副：${seatLabel((view.dealerSeat + 1) % 3)}家发牌`}
-        </span>
+      <div class="mt-4 flex items-center justify-end gap-2">
         <div class="flex gap-2">
           <button
             type="button"

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cardKey, cardsPoints, type Card, type TrumpModel } from '@sixty/engine';
+  import { cardKey, type Card, type TrumpModel } from '@sixty/engine';
   import { computeFanLayout } from '$lib/fan-layout';
   import CardView from './Card.svelte';
 
@@ -8,14 +8,12 @@
     trump = null,
     selected = [],
     selectable = false,
-    hint = null,
     onToggle
   }: {
     hand: readonly Card[];
     trump?: TrumpModel | null;
     selected?: readonly string[];
     selectable?: boolean;
-    hint?: string | null;
     onToggle?: (card: Card) => void;
   } = $props();
 
@@ -49,10 +47,7 @@
   const measured = $derived(layout.override && cardWidth > 0);
 </script>
 
-<p class="mb-1.5 text-center text-[11px] text-white/40">
-  {hint ?? `我的手牌 · ${hand.length} 张 · ${cardsPoints(hand)} 分`}
-</p>
-
+<!-- 只画手牌：阶段说明一律走左下角的「?」弹层，这里不再有信息行 -->
 <div class="fan-rows" bind:clientWidth={containerWidth} bind:this={fanEl}>
   {#each rows as row, rowIndex (rowIndex)}
     <div

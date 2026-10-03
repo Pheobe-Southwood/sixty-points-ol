@@ -11,11 +11,11 @@ packages/engine     纯 TS 规则引擎（零依赖，可被服务端与客户�
   test/             node:test 表驱动 + 属性测试（默认 60 个随机整局，GAME_SEEDS 可放大）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub
-  src/routes/       大厅、同桌页、REST 动作接口、SSE 流
+  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口、SSE 流
   scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
+                    lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
-docs/ui-demo.html   界面设计单文件 Demo（HTML + Tailwind CDN，已移植进 Svelte 组件）
 ```
 
 ## 规则实现要点
@@ -35,7 +35,7 @@ docs/ui-demo.html   界面设计单文件 Demo（HTML + Tailwind CDN，已移植
 ```bash
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
-pnpm test:web         # 手牌扇形布局等前端纯函数测试（同样 node:test）
+pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例
 pnpm check            # 引擎 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
@@ -54,12 +54,31 @@ pnpm start            # 跑构建产物（默认端口 3000，见下）
 
 ```bash
 BASE=http://127.0.0.1:5178 pnpm --filter web smoke     # 3 个身份打完 N 副（DEALS=n），含 SSE 推送校验
-BASE=http://127.0.0.1:5178 pnpm --filter web lobby     # 开局回归：未开局必须渲染「开始第一副」按钮
-BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面守卫：position 工具类不得混用、座位卡必须 absolute
+BASE=http://127.0.0.1:5178 pnpm --filter web lobby     # 开局回归：未开局必须渲染「开始第一副」按钮 + 三个座位都列出玩家名
+BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：position 类不得混用、座位卡必须 absolute、
+                                                       # 邀请码可点复制、常驻提示已清空、? 按阶段给说明、无方位称谓、
+                                                       # /rules 九个小节齐备且渲染真实牌面、大小王牌面自洽、
+                                                       # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
 ```
 
 冒烟脚本用 `data/smoke-run.json` 保存凭据供续局校验使用。
+
+## 界面约定
+
+- **说明只在一处**：牌桌上的阶段玩法说明全部收在左下角的「?」弹层（内容与 `/rules` 教程同源，
+  见 `apps/web/src/lib/help.ts`）；界面上不再有常驻提示文案，玩家不需要在三个角落各读一遍。
+- **玩家名而不是方位**：文案里一律用玩家名或「你」（`whoLabel`），不出现「东/南/西家」——
+  四角座位卡显示的就是名字，方位在屏幕上没有锚点。
+- **点邀请码即复制链接**：`<origin>/table/<邀请码>`；大厅的入座框既接受 6 位邀请码，也接受直接粘贴的完整链接
+  （`parseInvite`）。局域网 http 下浏览器没有 Clipboard API，会自动退化成可手动复制的链接输入框。
+- **无重复信息**：同一件事只说一遍（如「庄已抓 X / 需 Y」里的分母就是旁边的定约分，只保留一个）。
+- **牌面**：主牌只靠**金边**区分，四个角没有任何装饰点（点看着像另一张牌）；分牌就是 5 / 10 / K，认点数即可。
+  大小王的角落写「大/小 + 王」、正中写「大王/小王」，两处指向同一张牌（`cardFace`）。
+- **新手教程**：`/rules` 复用牌桌同一套牌渲染组件（`Card` / `HandFan` / `LevelBadge` / `TrickCluster`），
+  含三道练手题（用与服务端同源的 `checkPlay` 即时判定）。依赖级牌的每个示例都标出将牌环境（`trumpText`），
+  升级表只列**真实可达**的分数（得分恒为 5 的倍数），叫牌一节讲清阻击叫的心理博弈。
+  教程里每个示例都由引擎函数在 `test:web` 中核对，规则改动导致示例失效会直接测试失败。
 
 ## 身份与凭据
 

@@ -1,14 +1,21 @@
 <script lang="ts">
   import type { PersonalView } from '@sixty/engine';
-  import { cardText, levelParts, seatLabel } from '$lib/labels';
+  import { cardText, levelParts, whoLabel } from '$lib/labels';
 
   let {
     view,
+    names = [],
     open = false,
     onClose
-  }: { view: PersonalView; open?: boolean; onClose?: () => void } = $props();
+  }: {
+    view: PersonalView;
+    names?: readonly (string | null)[];
+    open?: boolean;
+    onClose?: () => void;
+  } = $props();
 
   const deals = $derived([...view.history].reverse());
+  const who = (seat: number): string => whoLabel(names, view.you.seat, seat);
 </script>
 
 {#if open}
@@ -35,7 +42,7 @@
               <span class="text-white/80">
                 第 {deal.dealNo} 副 · {deal.contract.points}{deal.contract.strain === 'NT'
                   ? '无主'
-                  : deal.contract.strain} · 庄 {seatLabel(deal.contract.declarerSeat)}家
+                  : deal.contract.strain} · 庄 {who(deal.contract.declarerSeat)}
               </span>
               <span class="shrink-0 font-bold {deal.made ? 'text-emerald-300' : 'text-rose-300'}">
                 {deal.finalScore} {deal.made ? '打成' : '打输'}
@@ -49,9 +56,9 @@
               <p class="mt-1 text-white/55">
                 升级：
                 {#each deal.levelChanges as change, index (change.seat)}
-                  {index > 0 ? '，' : ''}{seatLabel(change.seat)}家 +{change.levels}（{levelParts(
+                  {index > 0 ? '，' : ''}{who(change.seat)} +{change.levels}（{levelParts(change.to).rank}+{levelParts(
                     change.to
-                  ).rank}+{levelParts(change.to).cycle}）
+                  ).cycle}）
                 {/each}
               </p>
             {/if}

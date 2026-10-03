@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Level } from '@sixty/engine';
-  import { levelParts } from '$lib/labels';
+  import LevelBadge from './LevelBadge.svelte';
 
   let {
     name,
@@ -20,7 +20,6 @@
     class?: string;
   } = $props();
 
-  const parts = $derived(level === null ? null : levelParts(level));
   const empty = $derived(name === null);
 </script>
 
@@ -65,14 +64,8 @@
 
     <p class="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">{name ?? '空座'}</p>
 
-    {#if parts}
-      <div class="shrink-0 text-center">
-        <p class="text-base font-bold leading-none tabular-nums">{parts.rank}</p>
-        <span
-          class="mt-0.5 inline-block whitespace-nowrap rounded-full bg-gold px-1 text-[9px] font-bold leading-[13px] text-ink shadow-sm"
-          >+{parts.cycle}</span
-        >
-      </div>
+    {#if level}
+      <LevelBadge {level} class="shrink-0" />
     {/if}
   </div>
 </div>

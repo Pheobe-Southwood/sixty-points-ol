@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invalidateAll, goto } from '$app/navigation';
+  import { parseInvite } from '$lib/invite';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -12,6 +13,11 @@
   let copied = $state(false);
 
   const STORAGE_KEY = 'sixty.credential';
+
+  /** 输入即归一化：粘贴完整邀请链接时立刻换成 6 位邀请码，否则原样保留 */
+  function normalizeJoinInput(raw: string): string {
+    return parseInvite(raw) ?? raw;
+  }
 
   // 浏览器里若有本地凭据但服务端没认出来（换浏览器/清了 cookie），自动申领一次
   $effect(() => {
@@ -68,8 +74,12 @@
   }
 
   async function joinTable(): Promise<void> {
-    const code = joinCode.trim().toUpperCase();
-    if (code.length === 0) return;
+    // 接受裸码，也接受直接粘贴的邀请链接
+    const code = parseInvite(joinCode);
+    if (code === null) {
+      message = '没识别出邀请码：可以直接粘贴邀请链接';
+      return;
+    }
     busy = true;
     message = null;
     try {
@@ -104,7 +114,10 @@
   <header class="text-center">
     <p class="text-[10px] tracking-[.4em] text-gold/70">SIXTY POINTS</p>
     <h1 class="mt-1 text-4xl font-black tracking-[.2em] text-ivory">六十分</h1>
-    <p class="mt-2 text-xs text-white/60">三人 1v2 · 桥牌式叫牌 · 双升式打牌与升级</p>
+    <p class="mt-2 text-xs text-white/60">
+      三人 1v2 · 桥牌式叫牌 · 双升式打牌与升级 ·
+      <a class="font-semibold text-gold hover:underline" href="/rules">新手教程</a>
+    </p>
   </header>
 
   {#if message}
@@ -178,9 +191,9 @@
         >
           <input
             class={[input, 'font-mono uppercase tracking-widest']}
-            placeholder="邀请码"
-            bind:value={joinCode}
-            maxlength="6"
+            placeholder="邀请码或邀请链接"
+            value={joinCode}
+            oninput={(event) => (joinCode = normalizeJoinInput(event.currentTarget.value))}
           />
           <button type="submit" class={ghost} disabled={busy || joinCode.trim().length === 0}>加入</button>
         </form>
@@ -201,15 +214,17 @@
       {/if}
     </section>
 
-    <details class="rounded-2xl bg-black/20 p-4 text-[11px] leading-relaxed text-white/60 ring-1 ring-white/10">
-      <summary class="cursor-pointer text-sm font-bold text-white/80">规则速览</summary>
-      <div class="mt-2 space-y-1">
-        <p>一副 54 张，各 17 张，3 张暗底；庄家拿底后埋 3 张。5=5 分、10 与 K 各 10 分，全场 100 分。</p>
-        <p>叫牌 40 起步、步长 5，花色 C&lt;D&lt;H&lt;S&lt;NT；连续两家不叫即成交，胜者为庄家，其级别点数为本副级牌。</p>
-        <p>多张出牌必须是同门顺子（副牌跳过级牌，主牌可含一张副级）；跟牌同张数、结构优先，缺门可杀牌。</p>
-        <p>结算：庄家抓分 ± 底牌分 × 末轮张数；打成按 40/60/70/80/90+ 表升级，打输则两名闲家各升 ceil(差/10) 级。</p>
-        <p>结束：两家达 2(+2) 或一家达 2(+3)，总进度最高者为冠军。</p>
-      </div>
-    </details>
+    <a
+      class="flex items-center justify-between gap-3 rounded-2xl bg-black/20 p-4 ring-1 ring-white/10 transition hover:bg-black/30"
+      href="/rules"
+    >
+      <span>
+        <span class="block text-sm font-bold text-white/80">新手教程</span>
+        <span class="mt-0.5 block text-[11px] leading-relaxed text-white/50">
+          用真实牌面走一遍：叫牌 → 埋底 → 打牌 → 结算升级，附打牌推论与三道练手题
+        </span>
+      </span>
+      <span class="shrink-0 text-gold">→</span>
+    </a>
   {/if}
 </main>

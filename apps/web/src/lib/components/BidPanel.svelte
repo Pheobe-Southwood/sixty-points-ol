@@ -1,17 +1,16 @@
 <script lang="ts">
   import type { Strain } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
-  import { bidCandidates, callText, seatLabel } from '$lib/labels';
+  import { bidCandidates, callText, whoLabel } from '$lib/labels';
 
   let { client }: { client: TableClient } = $props();
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
-  const myTurn = $derived(
-    view !== null && deal !== null && deal.phase === 'auction' && deal.auctionTurn === view.you.seat
-  );
+  const mySeat = $derived(view?.you.seat ?? 0);
+  const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
+  const myTurn = $derived(deal !== null && deal.phase === 'auction' && deal.auctionTurn === mySeat);
   const rows = $derived(view === null ? [] : bidCandidates(view));
-  const turnSeat = $derived(deal?.auctionTurn ?? 0);
 
   const glyph: Record<Strain, string> = { C: '♣', D: '♦', H: '♥', S: '♠', NT: '无主' };
   const redStrain = (strain: Strain): boolean => strain === 'H' || strain === 'D';
@@ -23,23 +22,19 @@
   <div class="flex items-baseline justify-between">
     <h2 class="text-sm font-bold">叫牌</h2>
     <span class="text-[11px] text-white/45">
-      第 {deal?.dealNo ?? 1} 副 · {seatLabel(deal?.dealerSeat ?? 0)}家发牌
+      第 {deal?.dealNo ?? 1} 副 · {whoLabel(names, mySeat, deal?.dealerSeat ?? 0)} 发牌
     </span>
   </div>
 
   <div class="mt-3 flex flex-wrap gap-1.5 text-[11px]">
     {#each deal?.auction ?? [] as entry, index (index)}
       <span class="rounded-md bg-white/10 px-2 py-1">
-        <span class="text-white/50">{seatLabel(entry.seat)}</span>
+        <span class="text-white/50">{whoLabel(names, mySeat, entry.seat)}</span>
         {callText(entry.call)}
       </span>
     {/each}
     {#if myTurn}
       <span class="rounded-md bg-gold/25 px-2 py-1 ring-1 ring-gold/40">轮到你</span>
-    {:else}
-      <span class="rounded-md bg-white/10 px-2 py-1 text-white/60">
-        等待 {seatLabel(turnSeat)}家叫牌…
-      </span>
     {/if}
   </div>
 

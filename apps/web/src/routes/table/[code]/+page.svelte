@@ -8,6 +8,7 @@
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
   import HistoryList from '$lib/components/HistoryList.svelte';
+  import InviteCode from '$lib/components/InviteCode.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
@@ -19,14 +20,11 @@
   // 只取首次 SSR 数据构造客户端状态，不随后续 data 变化重建
   const client = untrack(() => new TableClient(data.code, { view: data.view, table: data.table }));
 
-  let copied = $state(false);
-  let shareUrl = $state('');
   let historyOpen = $state(false);
   let summaryOpen = $state(false);
   let openedFor = -1; // 非响应式：仅用于「每副只自动弹出一次结算」
 
   onMount(() => {
-    shareUrl = `${location.origin}/table/${data.code}`;
     client.connect();
     return () => client.disconnect();
   });
@@ -35,6 +33,8 @@
   const deal = $derived(view?.deal ?? null);
   const summary = $derived(deal?.summary ?? null);
   const trump = $derived(deal?.trump ?? null);
+  /** 文本里一律用玩家名指代（不再有东/南/西）：座位卡显示的就是这些名字 */
+  const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
 
   const leftSeat = $derived((data.seat + 1) % 3);
   const rightSeat = $derived((data.seat + 2) % 3);
@@ -45,16 +45,6 @@
       ((deal.phase === 'play' && deal.playTurn === data.seat) ||
         (deal.phase === 'bury' && view.you.isDeclarer))
   );
-
-  const hint = $derived.by(() => {
-    if (view === null || deal === null) return null;
-    if (deal.phase === 'bury') return view.you.isDeclarer ? '点选 3 张埋入暗底（可埋分牌）' : null;
-    if (deal.phase === 'play' && deal.playTurn === data.seat) {
-      const leading = deal.trick !== null && deal.trick.plays.length === 0;
-      return leading ? '点选牌面领出：单张或同门顺子' : '点选牌面跟牌：同门同张数，结构优先';
-    }
-    return null;
-  });
 
   // 每副结束自动弹出结算；关闭后可随时用「结算详情」重开
   $effect(() => {
@@ -80,12 +70,6 @@
     return false;
   }
 
-  async function copyLink(): Promise<void> {
-    await navigator.clipboard.writeText(shareUrl);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
-  }
-
   const dotClass = $derived(
     client.connection === 'live'
       ? 'bg-emerald-400'
@@ -99,18 +83,14 @@
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
-      <span class="shrink-0 font-mono text-base font-bold tracking-[.2em] text-gold sm:text-lg sm:tracking-[.3em]">
-        {data.code}
-      </span>
-      <button
-        type="button"
-        class="shrink-0 rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/70 hover:bg-white/10"
-        onclick={copyLink}
-      >
-        {copied ? '已复制' : '复制链接'}
-      </button>
+      <!-- 点邀请码即复制邀请链接（原来的「复制链接」按钮已去掉） -->
+      <InviteCode
+        code={data.code}
+        class="shrink-0 font-mono text-base font-bold tracking-[.2em] text-gold sm:text-lg sm:tracking-[.3em]"
+      />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
+      <a class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10" href="/rules">教程</a>
       <button
         type="button"
         class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10"
@@ -119,7 +99,6 @@
         战报
       </button>
       <span class={['h-2 w-2 rounded-full', dotClass]} title="连接状态"></span>
-      <span class="max-w-[5rem] truncate text-white/60">{data.me.name}</span>
     </div>
   </header>
 
@@ -167,7 +146,7 @@
       {:else if deal.phase === 'bury'}
         <BuryPanel {client} />
       {:else}
-        <TrickArea {view} seat={data.seat} />
+        <TrickArea {view} seat={data.seat} {names} />
       {/if}
     {/if}
   </div>
@@ -179,12 +158,11 @@
     {trump}
     selected={client.selected}
     {selectable}
-    {hint}
     onToggle={(card) => client.toggle(card)}
   />
 </main>
 
 {#if view !== null}
   <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
-  <HistoryList {view} open={historyOpen} onClose={() => (historyOpen = false)} />
+  <HistoryList {view} {names} open={historyOpen} onClose={() => (historyOpen = false)} />
 {/if}

@@ -5,6 +5,7 @@ import {
   leadInfo,
   levelLabel,
   RANK_LABEL,
+  rankLabel,
   STRAIN_LABEL,
   SUIT_LABEL,
   validateFollow,
@@ -18,10 +19,15 @@ import {
   type TrumpModel
 } from '@sixty/engine';
 
-export const SEAT_NAMES = ['东', '南', '西'] as const;
-
-export function seatLabel(seat: number): string {
-  return SEAT_NAMES[seat] ?? String(seat);
+/**
+ * 文本里指代某个座位：本人用「你」，其余用玩家名。
+ *
+ * 界面上不再出现「东/南/西」：四角座位卡上显示的就是名字，方位在屏幕上没有锚点，
+ * 玩家也不会去记自己是哪一方位。座位名由 `TableView.seats[].name` 提供。
+ */
+export function whoLabel(names: readonly (string | null)[], mySeat: number, seat: number): string {
+  if (seat === mySeat) return '你';
+  return names[seat] ?? '空座';
 }
 
 export function strainText(strain: Strain): string {
@@ -31,6 +37,16 @@ export function strainText(strain: Strain): string {
 /** 花色字形：用于紧凑的状态条与定约显示（无主用文字） */
 export function strainGlyph(strain: Strain): string {
   return strain === 'NT' ? '无主' : SUIT_LABEL[strain];
+}
+
+/**
+ * 将牌环境的一句话说明：`级牌 5 · 主打 ♥` / `级牌 5 · 无主`。
+ *
+ * 教程里凡是「3-4-6 是顺子」「副级三张相等」这类例子，都只有在级牌点数已知时才成立，
+ * 所以每个示例块都要带上这句，读者不必往上翻去找级牌是几。
+ */
+export function trumpText(trump: TrumpModel): string {
+  return `级牌 ${rankLabel(trump.rank)} · ${trump.strain === 'NT' ? '无主' : `主打 ${SUIT_LABEL[trump.strain]}`}`;
 }
 
 /** 级别拆分：底数（2..A）与右上角「+过次」，如 5(+2) → { rank: '5', cycle: 2 } */
