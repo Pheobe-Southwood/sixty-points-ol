@@ -3,6 +3,8 @@
 三人 1v2 的顺子类牌戏：一副 54 张，桥牌式叫牌定庄定将，双升式打牌与升级赛程。线上实现为
 SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并有完整单测/属性测试。
 
+[![CI](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml/badge.svg)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+
 ## 目录
 
 ```
@@ -109,6 +111,36 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
   # 恢复：把 tar 解回同一个卷后再 up
   ```
 
+### 预构建镜像（GHCR，GitHub Actions 自动构建）
+
+`.github/workflows/ci.yml` 在 CI 上构建镜像并推到 `ghcr.io/cup113/sixty-points-ol`：先过 `pnpm test` / `pnpm test:web` / `pnpm check`，全绿才出镜像。
+
+| 触发 | 产出的标签 |
+| --- | --- |
+| push `main` | `latest`、`main`、`sha-<7位>`（如 `sha-af7ae45`） |
+| push `v*` 标签（如 `v0.2.0`） | `0.2.0`、`0.2`，外加分支规则命中时的标签 |
+| PR | 只试构建，**不推送** |
+| Actions 页面手动 `Run workflow` | 按所在分支 / 标签出标签 |
+
+镜像只覆盖 `linux/amd64`（ARM 主机需本地 build，或按 ADR-0006 加 QEMU 多架构）；不需要任何 Secret，用仓库内置 `GITHUB_TOKEN` 授权。
+
+不依赖仓库、直接拉预构建镜像运行（数据卷必须保留，否则每次重建都清空牌局）：
+
+```bash
+docker pull ghcr.io/cup113/sixty-points-ol:latest
+docker run -d --name sixty -p 3000:3000 -v sixty-data:/data \
+  -e PORT=3000 ghcr.io/cup113/sixty-points-ol:latest
+```
+
+要可回滚就固定版本：`:sha-af7ae45` 或 `:0.2.0`。
+
+Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker Compose），镜像填 `ghcr.io/cup113/sixty-points-ol:latest`，Domain 端口仍填**容器端口** `3000`，挂 `sixty-data:/data`。注意 `docker-compose.yml` 本身仍是本地 build（compose 里 `build:` 优先于 `image:`），别指望现有 compose 资源自动改用 CI 镜像。
+
+排查：
+
+- `docker pull` 报 `denied` / 404：到 GHCR 里把该包可见性设为 Public（公开仓库的包通常默认就是）。
+- CI 推镜像报 `write_package` / `permission_denied`：仓库 Settings → Actions → General → Workflow permissions 设为 **Read and write**。
+
 ### Coolify
 
 1. 新建资源 → **Docker Compose** → 指向本仓库（compose 文件在根目录，无需改路径）。
@@ -126,7 +158,7 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 
 ### 本机沙箱下的注意事项
 
-`pnpm dev` / `pnpm build` / `docker` 需要 spawn 子进程与访问 Docker 命名管道，在受限沙箱里会 `EPERM`；在自己机器或 CI 上不受影响。若镜像构建在 esbuild 步骤报错，把 `pnpm-workspace.yaml` 里的 `allowBuilds: esbuild` 改成 `true` 再构建（本仓库默认关掉它，是因为它只是可选的原生二进制补装，关掉后构建同样可跑）。
+`pnpm dev` / `pnpm build` / `docker` 需要 spawn 子进程与访问 Docker 命名管道，在受限沙箱里会 `EPERM`；在自己机器或 CI 上不受影响（镜像构建已在 `.github/workflows/ci.yml` 里跑，本地沙箱受限只影响本地 build/dev）。若镜像构建在 esbuild 步骤报错，把 `pnpm-workspace.yaml` 里的 `allowBuilds: esbuild` 改成 `true` 再构建（本仓库默认关掉它，是因为它只是可选的原生二进制补装，关掉后构建同样可跑）。
 
 ## 暂未实现（v1 范围外）
 
