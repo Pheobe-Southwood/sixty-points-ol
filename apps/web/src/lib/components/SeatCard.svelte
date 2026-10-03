@@ -26,10 +26,12 @@
 
 <div
   class={[
-    'relative rounded-2xl p-2.5 ring-1 backdrop-blur-sm sm:p-3',
+    'rounded-2xl p-2.5 ring-1 backdrop-blur-sm sm:p-3',
     isMe ? 'bg-gold/10 ring-gold/40' : 'bg-black/30 ring-white/10',
     empty && 'opacity-60',
-    klass
+    // 定位类必须只来自调用方：Tailwind 产物里 .relative 排在 .absolute 之后，
+    // 同一元素混用两者时 relative 胜出（座位卡会塌回文档流、全挤在毡面左上角）。
+    klass.length > 0 ? klass : 'relative'
   ]}
 >
   {#if isDeclarer}

@@ -12,6 +12,7 @@
     "test": "node --test --test-isolation=none \"test/*.test.ts\"",
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",
+    "ui": "node scripts/ui-check.ts",
     "lobby": "node scripts/lobby-check.ts"
   },
   "dependencies": {
