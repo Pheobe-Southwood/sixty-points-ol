@@ -4,14 +4,19 @@ import {
   checkPlay,
   HELP_KEYS,
   phaseHelp,
+  playHint,
   type BidCall,
+  type BidOption,
   type Card,
   type HelpKey,
+  type PlayHint,
   type PlayerSeat,
-  type PublicView
+  type TrumpModel
 } from '@sixty/engine';
 import { ApiError, type GameApi, type SeatlessAction } from './api.ts';
-import type { Role, TableSummary, TableView } from './wire.ts';
+import { decodeCard, decodeCards, encodeCall } from './codec.ts';
+import { project, type CompactPayload } from './project.ts';
+import type { Role, StreamPayload, TableSummary } from './wire.ts';
 
 /** 参数格式不对、或调用方式错了（不是服务端的判定） */
 export class ToolError extends Error {
@@ -25,7 +30,7 @@ export interface ToolRuntime {
   readonly api: GameApi;
   /** wait_for_turn 的轮询间隔；低于 500ms 会被夹到 500ms */
   readonly pollMs?: number | undefined;
-  /** wait_for_turn 不传 timeout_seconds 时的默认秒数 */
+  /** 等待不传 timeout_seconds 时的默认秒数 */
   readonly defaultWaitSeconds?: number | undefined;
   /** 注入点：测试里可以立即返回，不真的等 */
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
@@ -44,21 +49,31 @@ export const MAX_WAIT_SECONDS = 60;
 export const DEFAULT_POLL_MS = 1500;
 export const MIN_POLL_MS = 500;
 
-const CardSchema = z.union([
-  z.object({ suit: z.enum(['C', 'D', 'H', 'S']), rank: z.number().int().min(2).max(14) }),
-  z.object({ joker: z.enum(['small', 'big']) })
-]);
+/**
+ * 牌码：`"S14"` = ♠A、`"C5"` = ♣5、`"j0"` = 小王、`"j1"` = 大王。
+ *
+ * 出参与入参同形 —— `get_state` 里 `you.hand` 的元素可以原样喂回 `play`/`bury`。
+ * 用短字符串而不是 `{suit,rank}` 对象纯粹是为了体积：一副牌里牌史占投喂量的八成，
+ * 单张 `{"suit":"S","rank":14}` 是 22 字符、`"S14"` 是 5 个（见 src/codec.ts）。
+ *
+ * 字段上的描述**刻意很短**：工具面 schema 是每个请求都随上下文重发的，同一句话写三遍
+ * 就是三倍价钱；格式与协议细节统一放在 `server.ts` 的 `instructions` 里说一遍。
+ */
+const CardCode = z.string().min(1).describe('牌码，如 "S14"、"j0"');
 
 const CallSchema = z.union([
   z.literal('pass'),
   z.object({ points: z.number().int(), strain: z.enum(['C', 'D', 'H', 'S', 'NT']) })
 ]);
 
-const CODE_FIELD = z
-  .string()
-  .min(1)
-  .optional()
-  .describe('同桌邀请码；省略时自动用该凭据唯一所在的那张桌');
+/**
+ * `code` 字段刻意**不写描述**：它在 8 个工具里重复出现，而 schema 是每个请求都要重发的 ——
+ * 「省略＝该凭据唯一那张桌」这句话在 `server.ts` 的 `instructions` 里说一遍就够。
+ * 也不加 `min(1)`：空串与省略同义（`resolveCode` 一律当作「没给」）。
+ */
+const CODE_FIELD = z.string().optional();
+const WAIT_FIELD = z.boolean().optional().describe('动作后等到下次轮到你');
+const VERBOSE_FIELD = z.boolean().optional().describe('true＝原样负载');
 
 /** 只在需要 6 位码的动作里带上 code 字段 */
 const codeField = { code: CODE_FIELD };
@@ -71,21 +86,29 @@ export interface TurnSummary {
   /** 现在你能做点事吗（发牌/叫牌/埋底/出牌/开下一副都算） */
   readonly canAct: boolean;
   readonly hint: string;
+  /** 轮到你在叫牌：合法叫品集（与牌桌叫牌面板同一份实现） */
+  readonly legalBids?: readonly BidOption[] | undefined;
+  /** 轮到你在出牌：跟牌/领出的**约束**（不复述手牌，模型自己手上有 you.hand） */
+  readonly legalPlay?: PlayHint | undefined;
 }
 
-export interface TableState {
-  readonly code: string;
-  /** 座位上的玩家 = player；观战者 = spectator（由服务端按数据库现算，工具面无法自称玩家） */
-  readonly role: Role;
-  readonly table: TableView;
-  /** 公共视图：没有手牌与底牌，观战者拿到的就是这一份 */
-  readonly view: PublicView | null;
-  /** 玩家私有那一份（手牌、是否庄家、拿上来的底牌）；观战者为 null */
-  readonly you: PlayerSeat | null;
+/** 紧凑投影 + turn：默认出参 */
+export interface TableState extends CompactPayload {
   readonly turn: TurnSummary;
 }
 
-function phaseOf(view: PublicView | null): ToolPhase {
+/** `verbose: true` 的原样出参：引擎类型逐字（ADR-0010 的那条路仍然在，只是不再是默认） */
+export interface RawTableState extends StreamPayload {
+  readonly code: string;
+  readonly turn: TurnSummary;
+}
+
+export type AnyTableState = TableState | RawTableState;
+
+/** 动作与等待在局面之外多说的两句：`timedOut` 只表示「等了但没等到」 */
+export type ActionResult = AnyTableState & { readonly timedOut?: boolean; readonly note?: string };
+
+function phaseOf(view: StreamPayload['view']): ToolPhase {
   if (view === null) return 'lobby';
   if (view.status === 'finished') return 'finished';
   const deal = view.deal;
@@ -94,10 +117,10 @@ function phaseOf(view: PublicView | null): ToolPhase {
 }
 
 /**
- * 「现在轮到谁、我能做什么」——工具面自己的摘要，不新增任何视图类型：
+ * 「现在轮到谁、我能做什么」—— 工具面自己的摘要，不新增任何视图类型：
  * 事实全部来自服务器的负载（公共视图 + `you`），这里只是翻译成 agent 一眼能读懂的判断。
  */
-export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | null): TurnSummary {
+export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat | null): TurnSummary {
   const phase = phaseOf(view);
 
   // 角色只认 `role`：`you` 为 null 有第二种含义（在座、但这副还没发牌），不能拿来判断观战
@@ -106,7 +129,7 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
       phase,
       isYourTurn: false,
       canAct: false,
-      hint: '你在**观战**（没有座位）：可以读局面与说明，但发牌/叫牌/埋底/出牌都要求先入座 —— 用 join_table 进桌，有空座就会坐上。'
+      hint: '你在观战（没有座位）：能读局面与说明，动作要求先入座 —— 用 join_table 进桌。'
     };
   }
 
@@ -115,7 +138,7 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
       phase,
       isYourTurn: true,
       canAct: true,
-      hint: '这张桌还没发过牌：三人到齐后任意一人都可以用 deal 开始第一副。'
+      hint: '还没发牌：三人到齐后任意一人用 deal 开始第一副。'
     };
   }
   if (view.status === 'finished') {
@@ -123,7 +146,7 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
       phase: 'finished',
       isYourTurn: true,
       canAct: true,
-      hint: '对局已结束（见 view.result）：可以用 new_game 开新对局，级别重置。'
+      hint: '对局已结束（见 view.result）：用 new_game 开新对局，级别重置。'
     };
   }
   if (you === null) {
@@ -132,7 +155,7 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
       phase,
       isYourTurn: false,
       canAct: false,
-      hint: '服务端把你判为在座，却没有给出你的手牌（you 为 null）：重新 get_state 看看，或检查这个凭据的身份。'
+      hint: '服务端判你在座却没给手牌（you 为 null）：重新 get_state，或检查这个凭据的身份。'
     };
   }
 
@@ -145,8 +168,8 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
         isYourTurn: mine,
         canAct: mine,
         hint: mine
-          ? '轮到你叫牌：用 legal_bids 看合法叫品，或者直接 bid 一个（也可以 pass）。'
-          : `等座位 ${deal.auctionTurn} 叫牌（要等就调 wait_for_turn）。`
+          ? '轮到你叫牌：turn.legalBids 就是全部合法叫品，直接 bid（也可以 pass）。'
+          : `等座位 ${deal.auctionTurn} 叫牌（要等就 wait_for_turn）。`
       };
     }
     case 'bury': {
@@ -168,8 +191,8 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
         hint: mine
           ? leading
             ? '轮到你领出：单张，或同门顺子（多张必须同门且严格相邻）。'
-            : '轮到你跟牌：同门同张数，结构优先（最长连续段的第一分解必须最大）。'
-          : `等座位 ${deal.playTurn ?? '?'} 出牌（要等就调 wait_for_turn）。`
+            : '轮到你跟牌：按 turn.legalPlay 的约束出（同门同张数，结构优先）。'
+          : `等座位 ${deal.playTurn ?? '?'} 出牌（要等就 wait_for_turn）。`
       };
     }
     case 'scored':
@@ -177,9 +200,36 @@ export function turnOf(role: Role, view: PublicView | null, you: PlayerSeat | nu
         phase: 'scored',
         isYourTurn: true,
         canAct: true,
-        hint: '本副已结算（见 view.deal.summary）：可以用 deal 开下一副。'
+        hint: '本副已结算（见 view.deal.summary）：用 deal 开下一副。'
       };
   }
+}
+
+/**
+ * 轮到你时顺手把「合法集」给出，**不让模型逐个试探**。
+ *
+ * 这不是省几个字符的事：每次 `check_play` 都是一次完整的模型回合（整段会话重发一次），
+ * 每回合多探 3 次就把一副牌的总投喂量抬到 2.8 倍、多探 17 次抬到 16 倍。约束只有几行，
+ * 而探测是整个回合 —— 所以合法性由状态直接给，`check_play` 只留作一次验多组的兜底。
+ */
+function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legalPlay'> {
+  const { role, view, you } = payload;
+  if (role !== 'player' || view === null || you === null || view.status === 'finished') return {};
+  const deal = view.deal;
+  if (deal === null) return {};
+
+  if (deal.phase === 'auction' && deal.auctionTurn === you.seat) {
+    return { legalBids: bidCandidates(view) };
+  }
+  if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
+    const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
+    return { legalPlay: playHint(you.hand, deal.trump, lead) };
+  }
+  return {};
+}
+
+export function turnFor(payload: StreamPayload): TurnSummary {
+  return { ...turnOf(payload.role, payload.view, payload.you), ...legalOf(payload) };
 }
 
 /** 同桌码：显式给了就用，否则从该凭据的桌里推断（0 张 / 多张各有各的话要说） */
@@ -195,26 +245,60 @@ export async function resolveCode(rt: ToolRuntime, code: unknown): Promise<strin
   );
 }
 
-export async function stateOf(rt: ToolRuntime, codeArg: unknown): Promise<TableState> {
+/** 取一次局面：码只解析一次（轮询里每次重新解析会白白多打一次 /api/tables） */
+async function rawOf(rt: ToolRuntime, codeArg: unknown): Promise<{ code: string; payload: StreamPayload }> {
   const code = await resolveCode(rt, codeArg);
-  const payload = await rt.api.table(code);
-  return {
-    code,
-    role: payload.role,
-    table: payload.table,
-    view: payload.view,
-    you: payload.you,
-    turn: turnOf(payload.role, payload.view, payload.you)
-  };
+  return { code, payload: await rt.api.table(code) };
 }
 
-async function act(rt: ToolRuntime, codeArg: unknown, action: SeatlessAction): Promise<TableState> {
-  const code = await resolveCode(rt, codeArg);
-  await rt.api.act(code, action);
-  return stateOf(rt, code);
+async function stateOf(rt: ToolRuntime, codeArg: unknown, verbose = false): Promise<AnyTableState> {
+  const { code, payload } = await rawOf(rt, codeArg);
+  const turn = turnFor(payload);
+  return verbose ? { ...payload, code, turn } : { ...project(payload, code), turn };
 }
 
-async function waitForTurn(rt: ToolRuntime, codeArg: unknown, secondsArg: unknown): Promise<unknown> {
+/** 牌码数组 → 引擎牌；认不出来时点名是哪一个（一次参数错要白跑一个回合，所以要说清楚） */
+function cardsOf(codes: readonly string[], field: string): Card[] {
+  const cards = decodeCards(codes);
+  if (cards !== null) return cards;
+  const bad = codes.find((code) => decodeCard(code) === null);
+  throw new ToolError(`参数格式不正确：${field} 里有认不出的牌码「${String(bad)}」（格式如 "S14"、"C5"、"j0"、"j1"）`);
+}
+
+interface PlayContext {
+  readonly hand: readonly Card[];
+  readonly trump: TrumpModel;
+  readonly lead: readonly Card[] | null;
+}
+
+/** 出牌校验需要的三样东西；拿不齐时返回一句人话 */
+function playContextOf(payload: StreamPayload): PlayContext | string {
+  if (payload.role !== 'player') return '你在观战，没有手牌可出（先用 join_table 入座）';
+  const deal = payload.view?.deal ?? null;
+  if (payload.view === null || deal === null || deal.trump === null || deal.phase !== 'play') {
+    return '现在不是出牌阶段';
+  }
+  if (payload.you === null) return '拿不到你的手牌（you 为 null）';
+  const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
+  return { hand: payload.you.hand, trump: deal.trump, lead };
+}
+
+interface WaitOutcome {
+  readonly state: AnyTableState;
+  readonly timedOut: boolean;
+}
+
+/**
+ * 等到「你能行动」为止。观战者没有座位，等多久都不会轮到 —— 立刻说清楚而不是空转到超时。
+ *
+ * `code` 必须是**已经解析过**的码：轮询里每次重新解析会多打一次 `/api/tables`。
+ */
+async function waitUntilCanAct(
+  rt: ToolRuntime,
+  code: string,
+  secondsArg: unknown,
+  verbose: boolean
+): Promise<WaitOutcome> {
   const requested = typeof secondsArg === 'number' && Number.isFinite(secondsArg) ? secondsArg : undefined;
   const seconds = Math.min(Math.max(requested ?? rt.defaultWaitSeconds ?? DEFAULT_WAIT_SECONDS, 0), MAX_WAIT_SECONDS);
   const timeoutMs = seconds * 1000;
@@ -223,13 +307,44 @@ async function waitForTurn(rt: ToolRuntime, codeArg: unknown, secondsArg: unknow
 
   const startedAt = Date.now();
   for (;;) {
-    const state = await stateOf(rt, codeArg);
-    if (state.turn.canAct) return { ...state, timedOut: false };
-    // 观战者没有座位：等多久都不会轮到自己，立刻说清楚而不是空转到超时
-    if (state.role === 'spectator') return { ...state, timedOut: false };
-    if (Date.now() - startedAt >= timeoutMs) return { ...state, timedOut: true };
+    const state = await stateOf(rt, code, verbose);
+    if (state.turn.canAct) return { state, timedOut: false };
+    if (state.role === 'spectator') return { state, timedOut: false };
+    if (Date.now() - startedAt >= timeoutMs) return { state, timedOut: true };
     await sleep(pollMs);
   }
+}
+
+/**
+ * 动作：成功之后**顺手等到下一次轮到你**（`wait`，默认 true）。
+ *
+ * 这一步同时省掉两样东西：每回合的第二次工具调用，以及那份重复投喂的完整局面 ——
+ * 「动作结果」与「等待结果」本来就是同一份负载，现在只给一次。
+ * 动作被服务端拒绝时**不等待**：立刻把原话回给调用方，让它自己改参数。
+ */
+async function act(
+  rt: ToolRuntime,
+  codeArg: unknown,
+  action: SeatlessAction,
+  waitArg: unknown
+): Promise<ActionResult> {
+  const code = await resolveCode(rt, codeArg);
+  await rt.api.act(code, action);
+
+  if (waitArg === false) return stateOf(rt, code);
+
+  const { state, timedOut } = await waitUntilCanAct(rt, code, undefined, false);
+  return timedOut
+    ? {
+        ...state,
+        timedOut: true,
+        note: '动作**已经生效**，只是还没轮到你：用 wait_for_turn 继续等，不要重复这次动作。'
+      }
+    : { ...state, timedOut: false };
+}
+
+function decodeCandidates(raw: readonly (readonly string[])[]): Card[][] {
+  return raw.map((codes, index) => cardsOf(codes, `candidates[${index}]`));
 }
 
 /**
@@ -238,25 +353,37 @@ async function waitForTurn(rt: ToolRuntime, codeArg: unknown, secondsArg: unknow
  * stdio 包（src/stdio.ts）与 web 的 `/api/mcp` 路由都把这张表挂到各自的 SDK 服务器上，
  * 所以两条传输的能力、文案、错误形状永远一致；这里不 import SDK，也不需要网络。
  * 服务端始终是唯一裁判：读写都经过 `GameApi`，而它的出口只有个人视图。
+ *
+ * 出参默认走 `project.ts` 的紧凑投影（每副牌省约八成投喂量），`verbose: true` 可以拿回
+ * 引擎类型逐字的那一份 —— 见 ADR-0011。
  */
 export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'get_state',
     description:
-      '读当前局面（幂等）。返回 role（player/spectator）、view（**公共视图**：叫牌、已出的牌、各家手牌张数、级别 —— 观战者能看到的全部）、you（你的手牌与拿上来的底牌，观战者为 null）、table、turn（轮到谁、你能不能动、该做什么）。',
-    input: codeField,
-    run: (rt, args) => stateOf(rt, args['code'])
+      '读当前局面（幂等）：role、view（公开信息）、you（你的手牌）、table、turn（轮到谁、能不能动、该做什么；轮到你时还带合法叫品 legalBids 或跟牌约束 legalPlay）。',
+    input: { ...codeField, verbose: VERBOSE_FIELD },
+    run: (rt, args) => stateOf(rt, args['code'], args['verbose'] === true)
   },
   {
     name: 'wait_for_turn',
-    description:
-      `等轮到自己再返回（阻塞 ≤ ${MAX_WAIT_SECONDS} 秒，默认 ${DEFAULT_WAIT_SECONDS} 秒）：内部每 ${DEFAULT_POLL_MS}ms 读一次局面，直到你能行动（发牌/叫牌/埋底/出牌/开下一副）或超时。超时就把 timedOut 置 true 并原样返回当前局面，直接再调一次即可。`,
-    input: { ...codeField, timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional() },
-    run: (rt, args) => waitForTurn(rt, args['code'], args['timeout_seconds'])
+    description: `等到你能行动再返回（阻塞 ≤ ${MAX_WAIT_SECONDS} 秒，默认 ${DEFAULT_WAIT_SECONDS} 秒）：超时把 timedOut 置 true 并原样返回当前局面，直接再调一次即可。`,
+    input: {
+      ...codeField,
+      timeout_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional(),
+      verbose: VERBOSE_FIELD
+    },
+    run: async (rt, args) => {
+      const code = await resolveCode(rt, args['code']);
+      const { state, timedOut } = await waitUntilCanAct(rt, code, args['timeout_seconds'], args['verbose'] === true);
+      return timedOut
+        ? { ...state, timedOut: true, note: '还没轮到你：直接再调一次 wait_for_turn 继续等。' }
+        : { ...state, timedOut: false };
+    }
   },
   {
     name: 'read_rules',
-    description: `读玩法说明（打牌前先读一遍）：不传 key 返回全部阶段（${HELP_KEYS.length} 段）；key 取 ${HELP_KEYS.join('/')}。`,
+    description: `读玩法说明（**整局读一次就够**，内容不会变）：不传 key 返回全部 ${HELP_KEYS.length} 段；key 取 ${HELP_KEYS.join('/')}。`,
     input: { key: z.string().optional().describe('阶段键；省略则返回全部阶段') },
     run: async (_rt, args) => {
       const raw = args['key'];
@@ -275,82 +402,80 @@ export const TOOLS: readonly ToolSpec[] = [
   },
   {
     name: 'legal_bids',
-    description: '列出当前所有合法叫品（分数为主序、步长 5，同分花色必须更高）：不是叫牌阶段时返回空表。',
+    description:
+      '列出当前所有合法叫品（与牌桌叫牌面板同一份实现）：轮到你叫牌时 turn.legalBids 里已经有同一份；**叫牌阶段之外一律空表**。',
     input: codeField,
     run: async (rt, args) => {
-      const state = await stateOf(rt, args['code']);
-      const deal = state.view?.deal ?? null;
-      const options = state.view === null ? [] : bidCandidates(state.view);
+      const { code, payload } = await rawOf(rt, args['code']);
+      const view = payload.view;
+      const deal = view?.deal ?? null;
+      // 阶段门：埋底/出牌/结算之后叫品已经没有意义，`deal.highestBid` 却还留着 —— 不能照着它给一整套候选
+      const inAuction = view !== null && view.status !== 'finished' && deal !== null && deal.phase === 'auction';
+      const options = inAuction && view !== null ? bidCandidates(view) : [];
       return {
-        code: state.code,
+        code,
         phase: deal?.phase ?? 'lobby',
-        highestBid: deal?.highestBid ?? null,
-        turn: state.turn,
+        highestBid: deal?.highestBid == null ? null : encodeCall(deal.highestBid),
+        turn: turnFor(payload),
         options,
         note:
-          options.length === 0
-            ? '现在没有可叫的叫品（不是叫牌阶段，或者已经轮不到你）。'
-            : '同分之下 strain 越大越高：C < D < H < S < NT。'
+          options.length > 0
+            ? '同分之下 strain 越大越高：C < D < H < S < NT。'
+            : '现在没有可叫的叫品（不是叫牌阶段，或者已经轮不到你）。'
       };
     }
   },
   {
     name: 'check_play',
     description:
-      '出牌前的本地预判：给出的牌在规则上合不合法（领出要同门成顺子；跟牌同门同张数且结构优先）。服务端才是唯一裁判，这一步只是省一次往返。',
-    input: { ...codeField, cards: z.array(CardSchema).min(1) },
+      '出牌前的本地预判（服务端仍是唯一裁判）：一次可以验多组候选 —— candidates 是「牌码数组」的数组，逐条返回 {ok, error}。轮到你时 turn.legalPlay 已经给了约束，这里只在拿不准时兜底用。',
+    input: { ...codeField, candidates: z.array(z.array(CardCode).min(1)).min(1) },
     run: async (rt, args) => {
-      const state = await stateOf(rt, args['code']);
-      if (state.role !== 'player') {
-        return { ok: false, error: '你在观战，没有手牌可出（先用 join_table 入座）' };
-      }
-      const view = state.view;
-      const deal = view?.deal ?? null;
-      if (view === null || deal === null || deal.trump === null || deal.phase !== 'play') {
-        return { ok: false, error: '现在不是出牌阶段' };
-      }
-      if (state.you === null) return { ok: false, error: '拿不到你的手牌（you 为 null）' };
-      const cards = args['cards'] as Card[];
-      const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
-      const error = checkPlay(state.you.hand, cards, deal.trump, lead);
-      return { ok: error === null, error: error ?? null };
+      const { payload } = await rawOf(rt, args['code']);
+      const candidates = decodeCandidates(args['candidates'] as string[][]);
+      const context = playContextOf(payload);
+      const results = candidates.map((cards) => {
+        if (typeof context === 'string') return { ok: false, error: context };
+        const error = checkPlay(context.hand, cards, context.trump, context.lead);
+        return { ok: error === null, error };
+      });
+      return { results };
     }
   },
   {
     name: 'bid',
-    description: '叫牌：call 传 "pass"，或 { points, strain }（points 为 5 的倍数、≥40；strain 取 C/D/H/S/NT）。成功后返回新局面。',
-    input: { ...codeField, call: CallSchema },
-    run: (rt, args) => act(rt, args['code'], { type: 'bid', call: args['call'] as BidCall })
+    description: '叫牌：call 传 "pass" 或 {points, strain}（points 为 5 的倍数、≥40，strain 取 C/D/H/S/NT）。',
+    input: { ...codeField, call: CallSchema, wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'bid', call: args['call'] as BidCall }, args['wait'])
   },
   {
     name: 'bury',
-    description: '庄家埋底：恰好 3 张（从你的 20 张里扣进暗底）。成功后返回新局面。',
-    input: { ...codeField, cards: z.array(CardSchema).length(3) },
-    run: (rt, args) => act(rt, args['code'], { type: 'bury', cards: args['cards'] as Card[] })
+    description: '庄家埋底：恰好 3 张牌码（从你的 20 张里扣进暗底）。',
+    input: { ...codeField, cards: z.array(CardCode).length(3), wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'bury', cards: cardsOf(args['cards'] as string[], 'cards') }, args['wait'])
   },
   {
     name: 'play',
     description:
-      '出牌：cards 是这次要出的 1 张或多张（多张必须同门顺子/结构优先）。牌对象可以直接拿 get_state 里 you.hand 的原样元素。成功后返回新局面。',
-    input: { ...codeField, cards: z.array(CardSchema).min(1) },
-    run: (rt, args) => act(rt, args['code'], { type: 'play', cards: args['cards'] as Card[] })
+      '出牌：cards 是这次要出的 1 张或多张牌码（多张必须同门顺子/结构优先）；牌码直接取 get_state 里 you.hand 的原样元素。',
+    input: { ...codeField, cards: z.array(CardCode).min(1), wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'play', cards: cardsOf(args['cards'] as string[], 'cards') }, args['wait'])
   },
   {
     name: 'deal',
-    description: '发下一副（上一副已结算、或还没开始第一副时可用；三人到齐才发得出去）。返回新局面。',
-    input: codeField,
-    run: (rt, args) => act(rt, args['code'], { type: 'deal' })
+    description: '发下一副（上一副已结算、或还没开始第一副时可用；三人到齐才发得出去）。',
+    input: { ...codeField, wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'deal' }, args['wait'])
   },
   {
     name: 'new_game',
-    description: '对局结束后开新对局（级别重置、发牌人轮转）。没结束时会失败。',
-    input: codeField,
-    run: (rt, args) => act(rt, args['code'], { type: 'newGame' })
+    description: '对局结束后开新对局（级别重置、发牌人轮转）；没结束时会失败。',
+    input: { ...codeField, wait: WAIT_FIELD },
+    run: (rt, args) => act(rt, args['code'], { type: 'newGame' }, args['wait'])
   },
   {
     name: 'list_my_tables',
-    description:
-      '列出这个凭据所在的同桌（邀请码 + 已入座人数 + 我在那张桌的角色），用来在没被告知邀请码时找到该坐哪张桌。',
+    description: '列出这个凭据所在的同桌（邀请码 + 已入座人数 + 我在那张桌的角色）。',
     input: {},
     run: async (rt) => {
       const tables: readonly TableSummary[] = await rt.api.listTables();
@@ -359,9 +484,8 @@ export const TOOLS: readonly ToolSpec[] = [
   },
   {
     name: 'join_table',
-    description:
-      '用邀请码进桌：有空座就入座（坐上空座会继承该座位的级别与手牌），**满座则以观战者身份进入**（不再报错）。已在座则原样返回。成功后返回新局面。',
-    input: { code: z.string().min(1).describe('6 位邀请码') },
+    description: '用邀请码进桌：有空座就入座（坐上空座会继承该座位的级别与手牌），满座则以观战者身份进入。',
+    input: { code: z.string().min(1) },
     run: async (rt, args) => {
       const code = (args['code'] as string).trim().toUpperCase();
       await rt.api.enterTable(code);

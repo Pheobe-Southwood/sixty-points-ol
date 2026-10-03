@@ -6,10 +6,16 @@
  *      用 SDK 的内存链对把同一套工具表接上「HTTP 版取数」，只是不起子进程。
  *   2. `/api/mcp`：Streamable HTTP 客户端，JSON 模式、无状态，凭据走 Authorization 头。
  *
- * 顺手钉住三件只能对真实服务器验证的事：
+ * 驱动方式就是**给模型推荐的用法**：动作自带等待（`wait` 默认 true），所以每个回合只有一次工具调用；
+ * 另外两个座位由 HTTP 并发直驱（真实同桌里他们本来就是独立客户端，串行驱动会让等待干等到超时）。
+ * 合法性用引擎本地判（模型手里也有 `turn.legalPlay`），**绝不逐张试** ——
+ * 每回合多探几次就把整副牌的读入量抬好几倍，那正是这条工具面要避免的事。
+ *
+ * 顺手钉住几件只能对真实服务器验证的事：
  *   - 形状守卫：包内声明的 wire 形状 vs 真实 `/view` 响应逐字段一致
  *   - 在线守卫：MCP 座位没有 SSE，打牌期间必须靠「最近活跃」显示在线
  *   - 权威守卫：故意发一手非法牌，服务端必须拒绝（工具层不许替它放水）
+ *   - 预算守卫：一副牌的 MCP 调用数与实收字符数都在上界内
  *
  * 运行（服务端需已启动）：
  *   BASE=http://127.0.0.1:5178 pnpm --filter @sixty/mcp mcp-check
@@ -18,7 +24,15 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
-import { cardClass, HELP_KEYS, type Card, type PlayerSeat, type PublicView, type TrumpModel } from '@sixty/engine';
+import {
+  cardClass,
+  checkPlay,
+  HELP_KEYS,
+  type Card,
+  type PlayerSeat,
+  type PublicView,
+  type TrumpModel
+} from '@sixty/engine';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -26,12 +40,18 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import {
   createMcpServer,
+  decodeCard,
+  decodePlay,
+  encodeCard,
   httpApi,
   SEAT_FIELDS,
   TABLE_FIELDS,
   VIEW_FIELDS,
   YOU_FIELDS,
-  type TableView
+  type CompactView,
+  type CompactYou,
+  type TableView,
+  type TurnSummary
 } from '../src/index.ts';
 import type { TableSummary } from '../src/wire.ts';
 
@@ -41,8 +61,23 @@ const DEALS = Number.parseInt(process.env['DEALS'] ?? '1', 10);
 const SPAWN = process.env['SPAWN'] !== '0';
 const STDIO_ENTRY = fileURLToPath(new URL('../src/stdio.ts', import.meta.url));
 
-/** 固定名字：重跑复用同一批身份（服务端按名字幂等地发凭据） */
-const NAMES = ['MCP-check-甲', 'MCP-check-乙', 'MCP-check-丙'] as const;
+/**
+ * 一副牌的预算。
+ *
+ * **调用数才是真正的探测器**：逐张 `check_play` 会让它从 20 出头涨到 40 以上，
+ * 而每次探测还要把整段会话再投喂一遍 —— 那才是这条工具面要避免的浪费。
+ * 字节数是粗线条的第二道：它随副数缓慢增长（`history` 每副多一行），所以留得宽松些。
+ */
+const CALLS_PER_DEAL = 26;
+const BYTES_PER_DEAL = 60_000;
+
+/**
+ * 每次跑用一批新名字：注册是**不许重名**的（PR #1 修掉了「重名就返回那条已有身份」的接管口子），
+ * 所以固定名字在同一个库里只能成功一次 —— 本脚本要能反复跑。
+ * 名字上限 12 个字符（`normalizeName`），所以后缀只有 5 位。
+ */
+const RUN = Math.random().toString(36).slice(2, 7);
+const NAMES = [`MCP甲-${RUN}`, `MCP乙-${RUN}`, `MCP丙-${RUN}`] as const;
 
 interface Credential {
   name: string;
@@ -52,6 +87,7 @@ interface Credential {
 let requests = 0;
 let rejects = 0;
 let toolCalls = 0;
+let delivered = 0;
 let illegalRejected = false;
 
 // ---------------------------------------------------------------- HTTP 小客户端
@@ -132,6 +168,8 @@ async function callToolRaw(
   toolCalls += 1;
   const result = (await client.callTool({ name, arguments: args })) as RawToolResult;
   const text = result.content?.find((item) => item.type === 'text')?.text ?? '';
+  delivered += text.length;
+  assertBudget();
   return { ok: result.isError !== true, text };
 }
 
@@ -139,6 +177,22 @@ async function tool<T>(client: Client, name: string, args: Record<string, unknow
   const { ok, text } = await callToolRaw(client, name, args);
   if (!ok) throw new Error(`工具 ${name} 失败：${text}`);
   return JSON.parse(text) as T;
+}
+
+/** 一副牌的花费：调用数没超、字节数没超（每打一次就查一次，超了就当场红） */
+let budgetStartCalls = 0;
+let budgetStartBytes = 0;
+let budgetDeals = 0;
+function assertBudget(): void {
+  if (budgetDeals === 0) return;
+  const calls = toolCalls - budgetStartCalls;
+  const bytes = delivered - budgetStartBytes;
+  if (calls > CALLS_PER_DEAL) {
+    throw new Error(`一副牌的 MCP 调用数 ${calls} 超过预算 ${CALLS_PER_DEAL}：是不是又在逐张试探了？`);
+  }
+  if (bytes > BYTES_PER_DEAL) {
+    throw new Error(`一副牌的实收负载 ${bytes} 字符超过预算 ${BYTES_PER_DEAL}`);
+  }
 }
 
 // ---------------------------------------------------------------- 形状守卫
@@ -171,7 +225,7 @@ async function checkWireShape(code: string, credential: string): Promise<void> {
   console.log('形状守卫通过：wire.ts 的声明与真实响应一致（TableView / SeatInfo / PublicView / PlayerSeat）');
 }
 
-// ---------------------------------------------------------------- 一副牌的驱动
+// ---------------------------------------------------------------- 另外两个座位（HTTP 并发直驱）
 
 interface Session {
   readonly client: Client;
@@ -212,6 +266,73 @@ async function otherAct(session: Session, seat: number, action: unknown): Promis
   return payload?.message ?? `HTTP ${response.status}`;
 }
 
+/** 帮某个座位走一手（只挑合法的单张；轮不到它就什么都不做） */
+async function moveSeat(session: Session, seat: number): Promise<boolean> {
+  const view = await otherView(session, seat);
+  const deal = view.deal;
+  if (deal === null) return false;
+
+  if (deal.phase === 'auction' && deal.auctionTurn === seat) {
+    const call = deal.highestBid === null ? { points: 40, strain: 'C' } : 'pass';
+    return (await otherAct(session, seat, { type: 'bid', call })) === null;
+  }
+  if (deal.phase === 'bury' && deal.declarerSeat === seat) {
+    return (await otherAct(session, seat, { type: 'bury', cards: view.you.hand.slice(0, 3) })) === null;
+  }
+  if (deal.phase === 'play' && deal.playTurn === seat && deal.trump !== null) {
+    const trump: TrumpModel = deal.trump;
+    const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
+    const card = view.you.hand.find((candidate) => checkPlay(view.you.hand, [candidate], trump, lead) === null);
+    if (card === undefined) return false;
+    return (await otherAct(session, seat, { type: 'play', cards: [card] })) === null;
+  }
+  return false;
+}
+
+interface Others {
+  pause: () => void;
+  resume: () => void;
+  stop: () => Promise<void>;
+}
+
+/**
+ * 后台把另外两个座位往前推。
+ *
+ * 必须并发：MCP 座位的动作会**阻塞等到下一次轮到自己**，串行驱动只会让它等到超时。
+ * 被拒是正常的（可能读到的是旧局面），这里一律忽略、下一轮再看。
+ */
+function startOthers(session: Session): Others {
+  let stopped = false;
+  let paused = false;
+  const loop = (async () => {
+    while (!stopped) {
+      if (!paused) {
+        for (const other of session.others) {
+          if (stopped) break;
+          try {
+            await moveSeat(session, other.seat);
+          } catch {
+            // 旧局面导致的拒绝、或瞬时失败：忽略，下一轮再试
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  })();
+  return {
+    pause: () => {
+      paused = true;
+    },
+    resume: () => {
+      paused = false;
+    },
+    stop: async () => {
+      stopped = true;
+      await loop;
+    }
+  };
+}
+
 async function assertMcpSeatOnline(session: Session): Promise<void> {
   const payload = (await http(`/api/tables/${session.code}/view`, {}, credentialOf(session, 1))) as {
     table: TableView;
@@ -226,13 +347,18 @@ async function assertMcpSeatOnline(session: Session): Promise<void> {
 }
 
 /** 等一轮必须能超时返回（证明等待是有界的，不会挂住会话） */
-async function assertWaitTimesOut(session: Session): Promise<void> {
-  const waited = await tool<{ timedOut: boolean; turn: { canAct: boolean } }>(session.client, 'wait_for_turn', {
-    code: session.code,
-    timeout_seconds: 1
-  });
-  assert.equal(waited.turn.canAct, false, '明知道不是自己的回合，wait_for_turn 却说能行动');
-  assert.equal(waited.timedOut, true, 'wait_for_turn 超时后必须返回 timedOut 而不是一直挂着');
+async function assertWaitTimesOut(session: Session, others: Others): Promise<void> {
+  others.pause();
+  try {
+    const waited = await tool<{ timedOut: boolean; turn: { canAct: boolean } }>(session.client, 'wait_for_turn', {
+      code: session.code,
+      timeout_seconds: 0
+    });
+    assert.equal(waited.turn.canAct, false, '明知道不是自己的回合，wait_for_turn 却说能行动');
+    assert.equal(waited.timedOut, true, 'wait_for_turn 超时后必须返回 timedOut 而不是一直挂着');
+  } finally {
+    others.resume();
+  }
 }
 
 /** 一个合法的多张领出必须同门；挑两张门类不同的牌（级牌与王都算主牌，要用引擎的 cardClass 判） */
@@ -245,144 +371,161 @@ function twoDifferentClasses(hand: readonly Card[], trump: TrumpModel): Card[] |
 
 interface StatePayload {
   readonly role: string;
-  readonly view: PublicView | null;
-  readonly you: PlayerSeat | null;
-  readonly turn: { readonly canAct: boolean; readonly phase: string };
+  readonly view: CompactView | null;
+  readonly you: CompactYou | null;
+  readonly turn: TurnSummary;
+  readonly timedOut?: boolean;
 }
 
-/** 打完整一副；返回结算后的视图 */
-async function playOneDeal(session: Session): Promise<PublicView> {
+function cardsOfView(codes: readonly string[]): Card[] {
+  return codes.map((code) => {
+    const card = decodeCard(code);
+    if (card === null) throw new Error(`工具面吐出了认不出的牌码：${code}`);
+    return card;
+  });
+}
+
+/** 当前这一墩的领出牌（引擎牌）；没人出过牌则是 null */
+function leadOfView(view: CompactView): Card[] | null {
+  const trick = view.deal?.trick ?? null;
+  return trick === null || trick.plays.length === 0 ? null : cardsOfView(decodePlay(trick.plays[0]!).cards);
+}
+
+/**
+ * MCP 座位该出哪张：**在本地算**（模型手里有 `turn.legalPlay` 与 `you.hand`，也一样不该逐张试）。
+ * 返回牌码，可以直接喂回 `play`。
+ */
+function pickPlay(state: StatePayload): string {
+  const view = state.view;
+  if (view === null || state.you === null || view.deal === null || view.deal.trump === null) {
+    throw new Error('轮到出牌却拿不到必要信息');
+  }
+  const trump: TrumpModel = view.deal.trump;
+  const hand = cardsOfView(state.you.hand);
+  const card = hand.find((candidate) => checkPlay(hand, [candidate], trump, leadOfView(view)) === null);
+  if (card === undefined) throw new Error('MCP 座位找不到任何合法的单张');
+  return encodeCard(card);
+}
+
+/** 用「每回合一次调用」的节奏打完整副；返回结算后的局面 */
+async function playOneDeal(session: Session): Promise<CompactView> {
+  const others = startOthers(session);
   let presenceChecked = false;
   let illegalTried = false;
   let waitedOnce = false;
-  const getState = (): Promise<StatePayload> => tool<StatePayload>(session.client, 'get_state', { code: session.code });
+  budgetStartCalls = toolCalls;
+  budgetStartBytes = delivered;
+  budgetDeals += 1;
 
-  let state = await getState();
-  if (state.role !== 'player' || state.you === null) {
-    throw new Error(`MCP 座位应是在座的玩家，实际 role=${state.role}（检查本脚本的入座步骤）`);
-  }
-  if (state.view === null || state.view.deal === null || state.view.deal.phase === 'scored') {
-    await tool(session.client, 'deal', { code: session.code });
-    state = await getState();
-  }
-
-  for (let step = 0; step < 400; step++) {
-    const view = state.view;
-    if (view === null) throw new Error('发完牌却看不到局面');
-    const me = state.you;
-    if (me === null) throw new Error('轮到出牌却拿不到手牌（you 为 null）');
-    const deal = view.deal;
-    if (deal === null) throw new Error('发完牌却没有牌局');
-    if (deal.phase === 'scored') return view;
-
-    if (!presenceChecked) {
-      presenceChecked = true;
-      await assertMcpSeatOnline(session);
+  try {
+    let state = await tool<StatePayload>(session.client, 'get_state', { code: session.code });
+    if (state.role !== 'player' || state.you === null) {
+      throw new Error(`MCP 座位应是在座的玩家，实际 role=${state.role}（检查本脚本的入座步骤）`);
+    }
+    // 这张桌的当前一副已经结束（上一条传输打完了）或还没开局：先开一副 —— 「我这一副」是新的
+    const opening = state.view?.deal ?? null;
+    if (opening === null || opening.phase === 'scored') {
+      state = await tool<StatePayload>(session.client, 'deal', { code: session.code });
     }
 
-    switch (deal.phase) {
-      case 'auction': {
-        const turn = deal.auctionTurn;
-        if (turn === 0) {
-          if (deal.auction.length === 0) {
-            // 用工具面给的合法候选叫第一口 —— 服务端若不接受，说明 legal_bids 撒谎了
-            const bids = await tool<{ options: { points: number; strains: string[] }[] }>(
-              session.client,
-              'legal_bids',
-              { code: session.code }
-            );
-            const first = bids.options[0];
-            if (first === undefined) throw new Error('legal_bids 在开局给不出任何候选');
-            const strain = first.strains[0];
-            if (strain === undefined) throw new Error('legal_bids 的候选没有花色');
-            await tool(session.client, 'bid', { code: session.code, call: { points: first.points, strain } });
-          } else {
-            await tool(session.client, 'bid', { code: session.code, call: 'pass' });
-          }
-        } else {
-          if (!waitedOnce) {
-            waitedOnce = true;
-            await assertWaitTimesOut(session);
-          }
-          const other = await otherView(session, turn);
-          const call = (other.deal?.auction.length ?? 0) === 0 ? { points: 40, strain: 'C' } : 'pass';
-          const error = await otherAct(session, turn, { type: 'bid', call });
-          if (error !== null) throw new Error(`座位 ${turn} 叫牌被拒：${error}`);
-        }
-        break;
+    for (let step = 0; step < 40; step += 1) {
+      const view = state.view;
+      const deal = view?.deal ?? null;
+      if (deal !== null && deal.phase === 'scored') return view!;
+
+      if (!presenceChecked) {
+        presenceChecked = true;
+        await assertMcpSeatOnline(session);
       }
 
-      case 'bury': {
-        const declarer = deal.declarerSeat;
-        if (declarer === null) throw new Error('埋底阶段却没有庄家');
-        if (declarer === 0) {
-          await tool(session.client, 'bury', { code: session.code, cards: me.hand.slice(0, 3) });
-        } else {
-          if (!waitedOnce) {
-            waitedOnce = true;
-            await assertWaitTimesOut(session);
-          }
-          const other = await otherView(session, declarer);
-          const error = await otherAct(session, declarer, { type: 'bury', cards: other.you.hand.slice(0, 3) });
-          if (error !== null) throw new Error(`座位 ${declarer} 埋底被拒：${error}`);
-        }
-        break;
+      // 不是自己能动的时刻（例如别人刚发完牌）：等一次，超时就重来 —— 绝不去猜着动手
+      if (!state.turn.canAct) {
+        state = await tool<StatePayload>(session.client, 'wait_for_turn', { code: session.code });
+        continue;
       }
 
-      case 'play': {
-        const turn = deal.playTurn;
-        if (turn === null) throw new Error('出牌阶段却没有人该出牌');
-        if (turn === 0) {
+      if (deal === null) {
+        state = await tool<StatePayload>(session.client, 'deal', { code: session.code });
+        continue;
+      }
+
+      switch (deal.phase) {
+        case 'auction': {
+          const option = state.turn.legalBids?.[0];
+          assert.ok(option !== undefined, '轮到叫牌却没给 turn.legalBids');
+          const strain = option.strains[0];
+          assert.ok(strain !== undefined, 'turn.legalBids 的候选没有花色');
+          const call = deal.auction.length === 0 ? { points: option.points, strain } : 'pass';
+          if (!waitedOnce) {
+            // 顺手钉住「等待有界」：先不等待地叫一口（此刻就不是自己的回合了），
+            // 再从一个「轮不到自己」的位置等一次 —— 必须超时返回，而不是挂住会话
+            waitedOnce = true;
+            state = await tool<StatePayload>(session.client, 'bid', { code: session.code, call, wait: false });
+            await assertWaitTimesOut(session, others);
+            continue;
+          }
+          state = await tool<StatePayload>(session.client, 'bid', { code: session.code, call });
+          break;
+        }
+
+        case 'bury': {
+          state = await tool<StatePayload>(session.client, 'bury', {
+            code: session.code,
+            cards: state.you!.hand.slice(0, 3)
+          });
+          break;
+        }
+
+        case 'play': {
           const leading = deal.trick === null || deal.trick.plays.length === 0;
           if (!illegalTried && leading && deal.trump !== null) {
             illegalTried = true;
-            const bad = twoDifferentClasses(me.hand, deal.trump);
+            const bad = twoDifferentClasses(cardsOfView(state.you!.hand), deal.trump);
             if (bad !== null) {
-              const attempt = await callToolRaw(session.client, 'play', { code: session.code, cards: bad });
+              const attempt = await callToolRaw(session.client, 'play', {
+                code: session.code,
+                cards: bad.map(encodeCard),
+                wait: false
+              });
               assert.equal(attempt.ok, false, '两张不同门类的牌居然被服务端接受了');
               illegalRejected = true;
             }
           }
-          let chosen: Card | undefined;
-          for (const card of me.hand) {
-            const verdict = await tool<{ ok: boolean }>(session.client, 'check_play', {
-              code: session.code,
-              cards: [card]
-            });
-            if (verdict.ok) {
-              chosen = card;
-              break;
-            }
-          }
-          if (chosen === undefined) throw new Error('MCP 座位找不到任何合法的单张');
-          await tool(session.client, 'play', { code: session.code, cards: [chosen] });
-        } else {
-          if (!waitedOnce) {
-            waitedOnce = true;
-            await assertWaitTimesOut(session);
-          }
-          const other = await otherView(session, turn);
-          let played = false;
-          for (const card of other.you.hand) {
-            const error = await otherAct(session, turn, { type: 'play', cards: [card] });
-            if (error === null) {
-              played = true;
-              break;
-            }
-          }
-          if (!played) throw new Error(`座位 ${turn} 找不到能出的牌`);
+          state = await tool<StatePayload>(session.client, 'play', {
+            code: session.code,
+            cards: [pickPlay(state)]
+          });
+          break;
         }
-        break;
-      }
 
-      default:
-        throw new Error(`没见过的阶段：${String(deal.phase)}`);
+        default:
+          throw new Error(`没见过的阶段：${String(deal.phase)}`);
+      }
     }
 
-    state = await getState();
+    throw new Error(`一副牌走了 40 步还没结算（副数 ${budgetDeals}）`);
+  } finally {
+    await others.stop();
   }
+}
 
-  throw new Error('一副牌走了 400 步还没结算');
+/**
+ * 观战者能读到这张桌，但只拿得到公共视图。
+ *
+ * 隐藏信息靠**负载形状**兜住（`you` 为 null），而不是靠状态码：满座进桌的人就是观战者。
+ */
+async function assertSpectatorSeesNoHand(code: string, credential: string): Promise<void> {
+  const payload = (await http(`/api/tables/${code}/view`, {}, credential)) as {
+    role: unknown;
+    view: Record<string, unknown> | null;
+    you: unknown;
+  };
+  assert.equal(payload.role, 'spectator', '不在座位上的人应被判为观战者');
+  assert.equal(payload.you, null, '观战者不该拿到手牌');
+  if (payload.view !== null) {
+    const raw = JSON.stringify(payload.view);
+    assert.equal(raw.includes('"hand"'), false, '公共视图里出现了手牌');
+  }
 }
 
 // ---------------------------------------------------------------- 两条传输各跑一遍
@@ -425,15 +568,22 @@ async function runTransport(
       `list_my_tables 没列出 ${session0.code}（GET /api/tables 没把新端点接上？）`
     );
 
+    // 上一副结算后 history 会多一行，所以每副单独算预算
     for (let index = 0; index < DEALS; index++) {
+      const before = { calls: toolCalls, bytes: delivered };
       const scored = await playOneDeal(session);
       const summary = scored.deal?.summary;
       assert.ok(summary !== null && summary !== undefined, '本副结束了却没有结算数据');
       console.log(
         `第 ${summary.dealNo} 副结算：定约 ${summary.contract.points}${summary.contract.strain} · ` +
           `庄家抓 ${summary.declarerTrickPoints} + 底 ${summary.kittyPoints}×${summary.multiplier} = ` +
-          `${summary.finalScore} · ${summary.made ? '打成' : '打输'}`
+          `${summary.finalScore} · ${summary.made ? '打成' : '打输'} · ` +
+          `本副 ${toolCalls - before.calls} 次调用 / ${delivered - before.bytes} 字符`
       );
+      // 下一副：动作自带等待会把我们带到「能发牌」的状态，这里只需要再发一次
+      if (index + 1 < DEALS) {
+        await tool(session.client, 'deal', { code: session0.code });
+      }
     }
   } finally {
     await client.close();
@@ -441,31 +591,13 @@ async function runTransport(
   console.log(`${title} 通过`);
 }
 
-/**
- * 不在座位上的人（观战者）**可以**读这张桌 —— 但只拿得到公共视图。
- *
- * 这条断言换过一次方向：观战模式合入前，未入座读视图应当被 403 拒掉；
- * 现在满座进桌的人会变成观战者，读负载是合法的，**隐藏信息靠负载形状而不是靠状态码**兜住
- * （`you` 为 null）。工具面两条传输必须都照这个来，否则「本地还是远程」会给出不同答案。
- */
-async function assertSpectatorSeesNoHand(code: string, credential: string): Promise<void> {
-  const payload = (await http(`/api/tables/${code}/view`, {}, credential)) as {
-    role: unknown;
-    view: Record<string, unknown> | null;
-    you: unknown;
-  };
-  assert.equal(payload.role, 'spectator', '不在座位上的人应被判为观战者');
-  assert.equal(payload.you, null, '观战者不该拿到手牌');
-  if (payload.view !== null) {
-    const raw = JSON.stringify(payload.view);
-    assert.equal(raw.includes('"hand"'), false, '公共视图里出现了手牌');
-  }
-}
-
 // ---------------------------------------------------------------- 主流程
 
 async function main(): Promise<void> {
-  console.log(`mcp-check → ${BASE}（每条传输 DEALS=${DEALS}，SPAWN=${SPAWN ? 'on' : 'off'}）`);
+  console.log(
+    `mcp-check → ${BASE}（每条传输 DEALS=${DEALS}，SPAWN=${SPAWN ? 'on' : 'off'}，` +
+      `预算 ≤ ${CALLS_PER_DEAL} 次调用 / ${BYTES_PER_DEAL} 字符每副）`
+  );
 
   const [mcpSeat, seatB, seatC] = await Promise.all(NAMES.map((name) => claim(name)));
   assert.ok(mcpSeat !== undefined && seatB !== undefined && seatC !== undefined);
@@ -500,7 +632,8 @@ async function main(): Promise<void> {
 
   console.log(
     `\n全部通过：HTTP 请求 ${requests}（其中被服务端拒绝 ${rejects} 次，属于故意的试错）· ` +
-      `MCP 工具调用 ${toolCalls} 次 · 非法领出被服务端拒绝：${illegalRejected ? '是' : '否（本副 MCP 座位没轮到领出）'}`
+      `MCP 工具调用 ${toolCalls} 次 · 工具结果共 ${delivered} 字符 · ` +
+      `非法领出被服务端拒绝：${illegalRejected ? '是' : '否（本副 MCP 座位没轮到领出）'}`
   );
 }
 

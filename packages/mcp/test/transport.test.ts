@@ -54,6 +54,25 @@ test('tools/list 与工具表逐字一致（防注册漂移）', async () => {
   }
 });
 
+test('共用的说明只写一遍：initialize 的 instructions 确实下发', async () => {
+  const { client, close } = await connect(new FakeApi());
+  try {
+    const instructions = client.getInstructions();
+    assert.ok(typeof instructions === 'string' && instructions.length > 0, 'instructions 没下发');
+    assert.ok(instructions.includes('S14'), 'instructions 应当讲清牌码格式');
+    assert.ok(instructions.includes('wait_for_turn'), 'instructions 应当讲清超时之后怎么办');
+    // 工具面 schema 是每个请求都要重发的，所以共用的句子不该再散落在 13 个描述里
+    const described = (await client.listTools()).tools;
+    assert.equal(
+      described.filter((tool) => (tool.description ?? '').includes('大王')).length,
+      0,
+      '牌码格式属于 instructions，不该在每个工具描述里重复'
+    );
+  } finally {
+    await close();
+  }
+});
+
 test('走真实 MCP 协议：read_rules 覆盖全部阶段、get_state 有 17 张手牌', async () => {
   const { client, close } = await connect(new FakeApi());
   try {
