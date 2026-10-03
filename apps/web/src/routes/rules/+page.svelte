@@ -63,7 +63,8 @@
     { id: 'bury', label: '埋底' },
     { id: 'play', label: '打牌' },
     { id: 'inference', label: '打牌推论' },
-    { id: 'scoring', label: '结算' }
+    { id: 'scoring', label: '结算' },
+    { id: 'spectate', label: '观战与离座' }
   ];
 
   const section = 'scroll-mt-4 rounded-2xl bg-black/25 p-4 ring-1 ring-white/10 sm:p-5';
@@ -708,6 +709,37 @@
         如果想要打得长一点（约 20 局），任意<b class="text-ivory">两位玩家</b>达到 <b class="text-gold">2(+2)</b>，或者任意<b
           class="text-ivory">一位玩家</b
         >冲到 <b class="text-gold">2(+3)</b>，对局结束，总进度最高的那位是冠军。当然，也可以协商任何时候结束。
+      </p>
+    </div>
+  </section>
+
+  <section id="spectate" class={section}>
+    <h2 class={heading}>9. 观战与离座</h2>
+    <div class={body}>
+      <p>
+        一张同桌只有 <b class="text-ivory">3 个座位</b>，但可以有任意多个<b class="text-ivory">观战者</b>。满座时用邀请链接进来的人
+        自动成为观战者；在座的人点「离座」也会转为观战者 —— 离座之后你仍然看得见这一桌，刷新也不会被自动塞回座位。
+      </p>
+
+      <p class={subhead}>观战者看得到什么</p>
+      <p>
+        只有<b class="text-ivory">公共信息</b>：每家还剩几张手牌、已经打出的牌与赢下的墩、定约与将牌、庄家已经抓到的分。
+        <b class="text-ivory">结算前看不到任何人的手牌，也看不到暗底</b>；结算后的底牌与升级随结算一并公开。
+      </p>
+      <p>
+        所以观战时与桌上的玩家通电话没有用 —— 这条边界不是 UI 上的遮挡，是服务器根本不会把那些牌放进给观战者的数据里。
+      </p>
+
+      <p class={subhead}>入座：补位的人接下的是座位</p>
+      <p>
+        点「入座」即可占用一个空座。级别与手牌都<b class="text-ivory">记在座位上</b>：如果有人在某一副打到一半离座，补位的人会拿到这个座位当时的手牌
+        与级别，从那一副继续打完，而不是从头开始。三人没齐时开不了下一副。
+      </p>
+
+      <p class={subhead}>改名字 / 换身份</p>
+      <p>
+        <b class="text-ivory">不在座位上时</b>才能改名字或换身份（在座时先离座）。名字全局唯一，改名之后凭据串会重签，旧串当场失效，
+        新串会自动写回你当前这台设备。
       </p>
     </div>
   </section>

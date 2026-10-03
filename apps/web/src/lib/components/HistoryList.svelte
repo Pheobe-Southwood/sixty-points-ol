@@ -1,21 +1,24 @@
 <script lang="ts">
-  import type { PersonalView } from '@sixty/engine';
+  import type { PublicView } from '@sixty/engine';
   import { bidText, cardText, levelParts, whoLabel } from '$lib/labels';
 
   let {
     view,
+    mySeat = -1,
     names = [],
     open = false,
     onClose
   }: {
-    view: PersonalView;
+    view: PublicView;
+    /** 文案里的「我的座位」：观战者传 -1，于是都显示玩家名 */
+    mySeat?: number;
     names?: readonly (string | null)[];
     open?: boolean;
     onClose?: () => void;
   } = $props();
 
   const deals = $derived([...view.history].reverse());
-  const who = (seat: number): string => whoLabel(names, view.you.seat, seat);
+  const who = (seat: number): string => whoLabel(names, mySeat, seat);
 </script>
 
 {#if open}

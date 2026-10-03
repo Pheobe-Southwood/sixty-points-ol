@@ -49,11 +49,21 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-export function register(name: string): Identity {
-  const existing = db.prepare('SELECT id, name, token FROM users WHERE name = ?').get(name) as
+export function findByName(name: string): Identity | null {
+  const row = db.prepare('SELECT id, name, token FROM users WHERE name = ?').get(name) as
     | UserRow
     | undefined;
-  if (existing) return existing;
+  return row ?? null;
+}
+
+/**
+ * 注册新身份；**名字已被占用时返回 null**（不返回那条身份）。
+ *
+ * 曾经这里对已存在的名字直接返回既有身份，于是「输入别人的名字」就等于登入别人，
+ * 拿到的正是对方座位上的手牌。名字唯一 + 令牌才是凭证（ADR-0003 / ADR-0009）。
+ */
+export function createIdentity(name: string): Identity | null {
+  if (findByName(name) !== null) return null;
   const token = randomBytes(24).toString('base64url');
   const info = db
     .prepare('INSERT INTO users (name, token, created_at) VALUES (?, ?, ?)')
@@ -64,9 +74,7 @@ export function register(name: string): Identity {
 export function findByCredential(credential: string): Identity | null {
   const parsed = parseCredential(credential);
   if (parsed === null) return null;
-  const row = db.prepare('SELECT id, name, token FROM users WHERE name = ?').get(parsed.name) as
-    | UserRow
-    | undefined;
+  const row = findByName(parsed.name);
   if (!row) return null;
   return safeEqual(row.token, parsed.token) ? row : null;
 }

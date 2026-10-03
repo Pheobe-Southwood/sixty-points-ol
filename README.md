@@ -13,9 +13,10 @@ packages/engine     纯 TS 规则引擎（零依赖，可被服务端与客户�
   test/             node:test 表驱动 + 属性测试（默认 60 个随机整局，GAME_SEEDS 可放大）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub
-  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口、SSE 流
+  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口（含入座/离座）、SSE 流
   scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
+                    spectate-check.ts（观战/离座/改名换身份的端到端回归）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
 ```
@@ -37,7 +38,7 @@ docs/adr/           架构决策记录
 ```bash
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
-pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例
+pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 / 角色与观战投影
 pnpm check            # 引擎 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
@@ -57,12 +58,16 @@ pnpm start            # 跑构建产物（默认端口 3000，见下）
 ```bash
 BASE=http://127.0.0.1:5178 pnpm --filter web smoke     # 3 个身份打完 N 副（DEALS=n），含 SSE 推送校验
 BASE=http://127.0.0.1:5178 pnpm --filter web lobby     # 开局回归：未开局必须渲染「开始第一副」按钮 + 三个座位都列出玩家名
+                                                       # 另含「未注册点邀请链接」：邀请码带进大厅、注册后回到原桌
 BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：position 类不得混用、座位卡必须 absolute、
                                                        # 邀请码可点复制、常驻提示已清空、? 按阶段给说明、无方位称谓、
-                                                       # /rules 八个小节齐备且渲染真实牌面、
+                                                       # /rules 九个小节齐备且渲染真实牌面、
                                                        # 王牌面（名字只在角落索引、正中是 ☀/☾ 图案）、
                                                        # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
+BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换身份：满座第 4 人只看公共信息、
+                                                       # 观战负载不含在座手牌、补位继承该座位的手牌与级别、
+                                                       # 在座不能改名或换身份、改名后旧凭据失效
 ```
 
 冒烟脚本用 `data/smoke-run.json` 保存凭据供续局校验使用。
@@ -75,6 +80,8 @@ BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再�
   四角座位卡显示的就是名字，方位在屏幕上没有锚点。
 - **点邀请码即复制链接**：`<origin>/table/<邀请码>`；大厅的入座框既接受 6 位邀请码，也接受直接粘贴的完整链接
   （`parseInvite`）。局域网 http 下浏览器没有 Clipboard API，会自动退化成可手动复制的链接输入框。
+  还没注册的人点开链接会被带到大厅，但**邀请码随 URL 一起带过去**（`/?join=<邀请码>`）：注册或导入身份后
+  自动回到那张桌，不需要重新点一次链接。
 - **无重复信息**：同一件事只说一遍（如「庄已抓 X / 需 Y」里的分母就是旁边的定约分，只保留一个）。
 - **牌面**：主牌只靠**金边**区分，四个角没有任何装饰点（点看着像另一张牌）；分牌就是 5 / 10 / K，认点数即可。
   大小王按真牌的布局：**牌名只在两处角落索引里**（「大/小 + 王」），两处镜像一致；**正中是一枚图案**（大王 ☀ / 小王 ☾）。
@@ -83,6 +90,12 @@ BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再�
   含三道练手题（用与服务端同源的 `checkPlay` 即时判定）。依赖级牌的每个示例都标出将牌环境（`trumpText`），
   升级表只列**真实可达**的分数（得分恒为 5 的倍数），叫牌一节讲清阻击叫的心理博弈。
   教程里每个示例都由引擎函数在 `test:web` 中核对，规则改动导致示例失效会直接测试失败。
+- **观战与离座**：满座（3 人）时用邀请链接进来即成为观战者，只看**公共视图**（手牌张数与已打出的牌，
+  不含任何手牌与结算前的底牌）；在座者随时可点「离座」，座位空出、本副停在空座上等人补位，
+  补位者继承该座位的级别与手牌（若本副尚未结算，界面会明说「你补进了空座、接下这手 N 张牌」，免得拿着
+  陌生手牌发愣）。牌桌右上角只在有人看时显示「N 人观战」（实时连接数）。
+  不在座位上时才能改名字或换身份 —— 改名会让凭据串重签，大厅与观战页都会把新串写回本机。
+  观战记录不会自动清除（只有入座才清），所以大厅「我的同桌」会一直列出你在观战的那张桌（上限 20 条）。
 
 ## 身份与凭据
 
@@ -99,7 +112,7 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 ```
 
 - 镜像：`node:24-bookworm-slim` 两阶段构建（装依赖+构建 → 只带产物与运行期依赖），非 root 运行。
-- 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
+- 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、座位与观战记录、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
 - 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）。
   **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
@@ -162,7 +175,7 @@ Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker C
 
 ## 暂未实现（v1 范围外）
 
-观战、聊天/表情、计时器、机器人补位、多实例水平扩展。
+聊天/表情、计时器、机器人补位、观战者的全知/延迟视图、多实例水平扩展。
 
 ## 许可
 

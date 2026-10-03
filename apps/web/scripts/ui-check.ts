@@ -15,7 +15,8 @@
  * 6. 出牌按钮：必须带 `.play-btn`（z-index 抬到手牌之上 + ≥44px 命中区），
  *    且叫牌面板里的「不叫」必须存在 —— 叫牌轮数很多时它就是被顶出屏幕的那一个。
  * 7. 底牌可见性：庄家埋底页要能看见「你拿上来的底牌」；闲家的同一页不能出现它。
- *    这一条同时守着引擎 personalView 的规则（originalKitty 只给庄家）。
+ *    这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家，观战者更没有）。
+ * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
  * 另外对 /rules 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
@@ -250,14 +251,48 @@ async function main(): Promise<void> {
   assert(!defender.includes('你拿上来的底牌'), '闲家页面不该出现「你拿上来的底牌」');
   assert(
     !defender.includes('data-marked="true"'),
-    '闲家页面不该有任何底牌标记（originalKitty 对闲家必须是 null）'
+    '闲家页面不该有任何底牌标记（拿上来的底牌对闲家必须是 null）'
   );
 
-  // 7) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在
+  // 7) 观战：满座后第 4 个人进入观战视图（同一套守卫，且不得出现任何玩家操作）
+  //    此刻三人都在座（正在埋底），是最严格的时点：连底牌都不能漏出去
+  const guest = await claim(`观战-${stamp}`);
+  const refused = await fetch(`${BASE}/api/tables/${code}/seat`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${guest.credential}` }
+  });
+  assert(refused.status === 400, `满座入座应被拒，实际 ${refused.status}`);
+  const watching = await page(`/table/${code}`, guest.credential);
+  assert(watching.includes('观战中'), '满座第 4 个人没有进入观战视图');
+  assert(!watching.includes('开始第一副'), '观战页面仍渲染了开局按钮');
+  assert(!watching.includes('不叫'), '观战页面出现了叫牌按钮');
+  assert(!watching.includes('确认埋底'), '观战页面出现了埋底按钮');
+  assert(!watching.includes('你拿上来的底牌'), '观战页面出现了庄家私有的底牌行');
+  assert(!watching.includes('data-marked="true"'), '观战页面出现了底牌标记');
+  assert(!/class="card[ "]/.test(watching), '观战页面渲染了牌（手牌或其他人的牌）');
+  assert(watching.includes('改名 / 换身份'), '观战页面没有身份快捷编辑入口');
+  assert(!watching.includes('补进了空座'), '观战页面出现了「接下手牌」提示（那是补位玩家的）');
+  assertHelpTrigger(watching, '观战', '观战页面');
+  assertNoRemovedHints(watching, '观战页面');
+  assertNoCompassLabels(watching, '观战页面');
+  assertNoPositionMix(watching, '观战页面');
+  const watchSeatCards = classAttrs(watching).filter(
+    (value) =>
+      value.includes('rounded-2xl') &&
+      (value.includes('left-3 top-3') || value.includes('right-3 top-3') || value.includes('bottom-3 left-3'))
+  );
+  assert(watchSeatCards.length === 3, `观战页面应找到 3 张座位卡，实际 ${watchSeatCards.length} 张`);
+  for (const value of watchSeatCards) {
+    const found = positionClasses(value);
+    assert(found.length === 1 && found[0] === 'absolute', `观战座位卡定位类应唯一为 absolute：${value.slice(0, 120)}`);
+  }
+  console.log('观战页面：无操作按钮、无牌面、无底牌标记，三张座位卡仍钉在毡面上，「?」给的是观战说明');
+
+  // 8) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在
   const rules = await page('/rules');
   assertNoPositionMix(rules, '教程页');
   assert(!/[东南西]/.test(rules), '教程页仍出现方位称谓');
-  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring']) {
+  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring', 'spectate']) {
     assert(rules.includes(`id="${id}"`), `教程页缺小节 ${id}`);
   }
   const ruleCards = (rules.match(/class="card[ "]/g) ?? []).length;
@@ -325,7 +360,7 @@ async function main(): Promise<void> {
 
   console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
-  console.log(`教程：8 个小节齐备，渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
+  console.log(`教程：9 个小节齐备（含观战与离座），渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
   console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌只剩金边`);
   console.log('叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、「不叫」在页面里');
   console.log('底牌：庄家埋底页有「你拿上来的底牌」+ 6 处标记；闲家页面 0 处标记');

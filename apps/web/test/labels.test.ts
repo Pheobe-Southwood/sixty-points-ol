@@ -39,7 +39,6 @@ function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
       dealerSeat: 0,
       auction,
       highestBid: null,
-      originalKitty: null,
       auctionTurn: 0,
       contract: null,
       trump: null,
@@ -51,7 +50,8 @@ function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
       declarerSeat: null,
       summary: null
     },
-    you: { seat: 0, hand: [], isDeclarer: false }
+    // 拿上来的底牌属于玩家私有，挂在 you 上（`deal` 是观战者也拿得到的公共投影）
+    you: { seat: 0, hand: [], isDeclarer: false, originalKitty: null }
   };
 }
 

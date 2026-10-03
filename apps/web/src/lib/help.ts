@@ -14,7 +14,8 @@ export type HelpKey =
   | 'play-lead'
   | 'play-follow'
   | 'play-wait'
-  | 'scored';
+  | 'scored'
+  | 'spectate';
 
 export interface HelpEntry {
   /** `/rules` 里的小节 id（不含 #） */
@@ -104,6 +105,17 @@ const ENTRIES: Record<HelpKey, HelpEntry> = {
       '打输则两名闲家各升 ceil(差 / 10) 级（差 = 定约分 − 最终得分，向上取整）：差 5-10 → 1 级，15-20 → 2 级，35 → 4 级；庄家级别不变。',
       '2(+0) 起步，A 之后进 2(+1)；两家达 2(+2) 或一家达 2(+3) 即结束，总进度最高者为冠军。'
     ]
+  },
+  spectate: {
+    anchor: 'spectate',
+    title: '观战',
+    body: [
+      '观战者只看公共信息：每家还剩几张手牌、已经打出的牌与赢下的墩、定约与将牌、庄家已抓到的分。结算前看不到任何手牌，也看不到暗底 —— 所以观战时与谁通电话都拿不到情报。',
+      '满座（三人）时用邀请链接进来就是观战者；在座时点「离座」也会转为观战者。离座后你仍然看得见这一桌，刷新不会把你自动塞回座位。',
+      '点「入座」即可补上空座。级别与手牌都记在座位上，补位的人接下的是这个座位现有的进度（含正在打的那一副），不是从头开始。',
+      '不在座位上时才改得动身份：在座时先离座再改名字或换身份。名字全局唯一，改名之后凭据串会重签（旧串当场失效），新串会自动写回本机。',
+      '三人没齐时开不了下一副；某一副打到一半有人离座，这一副会停在空座上，等有人补位再继续。'
+    ]
   }
 };
 
@@ -119,10 +131,13 @@ export interface HelpContext {
   readonly myTurn?: boolean;
   /** 仅 play 阶段有意义：本轮还没有人出牌，由你领出 */
   readonly leading?: boolean;
+  /** 观战者：不看阶段，一律用「观战」那一条 */
+  readonly spectating?: boolean;
 }
 
 /** 当前该显示哪一段说明：状态 → HelpKey */
 export function helpKeyOf(ctx: HelpContext): HelpKey {
+  if (ctx.spectating === true) return 'spectate';
   switch (ctx.phase) {
     case 'lobby':
       return 'lobby';

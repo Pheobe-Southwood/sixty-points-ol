@@ -29,7 +29,13 @@ interface View {
     trick: { leaderSeat: number; plays: { seat: number; cards: Card[] }[] } | null;
     contract: { points: number; strain: string; declarerSeat: number } | null;
   } | null;
-  you: { seat: number; hand: Card[] };
+}
+
+/** 视图负载：手牌是 `view` 的兄弟字段 `you`（观战者没有 you，见 ADR-0007） */
+interface Payload {
+  role: 'player' | 'spectator';
+  view: View | null;
+  you: { seat: number; hand: Card[] } | null;
 }
 
 type Card = { suit?: string; rank?: number; joker?: string };
@@ -107,16 +113,19 @@ async function tryAction(code: string, credential: string, action: unknown): Pro
   return payload?.message ?? `HTTP ${response.status}`;
 }
 
+async function payloadOf(code: string, credential: string): Promise<Payload> {
+  return (await api(`/api/tables/${code}/view`, {}, credential)) as Payload;
+}
+
 async function view(code: string, credential: string): Promise<View | null> {
-  const payload = (await api(`/api/tables/${code}/view`, {}, credential)) as { view: View | null };
-  return payload.view;
+  return (await payloadOf(code, credential)).view;
 }
 
 /** 候选出牌：先按规则圈定门类，再逐个试（服务端是唯一裁判） */
-function candidates(view: View, seat: number, n: number): Card[][] {
-  const deal = view.deal!;
+function candidates(current: Payload, n: number): Card[][] {
+  const deal = current.view!.deal!;
   const trump = deal.trump!;
-  const hand = view.you.hand;
+  const hand = current.you!.hand;
   const lead = deal.trick && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
   if (lead === null) return hand.map((card) => [card]);
 
@@ -155,11 +164,13 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 async function playOneLegalMove(code: string, credential: string, seat: number): Promise<void> {
-  const current = await view(code, credential);
-  if (current === null || current.deal === null) throw new Error('出牌阶段却拿不到牌局视图');
-  const deal = current.deal;
+  const current = await payloadOf(code, credential);
+  if (current.view === null || current.view.deal === null || current.you === null) {
+    throw new Error('出牌阶段却拿不到个人视图');
+  }
+  const deal = current.view.deal;
   const n = deal.trick && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards.length : 1;
-  for (const cards of candidates(current, seat, n)) {
+  for (const cards of candidates(current, n)) {
     const error = await tryAction(code, credential, { type: 'play', cards });
     if (error === null) return;
   }
@@ -276,8 +287,9 @@ async function main(): Promise<void> {
 
     if (deal.phase === 'bury') {
       const declarerSeat = deal.contract!.declarerSeat;
-      const declarerView = await view(code, identities[declarerSeat]!.credential);
-      const cards = declarerView.you.hand.slice(0, 3);
+      const declarer = await payloadOf(code, identities[declarerSeat]!.credential);
+      if (declarer.you === null) throw new Error('庄家拿不到自己的手牌');
+      const cards = declarer.you.hand.slice(0, 3);
       const error = await tryAction(code, identities[declarerSeat]!.credential, { type: 'bury', cards });
       if (error !== null) throw new Error(`埋底被拒：${error}`);
       continue;

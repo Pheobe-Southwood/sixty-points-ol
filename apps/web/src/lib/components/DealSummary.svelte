@@ -1,6 +1,7 @@
 <script lang="ts">
   import { levelLabel } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
+  import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import CardView from './Card.svelte';
   import { whoLabel } from '$lib/labels';
   import { strainGlyph } from '$lib/labels';
@@ -14,7 +15,8 @@
   const view = $derived(client.view);
   const summary = $derived(view?.deal?.summary ?? null);
   const finished = $derived(view?.status === 'finished');
-  const mySeat = $derived(view?.you.seat ?? 0);
+  const spectating = $derived(client.you === null);
+  const mySeat = $derived(client.you?.seat ?? SPECTATOR_LABEL_SEAT);
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const who = (seat: number): string => whoLabel(names, mySeat, seat);
 </script>
@@ -123,7 +125,9 @@
           >
             看看桌面
           </button>
-          {#if finished}
+          {#if spectating}
+            <span class="self-center text-xs text-white/45">观战中 · 下一副由在座玩家开</span>
+          {:else if finished}
             <button
               type="button"
               class="rounded-lg bg-gold px-5 py-1.5 text-xs font-bold text-ink hover:brightness-110 disabled:opacity-40"

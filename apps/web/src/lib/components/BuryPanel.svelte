@@ -7,10 +7,11 @@
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
-  const mine = $derived(view?.you.isDeclarer ?? false);
+  /** 观战者永远不是庄家：只看到「庄家埋底中」与三个空的暗底槽 */
+  const mine = $derived(client.you?.isDeclarer ?? false);
   const chosen = $derived(client.selectedCards);
-  /** 发牌留下的 3 张：只有庄家拿得到（闲家是 null），见引擎 personalView */
-  const taken = $derived(deal?.originalKitty ?? []);
+  /** 发牌留下的 3 张：只有庄家拿得到（闲家是 null，观战者连 you 都没有），见引擎 personalView */
+  const taken = $derived(client.you?.originalKitty ?? []);
   const isChosen = (index: number): boolean => chosen[index] !== undefined;
 </script>
 
@@ -21,6 +22,8 @@
     埋底
     {#if mine}
       <span class="ml-1 font-normal text-[11px] text-white/50">选 3 张扣入暗底</span>
+    {:else}
+      <span class="ml-1 font-normal text-[11px] text-white/50">庄家埋底中</span>
     {/if}
   </h2>
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { PersonalView } from '@sixty/engine';
+  import type { PublicView } from '@sixty/engine';
   import { strainGlyph } from '$lib/labels';
 
-  let { view }: { view: PersonalView } = $props();
+  let { view }: { view: PublicView } = $props();
 
   const deal = $derived(view.deal);
   const contract = $derived(deal?.contract ?? null);

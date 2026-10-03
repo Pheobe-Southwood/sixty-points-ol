@@ -7,6 +7,9 @@
   const table = $derived(client.table);
   const seats = $derived(table?.seats ?? []);
   const ready = $derived(table?.ready ?? false);
+  /** 在座的人才能开局；观战者只能等（入座按钮在页头） */
+  const seated = $derived(client.you !== null);
+  const missing = $derived(3 - seats.filter((seat) => seat.userId !== null).length);
 </script>
 
 <section class="absolute inset-0 grid place-items-center px-4">
@@ -38,14 +41,20 @@
       {/each}
     </div>
 
-    <button
-      type="button"
-      class="mt-5 rounded-xl bg-gold px-8 py-2.5 text-sm font-bold text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.7)] transition hover:brightness-110 active:scale-95 disabled:opacity-40"
-      disabled={!ready || client.busy}
-      onclick={() => void client.deal()}
-    >
-      {ready ? '开始第一副' : `还差 ${3 - seats.filter((seat) => seat.userId !== null).length} 人`}
-    </button>
+    {#if seated}
+      <button
+        type="button"
+        class="mt-5 rounded-xl bg-gold px-8 py-2.5 text-sm font-bold text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.7)] transition hover:brightness-110 active:scale-95 disabled:opacity-40"
+        disabled={!ready || client.busy}
+        onclick={() => void client.deal()}
+      >
+        {ready ? '开始第一副' : `还差 ${missing} 人`}
+      </button>
+    {:else}
+      <p class="mt-5 text-xs text-white/60">
+        {ready ? '你在观战：等他们发牌；有空位时可以点页头「入座」补上。' : `你在观战 · 还差 ${missing} 人`}
+      </p>
+    {/if}
 
     <p class="mt-3">
       <a class="text-[11px] text-white/45 hover:text-white" href="/rules">第一次玩？看新手教程 →</a>

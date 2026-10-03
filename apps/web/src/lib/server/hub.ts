@@ -29,8 +29,15 @@ export function broadcast(tableId: number): void {
   }
 }
 
-export function subscriberCount(tableId: number): number {
-  return channels.get(tableId)?.size ?? 0;
+/**
+ * 该桌当前所有 SSE 连接的 userId。
+ *
+ * 观战连接与玩家连接在这里不作区分：**角色每帧由数据库现算**（`seatOf`），
+ * 把角色缓存在连接上会在「观战者刚入座」这一帧读到过期值（观战人数、在线点都会滞后一整轮）。
+ */
+export function connectionUserIds(tableId: number): readonly number[] {
+  const set = channels.get(tableId);
+  return set ? [...set].map((c) => c.userId) : [];
 }
 
 export function isUserOnline(tableId: number, userId: number): boolean {
