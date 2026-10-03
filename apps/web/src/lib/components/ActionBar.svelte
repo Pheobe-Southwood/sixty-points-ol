@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
+  import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { helpKeyOf, phaseHelp } from '$lib/help';
   import { whoLabel } from '$lib/labels';
   import HelpPopover from './HelpPopover.svelte';
@@ -15,7 +16,10 @@
   const finished = $derived(view?.status === 'finished');
   const phase = $derived(deal?.phase ?? null);
   const selectedCount = $derived(client.selected.length);
-  const mySeat = $derived(view?.you.seat ?? 0);
+  /** 观战者：mySeat = -1 让下面所有「你」的判断自动不成立，不需要另写一套分支 */
+  const spectating = $derived(client.you === null);
+  const mySeat = $derived(client.you?.seat ?? SPECTATOR_LABEL_SEAT);
+  const isDeclarer = $derived(client.you?.isDeclarer ?? false);
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
 
   const myTurn = $derived(deal !== null && deal.phase === 'play' && deal.playTurn === mySeat);
@@ -24,8 +28,9 @@
     phaseHelp(
       helpKeyOf({
         phase: phase ?? 'lobby',
-        isDeclarer: view?.you.isDeclarer ?? false,
+        isDeclarer,
         myTurn,
+        spectating,
         leading: deal !== null && deal.trick !== null && deal.trick.plays.length === 0
       })
     )
@@ -82,7 +87,7 @@
     <span class="text-xs text-white/45">{status}</span>
   {/if}
 
-  {#if phase === 'bury' && view?.you.isDeclarer}
+  {#if phase === 'bury' && isDeclarer}
     <span class="text-xs text-white/70">
       已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3 张入底
     </span>
@@ -113,12 +118,15 @@
     >
       {summaryOpen ? '收起结算' : '结算详情'}
     </button>
-    {#if finished}
-      <button type="button" class={gold} disabled={client.busy} onclick={() => void client.newGame()}>
-        开新对局（级别重置）
-      </button>
-    {:else}
-      <button type="button" class={gold} disabled={client.busy} onclick={() => void client.deal()}>下一副</button>
+    <!-- 发牌与开新对局只属于在座玩家；观战者看完结算即可 -->
+    {#if !spectating}
+      {#if finished}
+        <button type="button" class={gold} disabled={client.busy} onclick={() => void client.newGame()}>
+          开新对局（级别重置）
+        </button>
+      {:else}
+        <button type="button" class={gold} disabled={client.busy} onclick={() => void client.deal()}>下一副</button>
+      {/if}
     {/if}
   {/if}
 </div>

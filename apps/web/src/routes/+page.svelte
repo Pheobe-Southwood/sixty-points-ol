@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invalidateAll, goto } from '$app/navigation';
+  import { clearCredential, saveCredential, savedCredential } from '$lib/identity';
   import { parseInvite } from '$lib/invite';
   import type { PageProps } from './$types';
 
@@ -7,12 +8,13 @@
 
   let name = $state('');
   let credentialInput = $state('');
-  let joinCode = $state('');
+  let joinCode = $state(data.join ?? '');
   let busy = $state(false);
   let message = $state<string | null>(null);
+  let renameName = $state('');
+  let renameMessage = $state<string | null>(null);
+  let switchInput = $state('');
   let copied = $state(false);
-
-  const STORAGE_KEY = 'sixty.credential';
 
   /** 输入即归一化：粘贴完整邀请链接时立刻换成 6 位邀请码，否则原样保留 */
   function normalizeJoinInput(raw: string): string {
@@ -22,7 +24,7 @@
   // 浏览器里若有本地凭据但服务端没认出来（换浏览器/清了 cookie），自动申领一次
   $effect(() => {
     if (data.me !== null) return;
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = savedCredential();
     if (!saved) return;
     void claim({ credential: saved }, true);
   });
@@ -41,10 +43,41 @@
         | null;
       if (!response.ok) {
         if (!silent) message = payload?.message ?? '操作失败';
-        else localStorage.removeItem(STORAGE_KEY);
+        else clearCredential();
         return;
       }
-      if (payload?.credential) localStorage.setItem(STORAGE_KEY, payload.credential);
+      if (payload?.credential) saveCredential(payload.credential);
+      switchInput = '';
+      // 从邀请链接被带到大厅的：身份一到位就直接回到那张桌，不必重新粘贴一次链接
+      if (data.join !== null) {
+        await goto(`/table/${data.join}`);
+        return;
+      }
+      await invalidateAll();
+    } finally {
+      busy = false;
+    }
+  }
+
+  /** 改名字：服务端会回发重签后的凭据串，必须写回本机（旧串当场失效） */
+  async function renameSelf(): Promise<void> {
+    busy = true;
+    renameMessage = null;
+    try {
+      const response = await fetch('/api/auth/rename', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: renameName.trim() })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { name?: string; credential?: string; message?: string }
+        | null;
+      if (!response.ok) {
+        renameMessage = payload?.message ?? '改名失败';
+        return;
+      }
+      if (payload?.credential) saveCredential(payload.credential);
+      renameName = '';
       await invalidateAll();
     } finally {
       busy = false;
@@ -53,7 +86,7 @@
 
   async function logout(): Promise<void> {
     await fetch('/api/auth/logout', { method: 'POST' });
-    localStorage.removeItem(STORAGE_KEY);
+    clearCredential();
     await invalidateAll();
   }
 
@@ -128,6 +161,11 @@
     <section class={card}>
       <h2 class="text-sm font-bold">创建身份</h2>
       <p class="mt-1 text-[11px] text-white/45">无需密码：凭据串就是身份，复制到别的浏览器粘贴即可继续。</p>
+      {#if data.join}
+        <p class="mt-3 rounded-lg bg-gold/15 px-3 py-2 text-[11px] text-gold ring-1 ring-gold/30">
+          注册或导入身份后会自动回到同桌 <b class="font-mono tracking-widest">{data.join}</b>。
+        </p>
+      {/if}
       <form
         class="mt-3 flex gap-2"
         onsubmit={(event) => {
@@ -176,6 +214,38 @@
           {copied ? '已复制' : '复制凭据'}
         </button>
       </div>
+
+      <form
+        class="mt-3 flex gap-2"
+        onsubmit={(event) => {
+          event.preventDefault();
+          void renameSelf();
+        }}
+      >
+        <input class={input} placeholder="改名字（1-12 字）" bind:value={renameName} maxlength="12" />
+        <button type="submit" class={ghost} disabled={busy || renameName.trim().length === 0}>改名</button>
+      </form>
+      {#if renameMessage}
+        <p class="mt-2 rounded-lg bg-red-500/20 px-3 py-1.5 text-xs text-red-200">{renameMessage}</p>
+      {/if}
+      <p class="mt-1.5 text-[10px] leading-relaxed text-white/40">
+        在座时改不了名字或身份：先在同桌页点「离座」。改名后凭据串会重签，新串会自动写回本机。
+      </p>
+
+      <details class="mt-3 text-xs text-white/60">
+        <summary class="cursor-pointer hover:text-white">换身份？粘贴另一条凭据</summary>
+        <div class="mt-2 flex gap-2">
+          <input class={input} placeholder="粘贴凭据串" bind:value={switchInput} />
+          <button
+            type="button"
+            class={ghost}
+            disabled={busy || switchInput.trim().length === 0}
+            onclick={() => void claim({ credential: switchInput.trim() })}
+          >
+            换身份
+          </button>
+        </div>
+      </details>
     </section>
 
     <section class={card}>
@@ -207,7 +277,10 @@
               href={`/table/${table.code}`}
             >
               <span class="font-mono tracking-widest text-gold">{table.code}</span>
-              <span class="text-white/45">{table.seated} 人入座</span>
+              <!-- 在座的桌与观战的桌都列出来：离座之后大厅里也回得去 -->
+              <span class="text-white/45">
+                {table.role === 'player' ? `${table.seated} 人入座` : '观战中'}
+              </span>
             </a>
           {/each}
         </div>

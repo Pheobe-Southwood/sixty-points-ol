@@ -1,28 +1,27 @@
 import { error, redirect } from '@sveltejs/kit';
 import { credentialOf, identityFrom } from '$lib/server/auth';
-import { getTableByCode, joinTable, seatOf, tableView, viewFor } from '$lib/server/tables';
+import { enterTable, payloadFor } from '$lib/server/tables';
+import { normalizeInvite } from '$lib/invite';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async (event) => {
   const identity = identityFrom(event);
-  if (identity === null) redirect(307, '/');
-
-  const code = event.params.code.toUpperCase();
-  let table = getTableByCode(code);
-  if (table === null) error(404, '同桌不存在，请确认邀请码');
-
-  // 凭邀请码进入即自动入座（满座则报错）
-  if (seatOf(table, identity.id) === null) {
-    const joined = joinTable(code, identity.id);
-    if ('error' in joined) error(403, joined.error);
-    table = joined.table;
+  if (identity === null) {
+    // 还没注册：把邀请码一起带去大厅，注册或导入身份后大厅会自动回到这张桌。
+    // 直接 redirect('/') 会把邀请码丢掉，用户得重新点一次链接（回归过的坑）。
+    const invited = normalizeInvite(event.params.code);
+    redirect(307, invited === null ? '/' : `/?join=${invited}`);
   }
 
+  const code = event.params.code.toUpperCase();
+  // 进入即到达：有空座自动入座，满座（或本人刚离座）则以观战身份进入
+  const entered = enterTable(code, identity.id);
+  if ('error' in entered) error(404, '同桌不存在，请确认邀请码');
+
   return {
-    code: table.code,
-    seat: seatOf(table, identity.id)!,
+    code: entered.table.code,
+    seat: entered.role === 'player' ? entered.seat : null,
     me: { name: identity.name, credential: credentialOf(identity) },
-    view: viewFor(table.id, identity.id),
-    table: tableView(table)
+    ...payloadFor(entered.table, identity.id)
   };
 };

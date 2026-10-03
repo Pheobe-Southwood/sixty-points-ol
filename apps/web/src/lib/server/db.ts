@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS games (
   state TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+-- 观战记录：不是「正在看」，而是「这个人对这张桌表达过不坐座位」（满座到达或主动离座）。
+-- 它的唯一作用是让同桌页不再把这位用户自动塞回座位（见 ADR-0007 / role.ts）。
+CREATE TABLE IF NOT EXISTS spectators (
+  table_id INTEGER NOT NULL REFERENCES tables(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY (table_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_spectators_user ON spectators (user_id);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   table_id INTEGER NOT NULL REFERENCES tables(id),

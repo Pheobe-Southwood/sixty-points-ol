@@ -19,7 +19,8 @@ const ALL_KEYS: readonly HelpKey[] = [
   'play-lead',
   'play-follow',
   'play-wait',
-  'scored'
+  'scored',
+  'spectate'
 ];
 
 /** 每个阶段必须讲到的关键词：漏了就是「说不完整」 */
@@ -31,7 +32,8 @@ const REQUIRED: Record<HelpKey, readonly string[]> = {
   'play-lead': ['单张', '顺子', '跳过级牌', '跟几张'],
   'play-follow': ['同门', '同张数', '结构优先', '杀牌', '垫牌'],
   'play-wait': ['轮到别人', '先出为大', '副级'],
-  scored: ['底牌分 × 末轮张数', '40-55', '每多 5 分', 'ceil', '闲家', '冠军']
+  scored: ['底牌分 × 末轮张数', '40-55', '每多 5 分', 'ceil', '闲家', '冠军'],
+  spectate: ['公共信息', '手牌', '满座', '离座', '入座', '改名']
 };
 
 const page = readFileSync(new URL('../src/routes/rules/+page.svelte', import.meta.url), 'utf8');
@@ -80,8 +82,8 @@ test('anchor 指向 /rules 里真实存在的小节', () => {
   }
 });
 
-test('/rules 的八个小节都在，且不只是空壳', () => {
-  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring']) {
+test('/rules 的九个小节都在，且不只是空壳', () => {
+  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring', 'spectate']) {
     assert.ok(page.includes(`id="${id}"`), `/rules 缺小节 ${id}`);
   }
   // 教程必须复用真实牌渲染组件，而不是自己画方块
@@ -114,7 +116,7 @@ test('不同阶段的内容确实不同（防空转）', () => {
   assert.equal(seen.size, ALL_KEYS.length);
 });
 
-test('helpKeyOf 覆盖全部八种状态且都能落到具体某段', () => {
+test('helpKeyOf 覆盖全部九种状态且都能落到具体某段', () => {
   const cases: readonly [HelpContext, HelpKey][] = [
     [{ phase: 'lobby' }, 'lobby'],
     [{ phase: 'auction' }, 'auction'],
@@ -125,7 +127,12 @@ test('helpKeyOf 覆盖全部八种状态且都能落到具体某段', () => {
     [{ phase: 'play', myTurn: true, leading: true }, 'play-lead'],
     [{ phase: 'play', myTurn: true, leading: false }, 'play-follow'],
     [{ phase: 'play', myTurn: true }, 'play-follow'],
-    [{ phase: 'scored' }, 'scored']
+    [{ phase: 'scored' }, 'scored'],
+    // 观战与阶段无关：不论在哪一阶段，观战者看到的都是「观战」那一条
+    [{ phase: 'lobby', spectating: true }, 'spectate'],
+    [{ phase: 'auction', spectating: true }, 'spectate'],
+    [{ phase: 'play', myTurn: true, spectating: true }, 'spectate'],
+    [{ phase: 'scored', spectating: true }, 'spectate']
   ];
   const reached = new Set<HelpKey>();
   for (const [context, expected] of cases) {

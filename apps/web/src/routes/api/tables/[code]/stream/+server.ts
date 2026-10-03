@@ -1,15 +1,14 @@
 import { error } from '@sveltejs/kit';
 import { requireIdentity } from '$lib/server/auth';
-import { getTableByCode, seatOf, tableView, viewFor } from '$lib/server/tables';
+import { getTableByCode, payloadFor } from '$lib/server/tables';
 import { broadcast, register } from '$lib/server/hub';
 import type { RequestHandler } from './$types';
 
-/** 每玩家一条 SSE：任何动作后推送该玩家自己的个人视图（隐藏信息只在服务端过滤） */
+/** 每人一条 SSE：在座推个人视图，观战推公共视图（角色每帧现算，隐藏信息只在服务端过滤） */
 export const GET: RequestHandler = async (event) => {
   const identity = requireIdentity(event);
   const table = getTableByCode(event.params.code);
   if (table === null) error(404, '同桌不存在');
-  if (seatOf(table, identity.id) === null) error(403, '你不在该同桌的座位上');
 
   const encoder = new TextEncoder();
   const tableId = table.id;
@@ -21,11 +20,8 @@ export const GET: RequestHandler = async (event) => {
       const send = (): void => {
         if (closed) return;
         try {
-          const payload = JSON.stringify({
-            view: viewFor(tableId, userId),
-            table: tableView({ ...table, seats: table.seats })
-          });
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+          const current = getTableByCode(table.code) ?? table;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payloadFor(current, userId))}\n\n`));
         } catch {
           closed = true;
         }

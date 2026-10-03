@@ -1,6 +1,7 @@
 /**
- * 开局按钮回归测试：未开局时同桌页必须渲染「开始第一副」按钮，
- * 发牌后必须切换到牌局界面（这正是 API 冒烟盖不到的 UI 缺口）。
+ * 开局入口回归测试：未开局时同桌页必须渲染「开始第一副」按钮，
+ * 发牌后必须切换到牌局界面（这正是 API 冒烟盖不到的 UI 缺口）；
+ * 另外守「未注册点邀请链接」这条路：邀请码必须被带进大厅，注册后直接回到原桌。
  * 运行：BASE=http://127.0.0.1:5178 node scripts/lobby-check.ts
  */
 const BASE = process.env['BASE'] ?? 'http://127.0.0.1:5178';
@@ -24,6 +25,18 @@ async function page(path: string, credential: string): Promise<string> {
   const response = await fetch(`${BASE}${path}`, {
     headers: { cookie: `sixty_cred=${credential}` }
   });
+  if (!response.ok) throw new Error(`GET ${path} → ${response.status}`);
+  return response.text();
+}
+
+/** 不带凭据访问，只看重定向（手动跟随，否则 fetch 会替我们跳掉） */
+async function redirectOf(path: string): Promise<{ status: number; location: string }> {
+  const response = await fetch(`${BASE}${path}`, { redirect: 'manual' });
+  return { status: response.status, location: response.headers.get('location') ?? '' };
+}
+
+async function pageAnonymous(path: string): Promise<string> {
+  const response = await fetch(`${BASE}${path}`);
   if (!response.ok) throw new Error(`GET ${path} → ${response.status}`);
   return response.text();
 }
@@ -88,6 +101,27 @@ async function main(): Promise<void> {
   assert(playing.includes('叫牌'), '发牌后页面没有进入叫牌界面');
   assert(!playing.includes('开始第一副'), '发牌后仍显示开始按钮');
   console.log('发牌后页面：已进入叫牌界面');
+
+  // 3) 未注册时点邀请链接：邀请码必须被带进大厅（曾经被 redirect('/') 丢掉，用户得重新点一次链接）
+  const bounced = await redirectOf(`/table/${code}`);
+  assert(bounced.status === 307, `未注册访问同桌页应 307 跳大厅，实际 ${bounced.status}`);
+  assert(
+    bounced.location.endsWith(`/?join=${code}`),
+    `未注册跳大厅时邀请码被丢了：location=${bounced.location}（期望以 /?join=${code} 结尾）`
+  );
+  const entry = await pageAnonymous(`/?join=${code}`);
+  assert(entry.includes(code), '大厅没有把邀请码带进入座框，注册后回不到原桌');
+  assert(entry.includes('回到同桌'), '大厅没有告诉用户注册后会自动回到原桌');
+
+  // 邀请码不合法的路径不该把垃圾带进大厅（也不该变成任意外链）
+  const garbage = await redirectOf('/table/zz');
+  assert(!garbage.location.includes('join='), `无效邀请码不该被带进大厅：${garbage.location}`);
+
+  // 补一个身份后，带着同一个邀请码就能直接回到房间里
+  const latecomer = await claim(`迟到-${stamp}`);
+  const rejoin = await page(`/table/${code}`, latecomer.credential);
+  assert(rejoin.includes('观战中'), '注册后带着邀请码没有回到同桌页（满座时应以观战身份进入）');
+  console.log('未注册点链接：邀请码带进大厅，注册后直接回到原桌；无效邀请码不会被带过去');
 
   console.log('LOBBY OK');
 }

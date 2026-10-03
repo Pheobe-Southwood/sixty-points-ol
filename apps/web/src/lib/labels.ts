@@ -16,7 +16,7 @@ import {
   type BidCall,
   type Card,
   type Level,
-  type PersonalView,
+  type PublicView,
   type Seat,
   type Strain,
   type TrumpModel
@@ -93,13 +93,13 @@ export function callText(call: BidCall): string {
  * 与 `highestCall` 是两个概念：面板顶部的大字要的是**最高叫品**（将要成为定约的那个），
  * 「不叫」只进历史。别把这两个混用。
  */
-export function lastCall(view: PersonalView): BidCall | null {
+export function lastCall(view: PublicView): BidCall | null {
   const auction = view.deal?.auction ?? [];
   return auction.length === 0 ? null : auction[auction.length - 1]!.call;
 }
 
 /** 当前最高叫品（末尾的非 pass 项）；还没人叫过则为 `null` */
-export function highestCall(view: PersonalView): Bid | null {
+export function highestCall(view: PublicView): Bid | null {
   const auction = view.deal?.auction ?? [];
   for (let i = auction.length - 1; i >= 0; i--) {
     const call = auction[i]!.call;
@@ -108,12 +108,12 @@ export function highestCall(view: PersonalView): Bid | null {
   return null;
 }
 
-export function levelText(view: PersonalView, seat: number): string {
+export function levelText(view: PublicView, seat: number): string {
   const level = view.levels[seat];
   return level ? levelLabel(level) : '—';
 }
 
-export function isTurn(view: PersonalView, seat: Seat, phase: 'auction' | 'play'): boolean {
+export function isTurn(view: PublicView, seat: Seat, phase: 'auction' | 'play'): boolean {
   const deal = view.deal;
   if (!deal) return false;
   return phase === 'auction' ? deal.auctionTurn === seat : deal.playTurn === seat;
@@ -145,7 +145,7 @@ export function selectKey(card: Card): string {
 /**
  * 手牌中「来自底牌」的那些牌（多重集合语义）。
  *
- * 用于埋底阶段给庄家标注手牌：`view.deal.originalKitty` 是权威来源，这里只做交集，
+ * 用于埋底阶段给庄家标注手牌：`you.originalKitty` 是权威来源，这里只做交集，
  * 不猜、不补、不排序 —— 返回顺序与 `hand` 一致，方便 UI 直接当标记集合用。
  *
  * 同点同花的两张牌在物理上不可区分，对玩家而言标哪一张都一样，所以按 `cardKey` 计数即可。
@@ -192,7 +192,12 @@ export function bidOptions(highest: Bid | null, spread = 4): readonly BidOption[
   return rows;
 }
 
-/** 牌桌用：从个人视图里取当前最高叫品 */
-export function bidCandidates(view: PersonalView, spread = 4): readonly BidOption[] {
+/**
+ * 牌桌用：从当前视图里取当前最高叫品。
+ *
+ * 参数取**公共视图**而不是个人视图：观战者没有 `you`，而叫牌候选只依赖公开信息
+ * （叫牌历史与分数），所以观战者与玩家拿到的是同一份候选（观战者不渲染按钮而已）。
+ */
+export function bidCandidates(view: PublicView, spread = 4): readonly BidOption[] {
   return bidOptions(view.deal?.highestBid ?? null, spread);
 }

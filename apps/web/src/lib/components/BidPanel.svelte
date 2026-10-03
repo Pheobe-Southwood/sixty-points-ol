@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
+  import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { BID_GLYPH, bidCandidates, bidText, highestCall, isRedStrain, whoLabel } from '$lib/labels';
 
   let { client }: { client: TableClient } = $props();
 
   const view = $derived(client.view);
   const deal = $derived(view?.deal ?? null);
-  const mySeat = $derived(view?.you.seat ?? 0);
+  /** 观战者没有座位（-1）：myTurn 恒为 false，于是只看到叫牌板、没有叫品按钮 */
+  const mySeat = $derived(client.you?.seat ?? SPECTATOR_LABEL_SEAT);
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const myTurn = $derived(deal !== null && deal.phase === 'auction' && deal.auctionTurn === mySeat);
   const rows = $derived(view === null ? [] : bidCandidates(view));

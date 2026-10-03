@@ -1,13 +1,21 @@
 <script lang="ts">
-  import type { PersonalView } from '@sixty/engine';
+  import type { PublicView } from '@sixty/engine';
   import { whoLabel } from '$lib/labels';
   import TrickCluster from './TrickCluster.svelte';
 
   let {
     view,
     seat,
+    mySeat = seat,
     names = []
-  }: { view: PersonalView; seat: number; names?: readonly (string | null)[] } = $props();
+  }: {
+    view: PublicView;
+    /** 布局锚点：玩家的座位（观战者用固定锚点，见 role.ts） */
+    seat: number;
+    /** 文案里的「我的座位」：观战者传 -1，于是所有座位都显示玩家名 */
+    mySeat?: number;
+    names?: readonly (string | null)[];
+  } = $props();
 
   const deal = $derived(view.deal);
   const trump = $derived(deal?.trump ?? null);
@@ -39,7 +47,7 @@
     <TrickCluster
       cards={play.cards}
       {trump}
-      caption={whoLabel(names, seat, play.seat)}
+      caption={whoLabel(names, mySeat, play.seat)}
       badge={winnerSeat === play.seat ? `上一轮 · 赢墩 +${trickPoints} 分` : null}
     />
   </div>
