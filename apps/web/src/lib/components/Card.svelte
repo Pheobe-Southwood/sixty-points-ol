@@ -8,6 +8,8 @@
     size = 'md',
     selected = false,
     muted = false,
+    /** 蓝描边标记：埋底阶段用来指出「这几张是拿上来的底牌」 */
+    marked = false,
     onclick
   }: {
     card: Card;
@@ -15,6 +17,7 @@
     size?: 'sm' | 'md' | 'lg';
     selected?: boolean;
     muted?: boolean;
+    marked?: boolean;
     onclick?: () => void;
   } = $props();
 
@@ -35,6 +38,7 @@
     muted && 'muted'
   ]}
   data-selected={selected}
+  data-marked={marked}
   disabled={onclick === undefined}
   aria-label={face.aria}
   onclick={() => onclick?.()}

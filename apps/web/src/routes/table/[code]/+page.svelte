@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { START_LEVEL, type Level } from '@sixty/engine';
+  import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
@@ -13,6 +13,7 @@
   import SeatCard from '$lib/components/SeatCard.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
+  import { kittyHandDelta } from '$lib/labels';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -44,6 +45,13 @@
       deal !== null &&
       ((deal.phase === 'play' && deal.playTurn === data.seat) ||
         (deal.phase === 'bury' && view.you.isDeclarer))
+  );
+
+  /** 埋底阶段给庄家的手牌标出「拿上来的底牌」；其余阶段与闲家都是空集合 */
+  const markedKeys = $derived(
+    deal !== null && deal.phase === 'bury' && view?.you.isDeclarer === true
+      ? kittyHandDelta(view.you.hand, deal.originalKitty).map(cardKey)
+      : []
   );
 
   // 每副结束自动弹出结算；关闭后可随时用「结算详情」重开
@@ -79,7 +87,7 @@
   );
 </script>
 
-<main class="mx-auto flex h-[100dvh] w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
+<main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
@@ -157,6 +165,7 @@
     hand={view?.you.hand ?? []}
     {trump}
     selected={client.selected}
+    marked={markedKeys}
     {selectable}
     onToggle={(card) => client.toggle(card)}
   />

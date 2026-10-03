@@ -1,6 +1,5 @@
 import {
   BID_STEP,
-  bidLabel,
   cardKey,
   isJoker,
   leadInfo,
@@ -9,7 +8,6 @@ import {
   RANK_LABEL,
   rankLabel,
   STRAINS,
-  STRAIN_LABEL,
   SUIT_LABEL,
   validateCall,
   validateFollow,
@@ -35,13 +33,23 @@ export function whoLabel(names: readonly (string | null)[], mySeat: number, seat
   return names[seat] ?? '空座';
 }
 
-export function strainText(strain: Strain): string {
-  return STRAIN_LABEL[strain];
-}
-
 /** 花色字形：用于紧凑的状态条与定约显示（无主用文字） */
 export function strainGlyph(strain: Strain): string {
   return strain === 'NT' ? '无主' : SUIT_LABEL[strain];
+}
+
+/** 叫品按钮上的字形，与 `strainGlyph` 同源；牌桌与编排台共用一份，不许各写各的 */
+export const BID_GLYPH: Record<Strain, string> = {
+  C: strainGlyph('C'),
+  D: strainGlyph('D'),
+  H: strainGlyph('H'),
+  S: strainGlyph('S'),
+  NT: strainGlyph('NT')
+};
+
+/** ♦ ♥ 用红字：牌面与按钮保持同一套色彩语言 */
+export function isRedStrain(strain: Strain): boolean {
+  return strain === 'H' || strain === 'D';
 }
 
 /**
@@ -64,8 +72,40 @@ export function cardText(card: Card): string {
   return `${SUIT_LABEL[card.suit]}${RANK_LABEL[card.rank] ?? card.rank}`;
 }
 
+/**
+ * 叫品的显示文本：`不叫` 或 `40♣`。
+ *
+ * 花色一律走 `strainGlyph`（字形/无主），界面任何位置都不许再拼 `STRAIN_LABEL` ——
+ * 引擎的 `bidLabel` 是给日志和测试看的（`40 梅花`），不是给牌桌看的。
+ */
+export function bidText(call: BidCall): string {
+  return call === 'pass' ? '不叫' : `${call.points}${strainGlyph(call.strain)}`;
+}
+
+/** `bidText` 的别名，保留旧名以免大范围改调用方 */
 export function callText(call: BidCall): string {
-  return call === 'pass' ? '不叫' : bidLabel(call);
+  return bidText(call);
+}
+
+/**
+ * 时间上最后一次出手 —— 可能就是「不叫」。
+ *
+ * 与 `highestCall` 是两个概念：面板顶部的大字要的是**最高叫品**（将要成为定约的那个），
+ * 「不叫」只进历史。别把这两个混用。
+ */
+export function lastCall(view: PersonalView): BidCall | null {
+  const auction = view.deal?.auction ?? [];
+  return auction.length === 0 ? null : auction[auction.length - 1]!.call;
+}
+
+/** 当前最高叫品（末尾的非 pass 项）；还没人叫过则为 `null` */
+export function highestCall(view: PersonalView): Bid | null {
+  const auction = view.deal?.auction ?? [];
+  for (let i = auction.length - 1; i >= 0; i--) {
+    const call = auction[i]!.call;
+    if (call !== 'pass') return call;
+  }
+  return null;
 }
 
 export function levelText(view: PersonalView, seat: number): string {
@@ -100,6 +140,33 @@ export function handPoints(cards: readonly Card[]): number {
 
 export function selectKey(card: Card): string {
   return cardKey(card);
+}
+
+/**
+ * 手牌中「来自底牌」的那些牌（多重集合语义）。
+ *
+ * 用于埋底阶段给庄家标注手牌：`view.deal.originalKitty` 是权威来源，这里只做交集，
+ * 不猜、不补、不排序 —— 返回顺序与 `hand` 一致，方便 UI 直接当标记集合用。
+ *
+ * 同点同花的两张牌在物理上不可区分，对玩家而言标哪一张都一样，所以按 `cardKey` 计数即可。
+ */
+export function kittyHandDelta(hand: readonly Card[], kitty: readonly Card[] | null): Card[] {
+  if (kitty === null || kitty.length === 0) return [];
+  const quota = new Map<string, number>();
+  for (const card of kitty) {
+    const key = cardKey(card);
+    quota.set(key, (quota.get(key) ?? 0) + 1);
+  }
+  const out: Card[] = [];
+  for (const card of hand) {
+    const key = cardKey(card);
+    const left = quota.get(key) ?? 0;
+    if (left > 0) {
+      quota.set(key, left - 1);
+      out.push(card);
+    }
+  }
+  return out;
 }
 
 export interface BidOption {

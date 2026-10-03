@@ -4,7 +4,7 @@
   import HandFan from '$lib/components/HandFan.svelte';
   import LevelBadge from '$lib/components/LevelBadge.svelte';
   import TrickCluster from '$lib/components/TrickCluster.svelte';
-  import { callText, strainGlyph, trumpText } from '$lib/labels';
+  import { BID_GLYPH, bidText, isRedStrain, strainGlyph, trumpText } from '$lib/labels';
   import type { StudioState } from '$lib/story/studio.svelte.ts';
 
   let { studio }: { studio: StudioState } = $props();
@@ -66,7 +66,7 @@
         <span>定约：<b class="text-gold">{names[contract.declarerSeat]} {contract.points}{strainGlyph(contract.strain)}</b></span>
       {/if}
       {#if highest !== null}
-        <span>当前最高：{callText(highest)}</span>
+        <span>当前最高：{bidText(highest)}</span>
       {/if}
     </div>
 
@@ -98,8 +98,8 @@
                 <button
                   type="button"
                   class="bidbtn rounded-md bg-white/10 px-2 py-1 text-[13px] hover:bg-white/20"
-                  class:text-rose-300={strain === 'H' || strain === 'D'}
-                  onclick={() => studio.bid({ points: row.points, strain })}>{strainGlyph(strain)}</button
+                  class:text-rose-300={isRedStrain(strain)}
+                  onclick={() => studio.bid({ points: row.points, strain })}>{BID_GLYPH[strain]}</button
                 >
               {/each}
             </div>

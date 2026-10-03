@@ -25,6 +25,14 @@ export interface PublicDealView {
   readonly dealerSeat: Seat;
   readonly auction: readonly BidEntry[];
   readonly highestBid: Bid | null;
+  /**
+   * 发牌留下的 3 张暗牌；**只有庄家**看得到，闲家恒为 `null`。
+   *
+   * 底牌本来就要并进庄家手牌（`state.ts` 的 bid 分支），所以这对庄家不是新信息 ——
+   * 只是把「哪三张是拿上来的」显式说出来，否则 20 张排序后玩家再也认不出它们。
+   * 闲家仍要等到结算（`summary.originalKitty`）才可见。
+   */
+  readonly originalKitty: readonly Card[] | null;
   readonly auctionTurn: Seat;
   readonly contract: Contract | null;
   readonly trump: TrumpModel | null;
@@ -51,10 +59,15 @@ export interface PersonalView {
 }
 
 /**
- * 服务器权威的个人视图：隐藏他人手牌与底牌（底牌只在结算后随 summary 公开）。
+ * 服务器权威的个人视图：隐藏他人手牌与底牌。
+ *
+ * 唯一的例外是**庄家**：成交后底牌本来就并进他的手牌，所以个人视图把发牌留下的 3 张
+ * （`deal.originalKitty`）一并交给他，好让界面点明「哪三张是拿上来的」；闲家仍为 `null`，
+ * 结算后才随 `summary.originalKitty` 公开。
  */
 export function personalView(state: GameState, seat: Seat): PersonalView {
   const deal = state.deal;
+  const isDeclarer = deal !== null && isDeclarerSide(seat, deal);
   const publicDeal: PublicDealView | null =
     deal === null
       ? null
@@ -64,6 +77,7 @@ export function personalView(state: GameState, seat: Seat): PersonalView {
           dealerSeat: deal.dealerSeat,
           auction: deal.auction.map((e) => ({ ...e })),
           highestBid: highestNonPass(deal.auction),
+          originalKitty: isDeclarer ? [...deal.originalKitty] : null,
           auctionTurn: auctionTurn(deal),
           contract: deal.contract,
           trump: deal.trump,
@@ -93,7 +107,7 @@ export function personalView(state: GameState, seat: Seat): PersonalView {
     you: {
       seat,
       hand: deal === null ? [] : sortHand(deal.hands[seat]!, deal.trump),
-      isDeclarer: deal === null ? false : isDeclarerSide(seat, deal)
+      isDeclarer
     }
   };
 }

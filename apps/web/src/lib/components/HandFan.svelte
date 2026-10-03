@@ -7,12 +7,15 @@
     hand,
     trump = null,
     selected = [],
+    /** 需要标蓝描边的牌（埋底阶段 = 拿上来的底牌）；空数组即无标记 */
+    marked = [],
     selectable = false,
     onToggle
   }: {
     hand: readonly Card[];
     trump?: TrumpModel | null;
     selected?: readonly string[];
+    marked?: readonly string[];
     selectable?: boolean;
     onToggle?: (card: Card) => void;
   } = $props();
@@ -61,6 +64,7 @@
           {trump}
           size="lg"
           selected={selected.includes(cardKey(card))}
+          marked={marked.includes(cardKey(card))}
           onclick={selectable ? () => onToggle?.(card) : undefined}
         />
       {/each}

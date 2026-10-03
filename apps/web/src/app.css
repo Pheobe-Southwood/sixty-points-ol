@@ -71,9 +71,16 @@ button:disabled {
   color: #23303f;
   cursor: default;
   user-select: none;
-  transition:
-    transform 0.16s ease,
-    box-shadow 0.16s ease;
+}
+
+/* 位移过渡只给鼠标设备：手指设备上 :hover 会在 touchend 后粘住，
+   「收回拟出牌后仍高出旁边牌一截」正是那个粘住的 hover 位移。 */
+@media (hover: hover) and (pointer: fine) {
+  .card {
+    transition:
+      transform 0.16s ease,
+      box-shadow 0.16s ease;
+  }
 }
 
 .card-sm {
@@ -154,12 +161,26 @@ button:disabled {
     0 6px 12px -5px rgba(0, 0, 0, 0.55);
 }
 
+/* 来自底牌的牌（埋底阶段，只有庄家看得到这个描边）：蓝色外框，
+   与主牌金边、选中金条都不同色，三者可以同时出现而不打架。 */
+.card[data-marked='true']::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 2px solid #7dd3fc;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 /* ---------- 手牌扇形 ---------- */
-/* 多行容器：窄屏放不下可读下限时切行，行距容纳选中牌上移的 26px */
+/* 多行容器：窄屏放不下可读下限时切行，行距容纳选中牌上移的 26px。
+   padding-top 让上浮的牌还留在容器内，但**不等于**按钮的安全区 ——
+   按钮的可点性由 ActionBar 的 z-10/z-20 保证，不靠这里的留白。 */
 .fan-rows {
   display: flex;
   flex-direction: column;
   gap: 30px;
+  padding-top: 4px;
 }
 
 .fan {
@@ -185,8 +206,11 @@ button:disabled {
   cursor: pointer;
 }
 
-.fan.selectable .card:hover {
-  transform: translateY(-10px);
+/* 桌面鼠标：悬停上浮，作为「这张可点/将要出」的预览 */
+@media (hover: hover) and (pointer: fine) {
+  .fan.selectable .card:hover {
+    transform: translateY(-10px);
+  }
 }
 
 /* 选中：上移 + 顶部金条；不抬 z-index，避免盖住左右邻牌的牌角 */
@@ -291,6 +315,15 @@ button:disabled {
   background: var(--color-gold);
   color: var(--color-ink);
   font-weight: 700;
+}
+
+/* ---------- 出牌按钮 ---------- */
+/* 主操作按钮：金色实心 + 大尺寸 + 足够高的命中区（≥44px）。
+   它必须永远压在手牌之上 —— 上浮的牌在 DOM 里比操作条更晚，只靠顺序会被盖住。 */
+.play-btn {
+  position: relative;
+  z-index: 20;
+  min-height: 44px;
 }
 
 /* ---------- 回合提示圈 / 在线状态点 ---------- */

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PersonalView } from '@sixty/engine';
-  import { cardText, levelParts, whoLabel } from '$lib/labels';
+  import { bidText, cardText, levelParts, whoLabel } from '$lib/labels';
 
   let {
     view,
@@ -40,9 +40,7 @@
           <div class="rounded-xl bg-black/30 p-3 ring-1 ring-white/10">
             <div class="flex items-baseline justify-between gap-2">
               <span class="text-white/80">
-                第 {deal.dealNo} 副 · {deal.contract.points}{deal.contract.strain === 'NT'
-                  ? '无主'
-                  : deal.contract.strain} · 庄 {who(deal.contract.declarerSeat)}
+                第 {deal.dealNo} 副 · {bidText(deal.contract)} · 庄 {who(deal.contract.declarerSeat)}
               </span>
               <span class="shrink-0 font-bold {deal.made ? 'text-emerald-300' : 'text-rose-300'}">
                 {deal.finalScore} {deal.made ? '打成' : '打输'}

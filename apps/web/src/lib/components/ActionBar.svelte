@@ -55,9 +55,17 @@
   const gold =
     'rounded-lg bg-gold px-4 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30';
   const ghost = 'rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-30';
+  /**
+   * 「出 牌」单独放大：它是本页唯一的高频主操作，字号与命中区都要比旁边的大一档。
+   * `disabled:opacity-40`（而不是 30）+ 实心金字，避免没选牌时看着像一坨灰的禁用态。
+   */
+  const play =
+    'play-btn inline-flex items-center justify-center rounded-xl bg-gold px-7 py-2.5 text-base font-bold tracking-wide text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.75)] transition enabled:hover:brightness-110 enabled:active:scale-95 disabled:opacity-40';
 </script>
 
-<div class="flex min-h-[2.6rem] flex-wrap items-center gap-2 py-1.5">
+<!-- z-10：手牌容器在 DOM 里排在操作条之后，上浮的选中牌会盖到这一条上。
+     操作条整体抬到牌面之上，按钮（.play-btn 再抬到 z-20）就不会被任何牌盖住。 -->
+<div class="relative z-10 flex min-h-[2.6rem] flex-wrap items-center gap-2 py-1.5">
   <!-- 阶段说明只活在这里：所有常驻提示文案都已删除，正文与 /rules 教程同源 -->
   <HelpPopover align="left" placement="up" title={help.title} label="?">
     <ul class="list-disc space-y-1.5 pl-4">
@@ -85,7 +93,7 @@
     <span class="text-xs text-white/70">已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
     <button
       type="button"
-      class={gold}
+      class={play}
       disabled={selectedCount === 0 || client.playError !== null || client.busy}
       onclick={() => void client.play()}
     >
