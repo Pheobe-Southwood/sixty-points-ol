@@ -27,8 +27,13 @@ function view(version: number): PublicView {
   };
 }
 
+/** 一个「坐在座位上」的最小 you（`originalKitty` 只有庄家非 null，这里不关心） */
+function hand(seat: number): SelectionContext['you'] {
+  return { seat: seat as 0 | 1 | 2, hand: [], isDeclarer: false, originalKitty: null };
+}
+
 function player(seat: number, version: number): SelectionContext {
-  return { role: 'player', view: view(version), you: { seat: seat as 0 | 1 | 2, hand: [], isDeclarer: false } };
+  return { role: 'player', view: view(version), you: hand(seat) };
 }
 
 const spectator: SelectionContext = { role: 'spectator', view: view(7), you: null };
@@ -57,10 +62,6 @@ test('角色与座位变化要清空：选择属于上一个座位', () => {
 });
 
 test('未开局（双方 view 都是 null）时，名单变化同样不清空', () => {
-  const lobbyPlayer: SelectionContext = {
-    role: 'player',
-    view: null,
-    you: { seat: 0, hand: [], isDeclarer: false }
-  };
+  const lobbyPlayer: SelectionContext = { role: 'player', view: null, you: hand(0) };
   assert.equal(shouldResetSelection(lobbyPlayer, { ...lobbyPlayer }), false);
 });

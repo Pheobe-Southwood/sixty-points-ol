@@ -122,7 +122,44 @@ const PUBLIC_DEAL_FIELDS = [
   'summary'
 ].sort();
 
+/**
+ * 公共视图的**顶层**字段白名单。
+ *
+ * 为什么需要它（这是一次注入实验暴露出来的盲点）：下面的泄漏检查只看当前这副，
+ * 于是把 payload 收窄成 `{ deal, you }` —— 因为上一副的战报（`history`）本来就公开那些牌，
+ * 全量走会假警报。但收窄也就意味着**新增在负载顶层的字段完全不被检查**：
+ * 往 `publicView` 里塞一个顶层 `hands`，当时 76 个测试全绿，只有端到端（spectate-check 走全量）
+ * 抓到了。所以这一层用「字段名白名单」来守：多一个字段就必须显式登记并被思考一次。
+ */
+const PUBLIC_FIELDS = [
+  'version',
+  'status',
+  'dealerSeat',
+  'dealNo',
+  'levels',
+  'progress',
+  'result',
+  'history',
+  'deal'
+].sort();
+
 describe('公共视图 / 个人视图的信息边界', () => {
+  it('公共视图的顶层字段只有白名单里的这些', () => {
+    const rng = mulberry32(7);
+    let state = createGame(0);
+    for (let step = 0; step < 40; step++) {
+      const res = dispatch(state, randomLegalAction(state, rng), rng);
+      assert.ok(res.ok);
+      if (!res.ok) return;
+      state = res.state;
+      assert.deepEqual(
+        Object.keys(publicView(state)).sort(),
+        PUBLIC_FIELDS,
+        `公共视图的顶层字段变了：多出来的字段可能是新的泄漏面（第 ${step} 步）`
+      );
+    }
+  });
+
   it('公共视图没有手牌与底牌字段（白名单）', () => {
     const rng = mulberry32(7);
     let state = createGame(0);
