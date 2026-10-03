@@ -175,7 +175,7 @@ async function main(): Promise<void> {
   const rules = await page('/rules');
   assertNoPositionMix(rules, '教程页');
   assert(!/[东南西]/.test(rules), '教程页仍出现方位称谓');
-  for (const id of ['start', 'basics', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring', 'levels']) {
+  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring']) {
     assert(rules.includes(`id="${id}"`), `教程页缺小节 ${id}`);
   }
   const ruleCards = (rules.match(/class="card[ "]/g) ?? []).length;
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
 
   console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
-  console.log(`教程：9 个小节齐备，渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
+  console.log(`教程：8 个小节齐备，渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
   console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌只剩金边`);
   console.log('UI OK');
 }

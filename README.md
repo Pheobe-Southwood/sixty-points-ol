@@ -57,7 +57,7 @@ BASE=http://127.0.0.1:5178 pnpm --filter web smoke     # 3 个身份打完 N 副
 BASE=http://127.0.0.1:5178 pnpm --filter web lobby     # 开局回归：未开局必须渲染「开始第一副」按钮 + 三个座位都列出玩家名
 BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：position 类不得混用、座位卡必须 absolute、
                                                        # 邀请码可点复制、常驻提示已清空、? 按阶段给说明、无方位称谓、
-                                                       # /rules 九个小节齐备且渲染真实牌面、
+                                                       # /rules 八个小节齐备且渲染真实牌面、
                                                        # 王牌面（名字只在角落索引、正中是 ☀/☾ 图案）、
                                                        # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局

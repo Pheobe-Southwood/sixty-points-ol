@@ -15,7 +15,9 @@ import {
   cardLevel,
   cardsPoints,
   classSize,
+  fullDeck,
   isHigherBid,
+  isJoker,
   isRun,
   leadInfo,
   levelFromProgress,
@@ -32,7 +34,7 @@ import {
 } from '@sixty/engine';
 
 import { checkPlay, levelParts, trumpText } from '../src/lib/labels.ts';
-import { settlePreview } from '../src/lib/settle.ts';
+import { settlePreview, finalScoreOf } from '../src/lib/settle.ts';
 import {
   BURY_HAND,
   cardsOf,
@@ -41,24 +43,35 @@ import {
   DEMO_CONTRACT,
   DEMO_KITTY,
   DEMO_SETTLE_INPUT,
+  FOLLOW_ANSWER,
+  FOLLOW_SHORT_HAND,
+  FOLLOW_SHORT_LEAD,
   KITTY_EQUATION,
+  KITTY_SWING,
+  LEAD_CASES,
+  LEAD_HAND,
   LEVEL_DEMO,
   LEVEL_STEPS,
   MULTIPLIER_ROWS,
   OFF_RANK_EQUALS,
+  PHASES,
   POINT_CARDS,
   RUFF_LEAD,
   RUFF_WINNER,
   RUN_NOT_ADJACENT,
   RUN_SKIPS_LEVEL,
-  TRUMP_DEMO_CARDS,
+  TRICK_DEMO,
   TRUMP_HEARTS,
-  TRUMP_LADDER,
+  TRUMP_LADDER_GROUPS,
   TRUMP_NT,
   TRUMP_RUN,
+  TRUMP_RUN_CROSS,
   TRY_DEMOS,
   UPGRADE_BANDS,
-  handOf
+  handOf,
+  sideSuitCards,
+  trumpCount,
+  trumpGroups
 } from '../src/lib/tutorial/scenarios.ts';
 
 test('handOf 只接受真实存在的牌面键', () => {
@@ -81,8 +94,11 @@ test('示例牌面本身自洽：同一手牌不重复、领出的牌不在自�
     ['POINT_CARDS', POINT_CARDS],
     ['BURY_HAND', BURY_HAND],
     ['DEMO_KITTY', DEMO_KITTY],
-    ['TRUMP_DEMO_CARDS', TRUMP_DEMO_CARDS],
-    ['TRUMP_LADDER', TRUMP_LADDER],
+    ['TRICK_DEMO', TRICK_DEMO],
+    ['LEAD_HAND', LEAD_HAND],
+    ['FOLLOW_SHORT_HAND', FOLLOW_SHORT_HAND],
+    ['FOLLOW_ANSWER', FOLLOW_ANSWER],
+    ['TRUMP_RUN_CROSS', TRUMP_RUN_CROSS],
     ...TRY_DEMOS.map((demo) => [demo.id, demo.hand] as [string, readonly Card[]])
   ];
   for (const [name, cards] of hands) {
@@ -95,6 +111,17 @@ test('示例牌面本身自洽：同一手牌不重复、领出的牌不在自�
       assert.equal(own.has(cardKey(card)), false, `${demo.id} 的领出牌出现在自己手里：${cardKey(card)}`);
     }
   }
+  for (const item of LEAD_CASES) {
+    const own = new Set(LEAD_HAND.map(cardKey));
+    for (const card of cardsOf(item.keys)) {
+      assert.equal(own.has(cardKey(card)), true, `领出示例用了不在示例手牌里的牌：${cardKey(card)}`);
+    }
+  }
+  for (const card of FOLLOW_SHORT_LEAD) {
+    assert.equal(FOLLOW_SHORT_HAND.map(cardKey).includes(cardKey(card)), false, '跟牌示例的领出牌不该在自己手里');
+  }
+  // 领出示例的牌面本身要合法，否则「上家领出」这一步就是错的
+  assert.notEqual(leadInfo(FOLLOW_SHORT_LEAD, TRUMP_HEARTS), null, '跟牌示例的领出牌面不合法');
 });
 
 test('分值示例与 100 分口径一致', () => {
@@ -127,20 +154,87 @@ test('级牌与主牌：同一组牌在「主打 ♥」与「无主」下分类�
   assert.equal(has(spadeTen, TRUMP_NT), false);
   assert.equal(has(clubNine, TRUMP_NT), false);
 
-  const trumpCount = (trump: typeof TRUMP_HEARTS): number =>
-    TRUMP_DEMO_CARDS.filter((card) => cardClass(card, trump) === 'T').length;
-  assert.equal(trumpCount(TRUMP_HEARTS), 8, '♥ 主打：主花色 2 张 + 四张级牌 + 双王');
-  assert.equal(trumpCount(TRUMP_NT), 6, '无主：只有四张级牌 + 双王');
   assert.equal(classSize(TRUMP_NT, 'T'), 6);
   assert.equal(classSize(TRUMP_HEARTS, 'T'), 18);
 });
 
-test('主牌全序：主花色小牌 < 副级 < 主级 < 小王 < 大王', () => {
-  const levels = TRUMP_LADDER.map((card) => cardLevel(card, TRUMP_HEARTS));
-  assert.deepEqual(levels, [1, 2, 13, 14, 15, 16]);
-  for (let i = 1; i < levels.length; i++) {
-    assert.ok(levels[i]! > levels[i - 1]!, '全序示例必须是严格递增的');
+test('主牌分组直接从整副牌算出来：有主 18 张、无主 6 张，且与引擎分类完全一致', () => {
+  assert.deepEqual(trumpGroups(TRUMP_HEARTS).map((g) => g.title), ['王', '级牌', '♥ 整门']);
+  assert.deepEqual(trumpGroups(TRUMP_HEARTS).map((g) => g.cards.length), [2, 4, 12]);
+  assert.deepEqual(trumpGroups(TRUMP_NT).map((g) => g.cards.length), [2, 4]);
+  assert.equal(
+    trumpGroups(TRUMP_NT).some((g) => g.title.includes('整门')),
+    false,
+    '无主时不该有主花色那一组'
+  );
+
+  for (const trump of [TRUMP_HEARTS, TRUMP_NT]) {
+    const grouped = trumpGroups(trump).flatMap((g) => g.cards.map(cardKey));
+    const expected = fullDeck()
+      .filter((c) => cardClass(c, trump) === 'T')
+      .map(cardKey);
+    assert.equal(new Set(grouped).size, grouped.length, '主牌分组里有重复牌');
+    assert.deepEqual([...grouped].sort(), [...expected].sort(), '主牌分组与引擎的分类不一致');
+    assert.equal(trumpCount(trump), expected.length, '教程里的主牌张数必须等于引擎口径');
   }
+  assert.equal(trumpCount(TRUMP_HEARTS), 18);
+  assert.equal(trumpCount(TRUMP_NT), 6);
+  // 页面上「从 18 张掉到 6 张」那句话就是这两个数
+  assert.equal(trumpCount(TRUMP_HEARTS) - trumpCount(TRUMP_NT), 12);
+});
+
+test('副牌整门跳过级牌：♣ 门 12 张，且里面没有 ♣5', () => {
+  const clubs = sideSuitCards(TRUMP_HEARTS, 'C');
+  assert.equal(clubs.length, 12);
+  assert.equal(
+    clubs.some((c) => !isJoker(c) && c.rank === 5),
+    false,
+    '♣ 门里不该出现级牌 ♣5'
+  );
+  assert.deepEqual(
+    clubs.map(cardKey),
+    ['C14', 'C13', 'C12', 'C11', 'C10', 'C9', 'C8', 'C7', 'C6', 'C4', 'C3', 'C2']
+  );
+});
+
+test('主牌阶梯是「从大到小」：分组之间严格递减、组内完全相等', () => {
+  // 页面标着「从大到小」，而 CardRow 按数组顺序渲染、不排序。
+  // 原版这里是一个升序数组，标签与画面正好读反 —— 这条断言就是防它回来。
+  const peaks = TRUMP_LADDER_GROUPS.map((group) =>
+    Math.max(...group.cards.map((card) => cardLevel(card, TRUMP_HEARTS)))
+  );
+  for (let i = 1; i < peaks.length; i++) {
+    assert.ok(peaks[i]! < peaks[i - 1]!, `第 ${i + 1} 组没有比上一组小：${peaks.join(' > ')}`);
+  }
+  for (const group of TRUMP_LADDER_GROUPS) {
+    const levels = group.cards.map((card) => cardLevel(card, TRUMP_HEARTS));
+    assert.equal(new Set(levels).size, 1, `「${group.title}」组内的牌大小应该完全相等`);
+    assert.ok(group.note.length > 0, `「${group.title}」缺说明文字，页面表格要用`);
+  }
+  const offRank = TRUMP_LADDER_GROUPS.find((group) => group.title.includes('副级'))!;
+  assert.equal(offRank.cards.length, 3, '副级是三张');
+  assert.deepEqual(offRank.cards.map((card) => cardLevel(card, TRUMP_HEARTS)), [13, 13, 13]);
+});
+
+test('主牌顺子可以跨过「主花色 → 级牌 → 王」的边界', () => {
+  assert.equal(isRun(TRUMP_RUN_CROSS, TRUMP_HEARTS), true, '♥Q-K-A-♠5-♥5 应是一条合法主牌顺子');
+  assert.equal(validateLead(TRUMP_RUN_CROSS, TRUMP_RUN_CROSS, TRUMP_HEARTS), null);
+  assert.deepEqual(TRUMP_RUN_CROSS.map((card) => cardLevel(card, TRUMP_HEARTS)), [10, 11, 12, 13, 14]);
+  // 一条主牌顺子里至多一张副级：三张副级完全相等，彼此不算相邻
+  assert.equal(isRun(cardsOf(['HA', 'S5', 'D5', 'H5']), TRUMP_HEARTS), false);
+});
+
+test('领出示例：静态 ✓/✗ 的每一条都与 validateLead 的结论一致', () => {
+  for (const item of LEAD_CASES) {
+    const verdict = validateLead(LEAD_HAND, cardsOf(item.keys), TRUMP_HEARTS);
+    assert.equal(
+      verdict === null,
+      item.ok,
+      `领出示例 ${item.keys.join('+')} 标着 ${item.ok ? '✓' : '✗'}，而引擎判定为「${verdict ?? '合法'}」`
+    );
+  }
+  assert.ok(LEAD_CASES.some((c) => c.ok), '领出示例要有正例');
+  assert.ok(LEAD_CASES.some((c) => !c.ok), '领出示例要有反例');
 });
 
 test('顺子：副牌顺子跳过级牌，不相邻的牌不构成顺子', () => {
@@ -239,15 +333,62 @@ test('叫牌示例按引擎规则合法，且结论与展示的结论一致', ()
   assert.deepEqual(highest, { points: DEMO_CONTRACT.points, strain: DEMO_CONTRACT.strain });
 });
 
-test('结算示例：算式与升级表都对得上', () => {
+test('结算示例：与叫牌示例是同一副牌，算式与升级都对得上', () => {
   const { contract, trickPoints, kittyPoints, multiplier, madeFinal, setFinal } = KITTY_EQUATION;
+  assert.equal(contract, DEMO_CONTRACT.points, '结算示例的定约必须就是叫牌示例成交的那个分');
+  assert.equal(kittyPoints, cardsPoints(DEMO_KITTY));
   assert.equal(trickPoints + kittyPoints * multiplier, madeFinal, '保底算式');
   assert.equal(trickPoints - kittyPoints * multiplier, setFinal, '抠底算式');
-  assert.ok(madeFinal >= contract);
-  assert.ok(setFinal < contract);
+  assert.ok(madeFinal >= contract, '保底应当打成');
+  assert.ok(setFinal < contract, '抠底应当打输');
   assert.equal(madeLevels(madeFinal), 3, '75 分打成应升 3 级');
   assert.equal(madeLevels(90), 5);
-  assert.equal(Math.ceil((contract - setFinal) / 10), 4, '差 35 分时闲家各升 4 级');
+  assert.equal(contract - setFinal, 10, '抠底差 = 45 − 35');
+  assert.equal(Math.ceil((contract - setFinal) / 10), 1, '差 10 分时两家闲家各升 1 级');
+});
+
+test('同一副牌只有一个定约：叫牌 / 埋底 / 结算 / 门槛四处共用 DEMO_CONTRACT', () => {
+  // 原版叫牌示例是 45♥、结算示例的定约却是 70，读者看到的是两副牌拼在一起。
+  assert.equal(DEMO_CONTRACT.points, 45);
+  assert.equal(KITTY_EQUATION.contract, DEMO_CONTRACT.points, '结算示例的定约与叫牌示例不一致');
+  assert.equal(DEMO_SETTLE_INPUT.contract, DEMO_CONTRACT.points, '门槛示例的定约与叫牌示例不一致');
+  assert.equal(DEMO_SETTLE_INPUT.kittyPoints, KITTY_EQUATION.kittyPoints, '两处底牌分不一致');
+  assert.equal(DEMO_SETTLE_INPUT.multiplier, KITTY_EQUATION.multiplier, '两处末轮张数不一致');
+  assert.equal(DEMO_SETTLE_INPUT.kittyPoints, cardsPoints(DEMO_KITTY), '底牌分与示例底牌对不上');
+});
+
+test('叫高买不到更多级：定约只当及格线，不当收益', () => {
+  // 页面一度写着「升级只看抓分，不看叫分……这是叫牌要往上叫的真正理由」——
+  // 前半句对，后半句推不出来。这里把正确的推论锁住：
+  // 同一个最终得分，无论当初叫多少，庄家升的级数完全相同。
+  const final = KITTY_EQUATION.madeFinal; // 75
+  const levelsByContract = [45, 55, 65, 75].map(() => madeLevels(final));
+  assert.equal(new Set(levelsByContract).size, 1, '打成的收益不该随定约变化');
+  // 而叫分确实决定「打成 / 打输」：35 分对 45 已经是打输
+  assert.ok(final >= 45 && final >= 75, '75 分对 45 与 75 两个定约都打成');
+  assert.ok(KITTY_EQUATION.setFinal < 45 && KITTY_EQUATION.setFinal < 75, '35 分对两个定约都打输');
+  // 打输时定约越高，闲家赚得越多 —— 所以跳叫是双输
+  assert.ok(Math.ceil((75 - KITTY_EQUATION.setFinal) / 10) > Math.ceil((45 - KITTY_EQUATION.setFinal) / 10));
+});
+
+test('埋分倍数示例与末轮张数一一对应，且撬动额由乘积算出', () => {
+  assert.deepEqual(
+    MULTIPLIER_ROWS.map((row) => row.multiplier),
+    [1, 2, 3]
+  );
+  assert.equal(KITTY_SWING.multiplier, 3);
+  assert.equal(KITTY_SWING.kittyPoints, 20);
+  assert.equal(KITTY_SWING.multiplier * KITTY_SWING.kittyPoints, 60);
+  // 页面上那句「超过一百也可以」是可达的：底牌 20 分被保底、闲家一分没抓到时
+  assert.ok(
+    finalScoreOf({
+      declarerPoints: 100 - KITTY_SWING.kittyPoints,
+      kittyPoints: KITTY_SWING.kittyPoints,
+      multiplier: KITTY_SWING.multiplier,
+      protectedBottom: true
+    }) > 100,
+    '保底确实可能把最终得分推过 100'
+  );
 });
 
 test('叫牌一节的门槛示例：闲家门槛随保底/抠底移动，不是简单的 100 − 定约', () => {
@@ -260,13 +401,6 @@ test('叫牌一节的门槛示例：闲家门槛随保底/抠底移动，不是�
   // 教程里渲染的就是这三个数，不能出现「闲家抓到 55 分就把他打输」这种漏掉底牌的说法
   assert.notEqual(preview.protectBar, preview.naiveBar);
   assert.notEqual(preview.digBar, preview.naiveBar);
-});
-
-test('底牌倍数示例与末轮张数一一对应', () => {
-  assert.deepEqual(
-    MULTIPLIER_ROWS.map((row) => row.multiplier),
-    [1, 2, 3]
-  );
 });
 
 test('级别示例：5(+0) / A(+1) / 5(+2) 的拆分与徽标一致', () => {

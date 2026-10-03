@@ -80,14 +80,26 @@ test('anchor 指向 /rules 里真实存在的小节', () => {
   }
 });
 
-test('/rules 的九个小节都在，且不只是空壳', () => {
-  for (const id of ['start', 'basics', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring', 'levels']) {
+test('/rules 的八个小节都在，且不只是空壳', () => {
+  for (const id of ['start', 'points', 'trump', 'auction', 'bury', 'play', 'inference', 'scoring']) {
     assert.ok(page.includes(`id="${id}"`), `/rules 缺小节 ${id}`);
   }
   // 教程必须复用真实牌渲染组件，而不是自己画方块
   for (const component of ["components/Card.svelte", "components/HandFan.svelte", "components/LevelBadge.svelte"]) {
     assert.ok(page.includes(component), `/rules 没有复用 ${component}`);
   }
+  // 「结算」与「升级与赛程」合成一节后，升级表仍要在这一节里
+  const scoring = sectionOf(page, 'scoring');
+  assert.ok(scoring.includes('UPGRADE_ROWS'), '结算一节没有升级表');
+  assert.ok(scoring.includes('LEVEL_STEPS') || scoring.includes('steps'), '结算一节没有升级步进');
+});
+
+test('阶段条的四步都连着真实小节', () => {
+  // 阶段条渲染的是 PHASES，每一条都链到 #<id>；链错就会点空
+  for (const id of ['auction', 'bury', 'play', 'scoring']) {
+    assert.ok(page.includes(`href={\`#\${phase.id}\`}`), '阶段条没有按 phase.id 生成链接');
+  }
+  assert.ok(page.includes('PHASES'), '阶段条没有走 scenarios 的 PHASES 数据');
 });
 
 test('不同阶段的内容确实不同（防空转）', () => {
@@ -133,16 +145,24 @@ test('教程：每个依赖级牌的示例都点明了将牌环境', () => {
   );
   assert.ok(trumpSection.includes('本副：'), '#trump 小节的牌面示例没有带将牌环境说明');
 
-  // 打牌推论里 ①②③⑥ 都依赖级牌，每块都要自带「本副：」
+  // 打牌推论里 ①② 的示例都依赖级牌，每块都要自带「本副：」。
+  // 这两节从 6 条压缩成 3 条后，③（分牌晚出）不依赖将牌，所以下限是 2 而不是 4。
   const inference = sectionOf(page, 'inference');
   assert.ok(inference.includes('级牌 5'), '打牌推论没有在示例里写明级牌是 5');
   const envCount = (inference.match(/本副：/g) ?? []).length;
-  assert.ok(envCount >= 4, `打牌推论里只有 ${envCount} 处将牌环境说明，依赖级牌的示例块应各自带一句`);
+  assert.ok(envCount >= 2, `打牌推论里只有 ${envCount} 处将牌环境说明，依赖级牌的示例块应各自带一句`);
+  // 光有「本副：」三个字不够，必须真的写出将牌与级牌
+  assert.ok(inference.includes('trumpText('), '打牌推论的环境说明没有走 trumpText');
 
   // 练手题与埋底手牌通过组件渲染将牌环境，组分件里必须真的输出这句
   assert.ok(tryPlay.includes('本副：') && tryPlay.includes('trumpText(trump)'), 'TryPlay 没有渲染将牌环境');
   const playSection = sectionOf(page, 'play');
-  assert.ok((playSection.match(/TryPlay/g) ?? []).length >= 3, '打牌一节的练手题没有走 TryPlay 组件');
+  assert.ok(
+    (playSection.match(/TryPlay/g) ?? []).length >= 2,
+    '打牌一节的练手题没有走 TryPlay 组件（领出那节已改成静态 ✓/✗ 对照，所以是 2 个）'
+  );
+  assert.ok(page.includes('LEAD_CASES'), '领出那一节的 ✓/✗ 对照没有走 scenarios 的 LEAD_CASES 数据');
+  assert.ok(playSection.includes('leadCases'), '打牌一节没有渲染 LEAD_CASES 派生出来的对照');
   assert.ok(sectionOf(page, 'bury').includes('本副：'), '埋底一节的手牌示意没有带将牌环境说明');
 });
 
@@ -154,20 +174,27 @@ test('教程：升级表只用可达分数，不再出现 59 / 69 / 79 / 89 这�
   assert.ok(page.includes('UPGRADE_ROWS'), '升级表没有走 scenarios 的可达区间数据');
   assert.ok(page.includes('DEFENDER_STEPS'), '闲家升级档位没有走 scenarios 数据');
   assert.ok(page.includes('LEVEL_STEPS'), '升级步进示例没有走 scenarios 数据');
-  assert.ok(page.includes('得分只会是 5 的倍数') || page.includes('只会是 5 的倍数'), '没有解释为什么边界不可达');
-  assert.ok(page.includes('只看实际'), '没有讲明升级只看实际得分、与叫分无关');
+  // 注：「得分只会是 5 的倍数」那句解释已按定稿删掉，表格自己说明（见 docs/rules-rewrite.md 定稿结论）
+});
+
+test('教程没有教「叫高一点能多升级」', () => {
+  // 这是页面上一度同时写在两处的错误结论：前半句「升级只看抓分、与叫分无关」是对的，
+  // 后半句却推出「所以要往上叫」。既然收益不随叫分变化，跳叫就是纯亏。
+  assert.ok(page.includes('正常情况不跳叫'), '教程没有给出「正常情况不跳叫」这条结论');
+  assert.ok(page.includes('只看你实际'), '教程没有讲明升级只看实际得分、与叫分无关');
+  for (const wrong of ['牌力应该换成级数', '强牌只叫 40', '白白浪费', '价格叫高', '应该往上叫']) {
+    assert.equal(page.includes(wrong), false, `教程里仍有「叫高能多升级」的错误说法：「${wrong}」`);
+  }
 });
 
 test('教程：叫牌一节有阻击叫的心理博弈，且门槛算式是修正过的', () => {
   assert.ok(page.includes('阻击'), '教程没有讲阻击叫');
   assert.ok(page.includes('认领责任'), '教程没有点出「叫牌是认领责任」');
-  assert.ok(page.includes('藏牌'), '教程没有讲「先 pass 再叫」');
+  assert.ok(page.includes('位置决定压力'), '教程没有讲清楚位置带来的压力');
   // 旧说法：闲家合计抓到 100 − 45 = 55 分就把他打输（漏掉底牌分）
-  // 现在这个数字只允许以「不是简单的…」这种被否定的形式出现，且旧结论句必须消失
+  // 现在这个数字只允许以「不是…」这种被否定的形式出现，且旧结论句必须消失
   assert.equal(/闲家合计抓到[^。]*就把他打输/.test(page), false, '仍在用漏掉底牌的旧结论');
-  if (page.includes('100 − 45 = 55')) {
-    assert.ok(page.includes('不是简单的「100 − 45 = 55」'), '100 − 45 只能作为「被否定的错误说法」出现');
-  }
+  assert.ok(page.includes('不是'), '没有把 100 − 定约 这个直觉值否定掉');
   assert.ok(page.includes('settle.protectBar') && page.includes('settle.digBar'), '门槛数值不是算出来的');
-  assert.ok(page.includes('AUCTION_INTENTS'), '叫法意图表没有走 scenarios 数据');
+  assert.ok(page.includes('settle.naiveBar'), '没有拿直觉值做对照，门槛就说不清为什么不是 55');
 });

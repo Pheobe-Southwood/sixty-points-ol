@@ -1,12 +1,12 @@
 <script lang="ts">
   import {
-    cardClass,
     cardKey,
     cardsPoints,
     levelFromProgress,
+    levelLabel,
     levelProgress,
-    type BidCall,
-    type TrumpModel
+    madeLevels,
+    type BidCall
   } from '@sixty/engine';
   import CardView from '$lib/components/Card.svelte';
   import CardRow from '$lib/components/CardRow.svelte';
@@ -17,45 +17,53 @@
   import { strainGlyph, trumpText } from '$lib/labels';
   import { settlePreview } from '$lib/settle';
   import {
-    AUCTION_INTENTS,
     BURY_HAND,
+    cardsOf,
     DEFENDER_STEPS,
     DEMO_AUCTION,
+    DEMO_CONTRACT,
     DEMO_KITTY,
     DEMO_SETTLE_INPUT,
+    FOLLOW_ANSWER,
+    FOLLOW_SHORT_HAND,
+    FOLLOW_SHORT_LEAD,
     KITTY_EQUATION,
+    KITTY_SWING,
+    LEAD_CASES,
     LEVEL_DEMO,
     LEVEL_STEPS,
     MULTIPLIER_ROWS,
-    OFF_RANK_EQUALS,
+    PHASES,
     POINT_CARDS,
     POINT_ROWS,
     RUFF_LEAD,
     RUFF_WINNER,
     RUN_NOT_ADJACENT,
     RUN_SKIPS_LEVEL,
-    TRUMP_DEMO_CARDS,
+    sideSuitCards,
+    TRICK_DEMO,
     TRUMP_HEARTS,
-    TRUMP_LADDER,
+    TRUMP_LADDER_GROUPS,
     TRUMP_NT,
     TRUMP_RUN,
+    TRUMP_RUN_CROSS,
     TRY_FOLLOW,
-    TRY_LEAD,
     TRY_RUFF,
     TUTORIAL_NAMES,
-    UPGRADE_ROWS
+    UPGRADE_ROWS,
+    trumpCount,
+    trumpGroups
   } from '$lib/tutorial/scenarios';
 
   const TOC: readonly { readonly id: string; readonly label: string }[] = [
-    { id: 'start', label: '流程' },
-    { id: 'basics', label: '牌与分值' },
-    { id: 'trump', label: '级牌与主牌' },
+    { id: 'start', label: '目标' },
+    { id: 'points', label: '分值' },
+    { id: 'trump', label: '主牌' },
     { id: 'auction', label: '叫牌' },
     { id: 'bury', label: '埋底' },
     { id: 'play', label: '打牌' },
     { id: 'inference', label: '打牌推论' },
-    { id: 'scoring', label: '结算' },
-    { id: 'levels', label: '升级与赛程' }
+    { id: 'scoring', label: '结算' }
   ];
 
   const section = 'scroll-mt-4 rounded-2xl bg-black/25 p-4 ring-1 ring-white/10 sm:p-5';
@@ -64,19 +72,20 @@
   const chip = 'rounded-md bg-white/10 px-2 py-1';
   /** 每个静态示例块顶部的将牌环境说明 */
   const env = 'mb-2 text-[11px] text-gold/70';
+  const subhead = 'pt-1 font-semibold text-white/80';
 
   function callLabel(call: BidCall): string {
     return call === 'pass' ? '不叫' : `${call.points}${strainGlyph(call.strain)}`;
   }
 
   const kittyPoints = cardsPoints(DEMO_KITTY);
+  const trickDemoPoints = cardsPoints(TRICK_DEMO);
+  const heartTrumps = trumpGroups(TRUMP_HEARTS);
+  const ntTrumps = trumpGroups(TRUMP_NT);
+  const clubSuit = sideSuitCards(TRUMP_HEARTS, 'C');
 
-  /** 同一组牌在不同将牌下主牌张数不同：这就是「将牌决定主牌」的直观演示 */
-  const trumpCount = (trump: TrumpModel): number =>
-    TRUMP_DEMO_CARDS.filter((card) => cardClass(card, trump) === 'T').length;
-
-  const followLead = TRY_FOLLOW.lead ?? [];
-  const followAnswer = TRY_FOLLOW.hand.slice(0, 4);
+  /** 领出示例：键 → 牌面只算一次，`dim` 要用 cardKey 而不是教程里的别名键 */
+  const leadCases = LEAD_CASES.map((item) => ({ ...item, cards: cardsOf(item.keys) }));
 
   /** 闲家门槛：由底牌分与末轮张数算出，页面不手写数字 */
   const settle = settlePreview(DEMO_SETTLE_INPUT);
@@ -86,16 +95,28 @@
     ...step,
     to: levelFromProgress(levelProgress(step.from) + step.levels)
   }));
+
+  /** 结算那一节的四个数，全部由引擎函数推出，正文里不出现手写的 3 / 10 / 8(+0) / 20 */
+  const madeLevelsNow = madeLevels(KITTY_EQUATION.madeFinal);
+  const shortfallLevels = Math.ceil((KITTY_EQUATION.contract - KITTY_EQUATION.setFinal) / 10);
+  const swing = kittyPoints * KITTY_EQUATION.multiplier;
+  const demoAfterLabel = levelLabel(
+    levelFromProgress(levelProgress({ rank: 5, cycle: 0 }) + madeLevelsNow)
+  );
 </script>
 
 <main class="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
   <header>
     <a class="text-xs text-white/50 hover:text-white" href="/">← 大厅</a>
     <h1 class="mt-2 text-2xl font-black tracking-wide text-ivory">新手教程</h1>
-    <p class="mt-1.5 text-xs leading-relaxed text-white/55">
-      用真实牌面走一遍从叫牌到结算的全过程，每一步都带练手题与打牌推论。示例统一按「本副级牌 = 5」讲解；
-      规则里出现的每个数字都由规则引擎在测试里核对过，不会和牌桌上跑的不一样。
-    </p>
+    <div class="mt-2 space-y-2 text-xs leading-relaxed text-white/55">
+      <p>
+        一言以蔽之，六十分是<b class="text-ivory">桥牌</b>、<b class="text-ivory">双升（八十分 / 拖拉机）</b>、<b
+          class="text-ivory">斗地主</b
+        >的融合版。如果你接触过<b class="text-ivory">五十 K</b>、<b class="text-ivory">掼蛋</b>，也可能见到一些熟悉的概念。
+      </p>
+      <p>六十分给希望拥有双升 / 桥牌一般体验、但只能凑出 <b class="text-ivory">3 个人</b>的牌友提供一种新玩法。</p>
+    </div>
   </header>
 
   <nav class="flex flex-wrap gap-1.5 text-[11px]">
@@ -107,30 +128,53 @@
   </nav>
 
   <section id="start" class={section}>
-    <h2 class={heading}>1. 目标与流程</h2>
+    <h2 class={heading}>1. 目标：六十分的胜败关键</h2>
     <div class={body}>
       <p>
-        三个人打一副牌：<b class="text-ivory">叫到牌的人单独一家（庄家）</b>，另外两家（闲家）是一队。庄家要抓够自己叫的分数才算赢下这一副。
+        六十分的<b class="text-ivory">每一副都是「1v2」</b>。叫到牌的那个人当<b class="text-ivory">庄家</b>，另外两家临时联手当<b
+          class="text-ivory">闲家</b
+        >。一副牌的胜败关键就是：
       </p>
-      <p>一副 54 张：每人 17 张，剩 3 张扣成暗底。四步走完一副：</p>
-      <ol class="ml-4 list-decimal space-y-1">
-        <li><b class="text-ivory">叫牌</b>：从 40 分起叫，叫得最高的人坐庄，并定下这一副的将牌花色。</li>
-        <li><b class="text-ivory">埋底</b>：庄家拿到底牌后，从 20 张里扣 3 张进暗底。</li>
-        <li><b class="text-ivory">打牌</b>：庄家领出，三家轮流跟牌，共 17 轮（每人每轮出同样张数）。</li>
-        <li><b class="text-ivory">结算</b>：数庄家抓到的分 + 底牌分 × 末轮张数，够不够定约分；据此升级。</li>
-      </ol>
+      <p class="rounded-xl bg-black/30 p-3 text-[13px] font-semibold text-ivory">
+        庄家抓到的分，有没有达到他叫出去的分数。
+      </p>
+      <p>如果够了，庄家升级；如果不够，两家闲家升级。</p>
       <p>
-        座位与轮转：出牌顺序是 <b class="text-ivory">你 → 左边（你的下家）→ 右边（你的上家）→ 你</b>；每副的发牌人轮换，首副随机。发牌人率先叫牌。
+        所以，从全局尺度看，最终任务是<b class="text-ivory">升级</b>；从单局尺度看，最终任务是<b class="text-ivory">得分</b>。
+      </p>
+
+      <p class={subhead}>一副牌一共有四个阶段：</p>
+      <div class="flex flex-wrap items-stretch gap-1.5">
+        {#each PHASES as phase, index (phase.id)}
+          <a
+            class="flex-1 rounded-xl bg-black/30 p-2.5 ring-1 ring-white/10 hover:bg-black/50"
+            href={`#${phase.id}`}
+          >
+            <p class="text-[11px] font-bold text-gold">{index + 1}. {phase.label}</p>
+            <p class="mt-0.5 text-[10px] leading-snug text-white/55">{phase.blurb}</p>
+          </a>
+        {/each}
+      </div>
+
+      <ul class="ml-4 list-disc space-y-1">
+        <li><b class="text-ivory">发牌</b>：54 张，每人 17 张，剩 3 张扣着不动，叫「<b class="text-ivory">底牌</b>」。</li>
+        <li><b class="text-ivory">座次</b>：<b class="text-ivory">庄家出第一轮</b>，之后每轮由上轮的赢家先出。</li>
+        <li>第一个发牌的人也<b class="text-ivory">先叫牌</b>，每副轮换。</li>
+        <li>一共 17 轮，三家每轮各出一次。</li>
+      </ul>
+
+      <p>
+        每个人有<b class="text-ivory">独立的级别</b>：从 <b class="text-gold">2</b> 开始一级一级往上，爬完 <b class="text-gold">A</b> 再套圈进入下一轮的
+        <b class="text-gold">2</b>，记作 <b class="text-ivory">5(+0)</b>、<b class="text-ivory">A(+1)</b>、<b class="text-ivory">5(+2)</b>。
       </p>
     </div>
   </section>
 
-  <section id="basics" class={section}>
-    <h2 class={heading}>2. 牌与分值</h2>
+  <section id="points" class={section}>
+    <h2 class={heading}>2. 分：总计 100 分</h2>
     <div class={body}>
       <p>
-        全场一共 100 分，只有三种牌带分：<b class="text-ivory">5 / 10 / K</b>。牌面上没有额外的分值标记 ——
-        点数本身就说明了分值，认得这三张就够。
+        全场一共 <b class="text-ivory">100 分</b>，只藏在三种牌里：
       </p>
       <CardRow cards={POINT_CARDS} size="md" />
       <div class="flex flex-wrap gap-1.5">
@@ -138,61 +182,151 @@
           <span class={chip}>{row.label} = <b class="text-gold">{row.points}</b> 分</span>
         {/each}
       </div>
-      <p>
-        四张 5（20 分）+ 四张 10（40 分）+ 四张 K（40 分）= 100 分。双王不带分，但它们是最大的主牌。
+      <p>四张 5 = 20 分、四张 10 = 40 分、四张 K = 40 分，加起来正好 100。</p>
+
+      <p>一副牌打完，这 100 分只会落在三个地方：</p>
+      <p class="rounded-xl bg-black/30 p-3 text-[13px] font-semibold text-ivory">
+        庄家赢下的轮里的分 ＋ 闲家赢下的轮里的分 ＋ 底牌那 3 张的分 ＝ 100
       </p>
       <p>
-        推论：<b class="text-ivory">分牌是这一副的胜负手</b>。庄家抓到的分要够定约，闲家只要把分留给自家人（或者干脆抓走）就够了。
+        注意：<b class="text-ivory">底牌</b>的分不算在任何人的轮里，只在最后算账时按倍数记到庄家头上（第 5 节）。
       </p>
+
+      <div class="pt-1">
+        <p class={env}>一墩三张 —— 这一轮的分记给赢家（这墩里带 {trickDemoPoints} 分）</p>
+        <CardRow cards={TRICK_DEMO} trump={TRUMP_HEARTS} size="md" />
+      </div>
     </div>
   </section>
 
   <section id="trump" class={section}>
-    <h2 class={heading}>3. 级牌与主牌</h2>
+    <h2 class={heading}>3. 主牌：一副 18 张的大牌</h2>
     <div class={body}>
       <p>
-        这一副有一张 <b class="text-ivory">级牌点数</b>，取自庄家的级别（本节示例里是 <b class="text-gold">5</b>）；
-        这四张 5 永远算主牌。此外，叫牌叫到的那个花色整门都是主牌 —— 无主时则只有四张级牌加双王。
+        <b class="text-ivory">主牌压副牌</b>，这是这副牌唯一真正的强弱关系：只要一轮里能凑出跟对手<b class="text-ivory">同样张数</b
+        >的主牌连牌，就能直接赢下来，不用比大小。
       </p>
 
-      <p class="pt-1 text-white/80">
-        同样是这些牌，将牌不同，主牌（<b class="text-gold">金边</b>）就完全不同：
+      <p>哪些牌算主牌？三部分：</p>
+      <ol class="ml-4 list-decimal space-y-1">
+        <li><b class="text-ivory">大小王</b> —— 永远算主牌，而且永远是最大的两张。</li>
+        <li>
+          <b class="text-ivory">级牌</b> —— <b>点数等于庄家级别的那四张</b>，什么花色都算；本副示例里庄家级别是
+          <b class="text-gold">5</b>，所以四张 5 全是主牌。
+        </li>
+        <li><b class="text-ivory">主花色</b> —— 叫牌叫到的那个花色，整门都算。示例主打 ♥，所以 ♥ 整门都是主牌。</li>
+      </ol>
+
+      <p>
+        三部分加起来，示例这一副共 <b class="text-gold">{trumpCount(TRUMP_HEARTS)} 张主牌</b>（♥5 已经在「四张 5」里数过，不重复）：
       </p>
-      <div class="space-y-3 rounded-xl bg-black/30 p-3">
-        <div>
-          <p class={env}>本副：{trumpText(TRUMP_HEARTS)} → 主牌 {trumpCount(TRUMP_HEARTS)} 张</p>
-          <CardRow cards={TRUMP_DEMO_CARDS} trump={TRUMP_HEARTS} />
-        </div>
-        <div>
-          <p class={env}>本副：{trumpText(TRUMP_NT)} → 主牌只剩 {trumpCount(TRUMP_NT)} 张：四张级牌 + 双王</p>
-          <CardRow cards={TRUMP_DEMO_CARDS} trump={TRUMP_NT} />
-        </div>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}</p>
+      <div class="space-y-2 rounded-xl bg-black/30 p-3">
+        {#each heartTrumps as group (group.title)}
+          <div>
+            <p class="mb-1 text-[11px] text-white/55">
+              <b class="text-ivory">{group.title}</b>
+              （{group.cards.length} 张）· {group.hint}
+            </p>
+            <CardRow cards={group.cards} trump={TRUMP_HEARTS} size="sm" />
+          </div>
+        {/each}
       </div>
 
-      <p class="pt-1">主牌内部的大小顺序（从大到小）：</p>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（下面这六张全是主牌）</p>
-      <CardRow cards={TRUMP_LADDER} trump={TRUMP_HEARTS} size="md" />
-      <p>
-        大王 &gt; 小王 &gt; 主级（主花色的 5）&gt; 副级（其他三门的 5，三张完全相等）&gt; 主花色其他牌。副牌则各自成门，
-        每门从 2 到 A，<b class="text-ivory">但跳过级牌</b>：级牌已经归主牌了。
+      <p class="pt-1">
+        <b class="text-ivory">如果叫的是「无主」，第 3 部分就没了</b>，主牌只剩
+        <b class="text-gold">{trumpCount(TRUMP_NT)} 张</b>：双王 + 四张级牌。同一手牌，主打花色不同，你的强牌会从
+        {trumpCount(TRUMP_HEARTS)} 张掉到 {trumpCount(TRUMP_NT)} 张 —— 这就是叫牌挑花色的意义。
       </p>
-      <p>
-        记住这个「跳过」很关键：级牌是 5 时，♣3 与 ♣6 之间没有别的遗漏 —— 副牌里的 5 已经不在这一门了，
-        所以它们算<b class="text-ivory">连着</b>。下面打牌一节会反复用到这一点。
+      <p class={env}>本副：{trumpText(TRUMP_NT)}</p>
+      <div class="space-y-2 rounded-xl bg-black/30 p-3">
+        {#each ntTrumps as group (group.title)}
+          <div>
+            <p class="mb-1 text-[11px] text-white/55">
+              <b class="text-ivory">{group.title}</b>（{group.cards.length} 张）
+            </p>
+            <CardRow cards={group.cards} trump={TRUMP_NT} size="sm" />
+          </div>
+        {/each}
+        <p class="text-[11px] text-white/50">无主时四张级牌完全相等，所以主牌的大小只剩「四张 5 &lt; 小王 &lt; 大王」。</p>
+      </div>
+
+      <p class={subhead}>主牌内部也分大小，从大到小：</p>
+      <div class="flex flex-wrap items-end gap-2 rounded-xl bg-black/30 p-3">
+        {#each TRUMP_LADDER_GROUPS as group, index (group.title)}
+          {#if index > 0}
+            <span class="pb-6 text-white/30">→</span>
+          {/if}
+          <div>
+            <p class="mb-1 text-center text-[10px] text-white/50">{group.title}</p>
+            <CardRow cards={group.cards} trump={TRUMP_HEARTS} size="md" gap="gap-1" />
+          </div>
+        {/each}
+      </div>
+      <div class="overflow-hidden rounded-xl ring-1 ring-white/10">
+        <table class="w-full text-[11px]">
+          <thead class="bg-white/5 text-white/50">
+            <tr>
+              <th class="px-3 py-1.5 text-left font-semibold">顺序</th>
+              <th class="px-3 py-1.5 text-left font-semibold">叫什么</th>
+              <th class="px-3 py-1.5 text-left font-semibold">说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each TRUMP_LADDER_GROUPS as group, index (group.title)}
+              <tr class="border-t border-white/5">
+                <td class="px-3 py-1.5 tabular-nums text-white/45">{index + 1}</td>
+                <td class="px-3 py-1.5 whitespace-nowrap text-gold">{group.title}</td>
+                <td class="px-3 py-1.5">{group.note}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+
+      <p class="pt-1">
+        <b class="text-ivory">副牌那边，每一门都「跳过级牌」。</b> 级牌 5 已经归主牌，所以副牌里根本没有 5 这张牌：♣ 这一门是 ♣2 ♣3 ♣4 ♣6 ♣7
+        … ♣A，<b class="text-ivory">♣4 的下家直接就是 ♣6，它们是连着的。</b>
       </p>
+      <div>
+        <p class={env}>本副：{trumpText(TRUMP_HEARTS)} —— ♣ 这一门整门（{clubSuit.length} 张，没有 ♣5）</p>
+        <CardRow cards={clubSuit} trump={TRUMP_HEARTS} size="md" />
+      </div>
+
+      <p class="pt-1">
+        <b class="text-ivory">顺子可以跨过「主花色 → 级牌 → 王」这个边界</b>，因为它们在主牌里本来就是相邻的：
+      </p>
+      <div>
+        <p class={env}>
+          本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌；下面这 {TRUMP_RUN_CROSS.length} 张是一条合法顺子）
+        </p>
+        <CardRow cards={TRUMP_RUN_CROSS} trump={TRUMP_HEARTS} size="md" highlight={TRUMP_RUN_CROSS.map(cardKey).slice(3)} />
+        <p class="mt-1 text-[11px] text-white/50">
+          注意：一条主牌顺子里最多只能有一张副级 —— 三张副级完全相等，彼此不算相邻。
+        </p>
+      </div>
     </div>
   </section>
 
   <section id="auction" class={section}>
-    <h2 class={heading}>4. 叫牌：定庄、定主</h2>
+    <h2 class={heading}>4. 叫牌：谁坐庄、打什么、要得多少分</h2>
     <div class={body}>
+      <p>
+        叫牌一次定下三件事：<b class="text-ivory">庄家是谁、将牌是什么、庄家要得多少分</b>。
+      </p>
       <ul class="ml-4 list-disc space-y-1">
-        <li>从 <b class="text-ivory">40 分起步，每次至少加 5 分</b>；分数是主序，同分时花色必须更高：♣ &lt; ♦ &lt; ♥ &lt; ♠ &lt; 无主。</li>
-        <li>叫牌无上限、无加倍；你叫多少分，坐庄后就要抓够多少分。</li>
-        <li>连续两家不叫即成交；三家开叫全部 pass 时本副作废重发（级别不变，换下一位发牌人）。</li>
+        <li>从 <b class="text-ivory">40 分起叫，每次至少加 5 分</b>。</li>
+        <li>可以一次跳很高（40 → 60），<b class="text-ivory">没有上限、没有加倍</b>。</li>
+        <li>分数优先比大小；分数一样时比花色：♣ &lt; ♦ &lt; ♥ &lt; ♠ &lt; 无主。</li>
+        <li>也可以「不叫」。</li>
       </ul>
 
-      <p class="pt-1">一段真实成交的叫牌（发牌人是你）：</p>
+      <p>
+        <b class="text-ivory">什么时候结束</b>：<b class="text-ivory">连续两家不叫</b>，最后叫的那个人成交；如果三家一起不叫，这一副作废重发 ——
+        级别不变，只换下一家发牌。
+      </p>
+
+      <p>看一段真实成交的叫牌（发牌人是你）：</p>
       <div class="flex flex-wrap gap-1.5">
         {#each DEMO_AUCTION as entry, index (index)}
           <span class={chip}>
@@ -202,172 +336,188 @@
         {/each}
       </div>
       <p>
-        结果：<b class="text-gold">阿豪 45♥ 坐庄</b>，主打 ♥，级牌是阿豪的级别点数。阿豪要抓 45 分才算打成。
+        → <b class="text-gold">{TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]} {DEMO_CONTRACT.points}{strainGlyph(
+          DEMO_CONTRACT.strain
+        )} 坐庄</b
+        >：主打 {strainGlyph(DEMO_CONTRACT.strain)}、本副级牌是{TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]}的 5、<b
+          class="text-ivory"
+          >{TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]}必须抓够 {DEMO_CONTRACT.points} 分才算打成</b
+        >。
       </p>
 
-      <p class="pt-1 font-semibold text-white/80">闲家要到多少分才能把庄家打输？</p>
       <p>
-        不是简单的「100 − 45 = 55」—— 那漏掉了<b class="text-ivory">底牌那 3 张的分</b>。底分按末轮张数在庄家账上加加减减，
-        所以闲家的门槛跟着<b class="text-ivory">保底还是抠底</b>走。以定约 45 分、暗底 {kittyPoints} 分、末轮每人 2 张为例：
+        <b class="text-ivory">叫牌是「认领责任」。</b>成交之后你一个人对两家，叫多少就至少要抓多少。
       </p>
-      <div class="grid gap-2 sm:grid-cols-2">
-        <div class="rounded-xl bg-emerald-500/10 p-3 ring-1 ring-emerald-400/25">
-          <p class="font-semibold text-emerald-300">保底（末轮庄家赢）</p>
-          <p class="mt-1">
-            庄家账上多 {kittyPoints} × 2 = <b>{kittyPoints * 2}</b> 分 ⇒ 闲家要抓
-            <b class="tabular-nums">{settle.protectBar}</b> 分以上才打得输他
-          </p>
-        </div>
-        <div class="rounded-xl bg-rose-500/10 p-3 ring-1 ring-rose-400/25">
-          <p class="font-semibold text-rose-300">抠底（末轮闲家赢）</p>
-          <p class="mt-1">
-            庄家账上倒扣 {kittyPoints} × 2 = <b>{kittyPoints * 2}</b> 分 ⇒ 闲家只要抓
-            <b class="tabular-nums">{settle.digBar}</b> 分以上就够
-          </p>
-        </div>
-      </div>
-      <p class="text-[11px] text-white/50">
-        只有底牌 0 分时两者才同时等于 {settle.naiveBar}（即 100 − 定约分）。也就是说：<b class="text-ivory">埋了分就等于把自己的命门押在末轮上</b>
-        —— 保住了闲家门槛被抬高，被抠了门槛立刻塌下来。
+      <p>
+        所谓「六十分」，便是在长时间的试验中找到的平衡：一般而言，平均成交分数和最终获得分数的平均值大概是这个数。
       </p>
 
-      <p class="pt-1 font-semibold text-white/80">叫法的意图</p>
-      <div class="overflow-hidden rounded-xl ring-1 ring-white/10">
-        <table class="w-full text-[11px]">
-          <thead class="bg-white/5 text-white/50">
-            <tr>
-              <th class="px-3 py-1.5 text-left font-semibold">叫法</th>
-              <th class="px-3 py-1.5 text-left font-semibold">你想表达什么</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each AUCTION_INTENTS as row (row.call)}
-              <tr class="border-t border-white/5">
-                <td class="px-3 py-1.5 whitespace-nowrap text-gold">{row.call}</td>
-                <td class="px-3 py-1.5">{row.intent}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      <p>
+        <b class="text-ivory">升级只看你实际抓了多少分，跟叫了多少分没关系，这和桥牌是不一样的</b>。叫 45 打成、拿到 75 分，和叫 75
+        打成、拿到 75 分，升级完全一样；而两种情况拿到 70 分，则就一胜一败了。由此得出两条基本结论：
+      </p>
+      <ul class="ml-4 list-disc space-y-1">
+        <li><b class="text-ivory">正常情况不跳叫</b>。别人不拦着你，自己多承诺 5 分百害而无一利。</li>
+        <li>
+          <b class="text-ivory">牌差建议不叫</b>。三家全不叫只是重发，你一分不亏；有人接了你就当闲家，队友可能更强，压力给到庄家。
+        </li>
+      </ul>
 
-      <p class="pt-1 font-semibold text-white/80">叫牌的心理博弈（阻击叫）</p>
+      <p class={subhead}>当然，叫牌阶段也有一些心理博弈：</p>
       <div class="rounded-xl bg-black/30 p-3">
-        <p>
-          <b class="text-ivory">叫牌是认领责任</b>：成交之后你一个人对两家，叫多少分就要抓多少分。所以叫分同时是「承诺」和「信号」
-          —— 对手会据此判断你的牌力。
-        </p>
-        <p class="mt-2">
-          <b class="text-ivory">升级只看实际抓分，不看叫分</b>：手牌强就该把价格叫高，把牌力换成级数；强牌只叫 40 是白白浪费。
-          反过来，<b class="text-ivory">弱牌永远不叫</b>：三家全 pass 只是重发，叫牌权回到下一位发牌人，你没有任何损失；
-          有人接手，你就当闲家，靠他失败升级。pass 是零成本的。
-        </p>
-        <p class="mt-2">
-          <b class="text-gold">阻击叫</b>就是在这两点之间下注：明知自己「大概打得成」却直接往上跳（40 → 55），
-          赌的是对手也只是「还行」。对手接受，你当闲家，赚他失败；对手放弃，你自己承担失败。
-          所以<b class="text-ivory">阻击最有效的时机，是你判断对手只比你好一点</b>：
-          他接了很可能差一点打不成，他不接你就白拿一副。
-        </p>
-        <p class="mt-2">
-          <b class="text-ivory">先 pass 再叫（藏牌）</b>：首轮不叫能让两家低估你，等他们把价格叫低了你再接手。
-          不叫也是发言 —— 你的沉默同样是给对手的信息。
-        </p>
-        <p class="mt-2">
-          <b class="text-ivory">位置与节奏</b>：连续两家不叫就成交，所以你后面两家一 pass 就定案；
-          <b class="text-ivory">最后叫牌的人压力最大</b>，因为再没人替你接。反过来，你也可以在成交前一刻抬价，
-          让对方在「接一个高得多的价格」和「放你走」之间选。
-        </p>
-        <p class="mt-2">
-          <b class="text-ivory">比分不同，风险偏好也该不同</b>：落后时更该冲高分（升级看抓分，输了也只是对手两人各升
-          <span class="tabular-nums">ceil(差/10)</span>），领先时叫稳一点，别把机会送出去。
-        </p>
+        <p><b class="text-gold">① 「阻击叫」</b>：对手叫到 ♥65，你明明知道自己打 ♠65 胜算不大，但是你认为对手牌力较强，于是你叫 ♠65，逼着对手拿 ♥70 来压你。这样，只要他抓不到 70，欠的分就更多，你就能升更多的级；而如果对手不接了给你打 ♠65，你最后打到 45 输两级，也比对手打到 80 赢四级好。当然，也有可能你最后打到 25，这种惨败的可能性就是需要承担的代价了。</p>
+        <p class="mt-2"><b class="text-gold">② 位置决定压力</b>：连续两家不叫就定案，所以上家叫完，你不叫，就把压力给到下家 —— 他不抬，就得让上家以较低的压力打；他继续叫，就有可能砸到自己手上。</p>
+        <p class="mt-2"><b class="text-gold">③ 比分不同，风险偏好也该不同</b>：落后时更该冲高分；领先时叫稳一点，别把机会送出去。</p>
       </div>
 
       <p>
-        除此之外，手上长套（一门牌多）、常主（双王与级牌）、分牌多，才值得往上叫；
-        三门都短、又没常主时，40 分都可能守不住。
+        最后，什么样的手牌值得叫高？<b class="text-ivory">长套多</b>（某一门牌特别多）、<b class="text-ivory">常主多</b
+        >（双王与级牌都在你手上）。四门平均又没常主时，40 分都可能守不住。
       </p>
     </div>
   </section>
 
   <section id="bury" class={section}>
-    <h2 class={heading}>5. 埋底</h2>
+    <h2 class={heading}>5. 埋底：庄家的那 3 张</h2>
     <div class={body}>
       <p>
-        庄家拿到底牌后共有 20 张，要扣 3 张进暗底，另外两家在结算前看不到。手牌示意（真实为 20 张）：
+        庄家把底牌 3 张收进手里，一共 20 张，然后<b class="text-ivory">扣 3 张埋回去</b>。这 3 张在算账之前，另外两家都看不到。
       </p>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌）</p>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌；真实为 20 张，这里取 12 张展示扇形）</p>
       <div class="rounded-xl bg-black/25 px-2 py-3">
         <HandFan hand={BURY_HAND} trump={TRUMP_HEARTS} />
       </div>
       <div class="flex flex-wrap items-center gap-3 pt-1">
-        <p class="text-[11px] text-white/55">示例暗底（{kittyPoints} 分）</p>
+        <p class="text-[11px] text-white/55">示例底牌（{kittyPoints} 分）</p>
         <CardRow cards={DEMO_KITTY} size="md" />
       </div>
+
       <p>
-        底分不会凭空消失：最后按 <b class="text-ivory">底牌分 × 末轮张数</b> 结算。末轮庄家赢下叫
-        <b class="text-emerald-300">保底</b>（加分），被闲家赢走叫 <b class="text-rose-300">抠底</b>（扣分，可为负）。
+        <b class="text-ivory">底牌的分不会消失</b>，最后按这个倍数记到庄家账上，倍数就是<b class="text-ivory">最后一轮每家出了几张</b>：
       </p>
       <div class="flex flex-wrap gap-1.5">
         {#each MULTIPLIER_ROWS as row (row.lastTrick)}
           <span class={chip}>{row.lastTrick} → 底分 × <b class="text-gold">{row.multiplier}</b></span>
         {/each}
       </div>
+      <ul class="ml-4 list-disc space-y-1">
+        <li>最后一轮<b class="text-emerald-300">庄家赢</b> → 加分，叫<b class="text-emerald-300">保底</b>（超过一百也可以）。</li>
+        <li>最后一轮<b class="text-rose-300">闲家赢</b> → 扣分，叫<b class="text-rose-300">抠底</b>（扣成负数也可以）。</li>
+      </ul>
       <p>
-        推论：埋分是双刃剑 —— {kittyPoints} 分底被保底等于白拿 {kittyPoints} × 张数，被抠底就倒扣同样多。
-        所以庄家通常<b class="text-ivory">把分埋掉、把大牌留在手里护底</b>，并且末轮尽量多出牌（张数就是倍率）。
+        所以埋分是双刃剑：埋进去 {kittyPoints} 分，保底就白拿 <b class="tabular-nums">{kittyPoints} × 张数</b>，被抠底就倒扣一样多。
+        如果牌足够好，常见打法便是<b class="text-ivory">把分埋掉、把大牌留在手上护底</b>，并且<b class="text-ivory">最后一轮尽量多出牌</b> ——
+        例如 {KITTY_SWING.multiplier} 张顺子 × {KITTY_SWING.kittyPoints} 分底牌 = <b class="text-gold"
+          >+{KITTY_SWING.multiplier * KITTY_SWING.kittyPoints}</b
+        > 分，甚至可能直接逆风翻盘。
       </p>
     </div>
   </section>
 
   <section id="play" class={section}>
-    <h2 class={heading}>6. 打牌</h2>
+    <h2 class={heading}>6. 打牌：领出、跟牌、杀牌</h2>
     <div class={body}>
-      <ul class="ml-4 list-disc space-y-1">
-        <li><b class="text-ivory">领出</b>：单张，或同门顺子（同门内按大小严格相邻的 2 张及以上）。副牌顺子跳过级牌。</li>
-        <li><b class="text-ivory">跟牌</b>：同门、同张数。该门不够时，先把该门出完，剩下的随便垫。</li>
-        <li><b class="text-ivory">结构优先</b>：该门够张数时，所选牌的「最长连续段」分解必须字典序最大 —— 领 4 顺而你有 3 顺 + 2 顺，必须出 3 顺 + 任 1 张。</li>
-        <li><b class="text-ivory">赢墩</b>：与领出同长度、同门的更高顺子，或用同张数的连续主牌杀牌；长度不同或结构不同（如 3 + 1）都不能赢。大小完全相等时先出为大。</li>
-      </ul>
+      <p>一轮里三家各出一次，赢的人领下一轮。一副牌一共 17 轮。</p>
 
-      <div class="space-y-3 pt-2">
-        <TryPlay title={TRY_LEAD.title} task={TRY_LEAD.task} hand={TRY_LEAD.hand} trump={TRY_LEAD.trump} />
-        <TryPlay
-          title={TRY_FOLLOW.title}
-          task={TRY_FOLLOW.task}
-          hand={TRY_FOLLOW.hand}
-          trump={TRY_FOLLOW.trump}
-          lead={TRY_FOLLOW.lead}
-        />
-        <TryPlay title={TRY_RUFF.title} task={TRY_RUFF.task} hand={TRY_RUFF.hand} trump={TRY_RUFF.trump} lead={TRY_RUFF.lead} />
+      <p class={subhead}>① 领出</p>
+      <p>出一张，或者出<b class="text-ivory">同一门里大小相邻的连牌</b>（2 张及以上）。不允许甩牌。</p>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌）</p>
+      <div class="space-y-2 rounded-xl bg-black/30 p-3">
+        {#each leadCases as item, index (index)}
+          <div class="flex flex-wrap items-center gap-2">
+            <span class={item.ok ? 'text-[11px] font-semibold text-emerald-300' : 'text-[11px] font-semibold text-rose-300'}>
+              {item.ok ? '✓' : '✗'}
+            </span>
+            <CardRow
+              cards={item.cards}
+              trump={TRUMP_HEARTS}
+              size="md"
+              dim={item.ok ? [] : item.cards.map(cardKey)}
+            />
+            <span class="text-[11px] text-white/50">{item.note}</span>
+          </div>
+        {/each}
       </div>
 
-      <p class="pt-2">练手 2 的正确答案长这样：3 顺 + 1 张，而不是把 2 顺也一起打出去。</p>
+      <p class={subhead}>② 跟牌</p>
+      <p>
+        必须<b class="text-ivory">同一门、同一张数</b>。如果这一门不够张数，就先把这一门全部出光，剩下的随便垫。
+      </p>
+      <div class="flex flex-wrap items-end gap-4 rounded-xl bg-black/30 p-3">
+        <TrickCluster cards={FOLLOW_SHORT_LEAD} trump={TRUMP_HEARTS} caption="上家领出 3 张" />
+        <span class="pb-6 text-white/30">→</span>
+        <TrickCluster cards={FOLLOW_SHORT_HAND.slice(0, 3)} trump={TRUMP_HEARTS} caption="你只有 ♣Q 一张，另外两张随便垫" />
+      </div>
+
+      <p class={subhead}>③ 这一门够张数时，要「结构优先」：必须先把最长的那段连牌拿出来</p>
+      <TryPlay
+        title={TRY_FOLLOW.title}
+        task={TRY_FOLLOW.task}
+        hand={TRY_FOLLOW.hand}
+        trump={TRY_FOLLOW.trump}
+        lead={TRY_FOLLOW.lead}
+      />
+      <p>
+        你手里 ♣ 有 5 张，够跟 4 张。有两种拆法：<b class="text-ivory">♣3-4-6</b> + ♣Q-K，或者 ♣Q-K + 两张散牌。<b
+          class="text-ivory">规则要求前者</b
+        >：先把最长的 3 连拿出来，再随便配 1 张。所以正确答案是 <b class="text-gold">♣3-4-6 + ♣Q</b>（或 +♣K）。
+      </p>
       <div class="flex flex-wrap items-end gap-4">
-        <TrickCluster cards={followLead} trump={TRY_FOLLOW.trump} caption="上家领出 4 张 ♣ 顺子" />
-        <TrickCluster cards={followAnswer} trump={TRY_FOLLOW.trump} caption="你跟：♣3-4-6 + ♣Q" />
+        <TrickCluster cards={TRY_FOLLOW.lead ?? []} trump={TRY_FOLLOW.trump} caption="上家领出 4 张 ♣ 顺子" />
+        <span class="pb-6 text-white/30">→</span>
+        <TrickCluster cards={FOLLOW_ANSWER} trump={TRY_FOLLOW.trump} caption="你跟：♣3-4-6 + ♣Q" />
       </div>
+      <p class="rounded-xl bg-black/30 p-3 text-[11px] text-white/70">
+        <b class="text-ivory">为什么要有这条规则</b>：不然你可以永远用「大牌 + 小牌」的组合把长套拆开藏着，跟牌就成了随便选牌。
+      </p>
+
+      <p class={subhead}>④ 一轮归谁</p>
+      <p>得同时满足三条：</p>
+      <ol class="ml-4 list-decimal space-y-1">
+        <li><b class="text-ivory">张数一样</b>（上家领 4 张，你也得出 4 张）；</li>
+        <li><b class="text-ivory">要么同门、而且比上家的大</b>；<b class="text-ivory">要么是主牌连牌</b>（主牌天然压副牌，张数一样就行）；</li>
+        <li>
+          张数不同、或结构不同（比如人家出 <b class="text-ivory">3 连 + 1 张</b>，你出 <b class="text-ivory">2 连 + 2 连</b>），<b
+            class="text-ivory">都不能赢</b
+          > —— 只能算垫牌。
+        </li>
+      </ol>
+      <p>大小完全一样时（比如两张副级牌碰上），<b class="text-ivory">先出的赢</b>。</p>
+
+      <p class={subhead}>⑤ 缺门</p>
+      <p>
+        某一门一张都没有时，你有两条路 —— 用<b class="text-ivory">同样张数的连续主牌</b>杀牌赢下这一轮，或者垫掉没用的牌。<b
+          class="text-ivory">垫牌不管多大都不能赢。</b
+        >
+      </p>
+      <TryPlay title={TRY_RUFF.title} task={TRY_RUFF.task} hand={TRY_RUFF.hand} trump={TRY_RUFF.trump} lead={TRY_RUFF.lead} />
+      <p>
+        你一张 ♠ 都没有。<b class="text-gold">♥3-4-6</b> 是三张连续主牌（♥5 是主级、比它们都大，所以 ♥4 与 ♥6 之间是连的），能杀掉这一轮；<b
+          class="text-gold">♣2 ♣3 ♦4</b
+        > 是垫牌，不能赢。
+      </p>
     </div>
   </section>
 
   <section id="inference" class={section}>
-    <h2 class={heading}>7. 打牌推论</h2>
+    <h2 class={heading}>7. 三条最值钱的推论</h2>
     <div class={body}>
       <div class="rounded-xl bg-black/30 p-3">
         <p class="font-semibold text-ivory">① 常主永远最大</p>
-        <p class="mt-1">双王、主级、副级统称常主，任何副牌顺子都杀不过它们。</p>
-        <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（♠ 是副牌，♥ 与四张 5、双王都是主牌）</p>
+        <p class="mt-1">双王、主级、副级合称<b class="text-ivory">常主</b>，任何副牌连牌都杀不过它们。所以一副副牌大牌看着吓人，遇到最低的三张主牌连牌照样输：</p>
+        <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（♠ 是副牌；♥ 与四张 5、双王都是主牌）</p>
         <div class="mt-2 flex flex-wrap items-end gap-4">
-          <TrickCluster cards={RUFF_LEAD} trump={TRUMP_HEARTS} caption="副牌最大：♠A-K-Q" />
-          <TrickCluster cards={RUFF_WINNER} trump={TRUMP_HEARTS} caption="最低的三张主牌顺子" badge="赢墩" />
+          <TrickCluster cards={RUFF_LEAD} trump={TRUMP_HEARTS} caption="副牌里最大的三张：♠A-K-Q" />
+          <span class="pb-6 text-white/30">→</span>
+          <TrickCluster cards={RUFF_WINNER} trump={TRUMP_HEARTS} caption="主牌里最小的三张" badge="赢墩" />
         </div>
       </div>
 
       <div class="rounded-xl bg-black/30 p-3">
         <p class="font-semibold text-ivory">② 副牌顺子跳过级牌</p>
         <p class="mt-1">
-          <b class="text-gold">级牌 5</b> 归主牌，所以 ♣5 不在 ♣ 这一门里：♣3 之后直接接 ♣4、接着就是 ♣6
-          —— <b class="text-ivory">♣3-4-6 三张是连着的</b>，可以当顺子出。
+          级牌 5 归主牌，♣ 这一门从 ♣4 直接到 ♣6，所以 <b class="text-gold">♣3-4-6 三张是连着的</b>，可以当顺子出。反过来，♣3 和 ♣9 中间隔着
+          ♣4 ♣6 ♣7 ♣8，<b class="text-ivory">不能一起出</b>。
         </p>
         <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（级牌 5 已归主牌，三门副牌的 5 都空了）</p>
         <div class="mt-2 space-y-2">
@@ -376,12 +526,12 @@
             <CardRow cards={RUN_SKIPS_LEVEL} trump={TRUMP_HEARTS} size="md" />
           </div>
           <div>
-            <p class="mb-1 text-[11px] text-rose-300">✗ ♣3 与 ♣9 中间隔着 ♣4-♣8，不能一起出</p>
+            <p class="mb-1 text-[11px] text-rose-300">✗ ♣3 与 ♣9 中间隔着 ♣4 ♣6 ♣7 ♣8，不能一起出</p>
             <CardRow cards={RUN_NOT_ADJACENT} trump={TRUMP_HEARTS} size="md" />
           </div>
           <div>
             <p class="mb-1 text-[11px] text-white/55">
-              主牌顺子按主牌全序相邻：♥3-4-6 在主牌里同样连着（♥5 是主级，比这六张里的 ♥ 都大）
+              主牌同理：♥3-4-6 也连着（♥5 是主级，位置比这六张里的 ♥ 都高）
             </p>
             <CardRow cards={TRUMP_RUN} trump={TRUMP_HEARTS} size="md" />
           </div>
@@ -389,56 +539,26 @@
       </div>
 
       <div class="rounded-xl bg-black/30 p-3">
-        <p class="font-semibold text-ivory">③ 副级三张完全相等</p>
+        <p class="font-semibold text-ivory">③ 分牌晚出，或者垫给队友</p>
         <p class="mt-1">
-          <b class="text-gold">级牌 5</b> 时，其他三门的 5（♠5 ♦5 ♣5）大小一模一样，彼此不构成顺子相邻；
-          它们之间比大小时看谁先出，平张先出为大。
+          5 / 10 / K 谁赢走算谁的。手里有分牌时，尽量等一轮自己能赢的再出；跟不出门时，优先把分垫给队友（庄家正好相反：想尽办法把分收进自己手里）。<b
+            class="text-ivory">最后一轮一定要抢</b
+          > —— 只有赢了最后一轮才有保底 / 抠底。
         </p>
-        <p class={env}>本副：{trumpText(TRUMP_HEARTS)}</p>
-        <CardRow cards={OFF_RANK_EQUALS} trump={TRUMP_HEARTS} size="md" />
-      </div>
-
-      <div class="rounded-xl bg-black/30 p-3">
-        <p class="font-semibold text-ivory">④ 缺门：能杀就杀，垫牌不赢</p>
-        <p class="mt-1">
-          某一门一张都没有时，你可以用同张数的连续主牌杀牌赢下这一轮，也可以垫掉没用的牌 —— 但垫牌无论多大都不能赢。
-          末轮尤其要抢：赢下末轮才有保底 / 抠底。
-        </p>
-      </div>
-
-      <div class="rounded-xl bg-black/30 p-3">
-        <p class="font-semibold text-ivory">⑤ 分牌晚出，或垫给队友</p>
-        <p class="mt-1">
-          5 / 10 / K 带分，谁抓走算谁的。手里有分牌时，尽量等自己能赢的那一轮再出；跟不出门时优先把分垫给队友
-          （庄家则相反：想办法把分收进自己手里）。
-        </p>
-      </div>
-
-      <div class="rounded-xl bg-black/30 p-3">
-        <p class="font-semibold text-ivory">⑥ 末轮张数是倍率</p>
-        <p class="mt-1">
-          最后一轮每人出几张，底分就乘几倍。所以末轮前要留足同门的连牌：末轮出 3 张，底分就是 ×3。
-        </p>
-        <p class={env}>本副：{trumpText(TRUMP_HEARTS)}</p>
-        {#if TRY_RUFF.lead}
-          <div class="mt-2">
-            <TrickCluster cards={TRY_RUFF.lead} trump={TRY_RUFF.trump} caption="缺三门牌时，三张连续主牌就能赢下这一轮" />
-          </div>
-        {/if}
       </div>
     </div>
   </section>
 
   <section id="scoring" class={section}>
-    <h2 class={heading}>8. 结算</h2>
+    <h2 class={heading}>8. 算账：打成没有、谁升几级</h2>
     <div class={body}>
-      <p>庄家得分 = 墩分 + 底牌分 × 末轮张数：</p>
+      <p><b class="text-ivory">一条式子：</b></p>
       <div class="flex items-start justify-center gap-1.5 rounded-xl bg-black/30 py-3">
         <div class="w-14 text-center">
           <p class="text-[26px] font-black leading-none tabular-nums">{KITTY_EQUATION.trickPoints}</p>
           <p class="mt-1.5 text-[10px] text-white/50">墩分</p>
         </div>
-        <span class="mt-2 text-lg leading-none text-white/40">+</span>
+        <span class="mt-2 text-lg leading-none text-white/40">＋</span>
         <div class="w-14 text-center">
           <p class="text-[26px] font-black leading-none tabular-nums">{KITTY_EQUATION.kittyPoints}</p>
           <p class="mt-1.5 text-[10px] text-white/50">底牌 {DEMO_KITTY.length} 张</p>
@@ -453,68 +573,74 @@
           <p class="text-[26px] font-black leading-none tabular-nums text-gold">{KITTY_EQUATION.multiplier}</p>
           <p class="mt-1.5 text-[10px] text-white/50">末轮张数</p>
         </div>
-        <span class="mt-2 text-lg leading-none text-white/40">=</span>
+        <span class="mt-2 text-lg leading-none text-white/40">＝</span>
         <div class="w-14 text-center">
           <p class="text-[26px] font-black leading-none tabular-nums text-gold">{KITTY_EQUATION.madeFinal}</p>
           <p class="mt-1.5 text-[10px] text-white/50">最终得分</p>
         </div>
       </div>
-      <p class="text-[11px] text-white/50">示例：墩分 55 + 底牌 {kittyPoints} 分 × 2 = 75 分，定约 {KITTY_EQUATION.contract} 分。</p>
+
+      <p>同一副牌，最后一轮谁赢，结果完全不同：</p>
+      <ul class="ml-4 list-disc space-y-1">
+        <li>
+          最后一轮<b class="text-emerald-300">庄家赢</b>（保底）→ <b class="tabular-nums"
+            >{KITTY_EQUATION.trickPoints} + {KITTY_EQUATION.kittyPoints} × {KITTY_EQUATION.multiplier} =
+            {KITTY_EQUATION.madeFinal}</b
+          >
+        </li>
+        <li>
+          最后一轮<b class="text-rose-300">闲家赢</b>（抠底）→ <b class="tabular-nums"
+            >{KITTY_EQUATION.trickPoints} − {KITTY_EQUATION.kittyPoints} × {KITTY_EQUATION.multiplier} =
+            {KITTY_EQUATION.setFinal}</b
+          >
+        </li>
+      </ul>
+      <p>
+        <b class="text-ivory">最终得分 ≥ 叫的分数 → 打成</b>（正好相等也算打成）。上例叫的是 {KITTY_EQUATION.contract}：保底
+        {KITTY_EQUATION.madeFinal} ≥ {KITTY_EQUATION.contract}，打成；被抠底 {KITTY_EQUATION.setFinal} &lt;
+        {KITTY_EQUATION.contract}，打输。
+      </p>
 
       <div class="grid gap-2 sm:grid-cols-2">
         <div class="rounded-xl bg-emerald-500/10 p-3 ring-1 ring-emerald-400/25">
           <p class="font-semibold text-emerald-300">保底（末轮庄家赢）</p>
           <p class="mt-1">
-            {KITTY_EQUATION.trickPoints} + {kittyPoints} × 2 = <b>{KITTY_EQUATION.madeFinal}</b> ≥
-            {KITTY_EQUATION.contract} → 打成
+            {KITTY_EQUATION.trickPoints} + {kittyPoints} × {KITTY_EQUATION.multiplier} =
+            <b class="tabular-nums">{KITTY_EQUATION.madeFinal}</b> ≥ {KITTY_EQUATION.contract} → 打成
           </p>
         </div>
         <div class="rounded-xl bg-rose-500/10 p-3 ring-1 ring-rose-400/25">
           <p class="font-semibold text-rose-300">抠底（末轮闲家赢）</p>
           <p class="mt-1">
-            {KITTY_EQUATION.trickPoints} − {kittyPoints} × 2 = <b>{KITTY_EQUATION.setFinal}</b> &lt;
-            {KITTY_EQUATION.contract} → 打输
+            {KITTY_EQUATION.trickPoints} − {kittyPoints} × {KITTY_EQUATION.multiplier} =
+            <b class="tabular-nums">{KITTY_EQUATION.setFinal}</b> &lt; {KITTY_EQUATION.contract} → 打输
           </p>
         </div>
       </div>
 
-      <p class="pt-1 font-semibold text-white/80">怎么判断「打成」</p>
-      <p>
-        一条式子：<b class="text-ivory">最终得分 = 墩分 ± 底牌分 × 末轮张数</b>（末轮庄家赢就是 +，闲家赢就是 −），
-        <b class="text-ivory">≥ 定约分</b> 就是打成 —— 正好等于也算打成，所以上面例子里的 −20 会让 55 掉到 35，直接出局。
+      <p class="rounded-xl bg-black/30 p-3 text-[11px] text-white/70">
+        <b class="text-ivory">这就是最后一轮关键所在</b>：底牌只有 {kittyPoints} 分，却能在最后一轮的输赢之间摆动 ±<b class="tabular-nums"
+          >{swing}</b
+        > 分。同一副牌，从「庄家打包升 {madeLevelsNow} 级」直接翻成「庄家打输、两家各升 {shortfallLevels} 级」。
       </p>
-      <p>
-        另外记住这条恒等式：<b class="text-ivory">庄家墩分 + 闲家墩分 + 底牌分 = 100</b>。底牌那 3 张分不算在任何人的墩里，
-        只在结算时按倍数在庄家账上进出 —— 这就是为什么「闲家抓够 100 − 定约分」只在底牌 0 分时才对（见叫牌一节的表格）。
-      </p>
-    </div>
-  </section>
 
-  <section id="levels" class={section}>
-    <h2 class={heading}>9. 升级与赛程</h2>
-    <div class={body}>
       <p>
-        级别写成 <b class="text-ivory">点数(+过次)</b>：从 2(+0) 起步，A 之后进 2(+1)，可以越级跳档。
+        <b class="text-ivory">闲家要抓够多少分才能把庄家打输？</b> 不是 <b class="tabular-nums"
+          >100 − {KITTY_EQUATION.contract} = {settle.naiveBar}</b
+        >：
       </p>
-      <div class="flex flex-wrap gap-4 rounded-xl bg-black/30 p-3">
-        {#each LEVEL_DEMO as level, index (index)}
-          <div class="text-center">
-            <LevelBadge {level} />
-            <p class="mt-1.5 text-[10px] text-white/45">{`${level.rank === 14 ? 'A' : level.rank}(+${level.cycle})`}</p>
-          </div>
-        {/each}
-        <p class="self-center text-[11px] text-white/55">左起：5(+0) 也叫「打 5」、A(+1)、5(+2)</p>
-      </div>
+      <p class="rounded-xl bg-black/30 p-3 text-[11px] text-white/70">
+        底牌那 {kittyPoints} 分不进任何人的轮，只走庄家的账 —— 所以<b class="text-emerald-300">保底</b>时闲家要严格超过
+        <b class="tabular-nums text-emerald-300">{settle.protectBar}</b> 分，<b class="text-rose-300">抠底</b>时超过
+        <b class="tabular-nums text-rose-300">{settle.digBar}</b> 分就够。
+      </p>
+      <p>一句话：<b class="text-ivory">埋了分，就等于把自己的命门押在最后一轮上。</b></p>
+      <p class="text-[11px] text-white/50">
+        但注意：如果前期分差太大，庄家保底 / 闲家抠底也可能无力回天。若庄家不埋分，那最后一轮便没有什么特殊的用处。
+      </p>
 
-      <p class="pt-1 font-semibold text-white/80">庄家怎么升级</p>
-      <p>
-        升级<b class="text-ivory">只看实际拿到的最终得分，与叫了多少分无关</b>：叫 45 打成拿 75 分，和叫 75 打成拿 75 分，
-        升级完全一样。这是叫牌要往上叫的真正理由 —— 牌力应该换成级数。
-      </p>
-      <p>
-        得分的来源是 5 / 10 / K，所以<b class="text-ivory">只会是 5 的倍数</b>，59 / 69 / 79 这些边界永远不会出现。
-        真实的档位只有这些：
-      </p>
+      <p class={subhead}>打成 → 庄家升级</p>
+      <p>升级只看最终得分：</p>
       <div class="overflow-hidden rounded-xl ring-1 ring-white/10">
         <table class="w-full text-[11px]">
           <thead class="bg-white/5 text-white/50">
@@ -533,9 +659,19 @@
           </tbody>
         </table>
       </div>
+
       <p>
-        「升 N 级」就是<b class="text-ivory">从你当前的级别往前推进 N 级</b>，跨过 A 就进位到下一轮的 2：
+        <b class="text-ivory">「升 N 级」= 从你现在的级别往前推 N 级，跨过 A 就进位到下一轮的 2：</b>
       </p>
+      <div class="flex flex-wrap gap-4 rounded-xl bg-black/30 p-3">
+        {#each LEVEL_DEMO as level, index (index)}
+          <div class="text-center">
+            <LevelBadge {level} />
+            <p class="mt-1.5 text-[10px] text-white/45">{`${level.rank === 14 ? 'A' : level.rank}(+${level.cycle})`}</p>
+          </div>
+        {/each}
+        <p class="self-center text-[11px] text-white/55">左起：5(+0) 也叫「打 5」、A(+1)、5(+2)</p>
+      </div>
       <div class="space-y-1.5">
         {#each steps as step, index (index)}
           <p class="rounded-lg bg-black/30 px-3 py-2 text-[11px]">
@@ -546,25 +682,32 @@
         {/each}
       </div>
       <p>
-        举例：庄家现在是 5(+0)，打成拿到 75 分 → 升 3 级 → <b class="text-gold">8(+0)</b>。
+        上例：{TUTORIAL_NAMES[DEMO_CONTRACT.declarerSeat]}是 5(+0)，保底拿 {KITTY_EQUATION.madeFinal} 分 → 升
+        {madeLevelsNow} 级 → <b class="text-gold">{demoAfterLabel}</b>。
       </p>
 
-      <p class="pt-1 font-semibold text-white/80">打输了呢</p>
-      <p>
-        庄家<b class="text-ivory">级别不变</b>；两名闲家各升 <b class="text-ivory">ceil(差 / 10)</b> 级（向上取整），
-        其中 <b class="text-ivory">差 = 定约分 − 最终得分</b>。差同样是 5 的倍数，所以实际只会出现这些档：
-      </p>
+      <p class={subhead}>打输 → 庄家级别不变，两家闲家各升「上取整(差 / 10)」级</p>
+      <p>其中 <b class="text-ivory">差 = 叫的分数 − 最终得分</b>：</p>
       <div class="flex flex-wrap gap-1.5">
         {#each DEFENDER_STEPS as step (step.shortfall)}
           <span class={chip}>差 {step.shortfall} → 各升 <b class="text-gold">{step.levels}</b> 级</span>
         {/each}
       </div>
       <p>
-        所以闲家也有动力把分抓狠一点：庄家差得越多，两名闲家一次升得越多（差 35 → 各升 4 级）。
-        反过来说，庄家叫得太高而打输，代价是给对手两人同时送级。
+        上例抠底：差 = {KITTY_EQUATION.contract} − {KITTY_EQUATION.setFinal} = <b class="tabular-nums"
+          >{KITTY_EQUATION.contract - KITTY_EQUATION.setFinal}</b
+        > → 两家各升 {shortfallLevels} 级。
       </p>
       <p>
-        对局结束：<b class="text-ivory">两家达 2(+2)，或一家达 2(+3)</b>；总进度最高者为冠军。
+        所以叫太高而打输，代价是<b class="text-ivory">同时给对手两个人送级</b>；反过来，闲家也有动力把分抓狠一点 ——
+        庄家差得越多，两家一次升得越多。
+      </p>
+
+      <p class={subhead}>什么时候结束</p>
+      <p>
+        如果想要打得长一点（约 20 局），任意<b class="text-ivory">两位玩家</b>达到 <b class="text-gold">2(+2)</b>，或者任意<b
+          class="text-ivory">一位玩家</b
+        >冲到 <b class="text-gold">2(+3)</b>，对局结束，总进度最高的那位是冠军。当然，也可以协商任何时候结束。
       </p>
     </div>
   </section>

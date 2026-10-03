@@ -4,15 +4,27 @@
  * 关键约束：这里所有示例的「正确性」都由引擎自己的纯函数在 test/tutorial.test.ts 里验证
  * （validateLead / validateFollow / trickWinner / classOfSet / cardsPoints / madeLevels），
  * 所以规则引擎改动后教程不会悄悄变成错的。
+ *
+ * 两条额外的自我约束：
+ * - 主牌分组、副牌整门这些清单**从 fullDeck() 现场分类算出来**，不手写牌面清单 ——
+ *   手写的清单改了引擎也不会报错，而「18 张主牌」这种数字必须永远等于引擎的口径。
+ * - 示例数值只留一份：叫牌示例的定约、结算示例的定约、门槛示例的定约都来自
+ *   DEMO_CONTRACT.points，避免出现「叫牌说 45、结算说 70」这种两副牌。
  */
 
 import {
+  cardClass,
   cardKey,
   fullDeck,
+  isJoker,
+  SUIT_LABEL,
+  sortHand,
   type BidCall,
   type Card,
+  type Contract,
   type Level,
   type Seat,
+  type Suit,
   type TrumpModel
 } from '@sixty/engine';
 
@@ -30,6 +42,14 @@ export const DEMO_TRUMP = TRUMP_HEARTS;
 
 /** 教程里三个座位的代称；座位号与真实牌局一致（0/1/2） */
 export const TUTORIAL_NAMES = ['你', '阿豪', '小美'] as const;
+
+/** 一副牌的四步。阶段条按这个顺序渲染，并链到对应小节 */
+export const PHASES: readonly { readonly id: string; readonly label: string; readonly blurb: string }[] = [
+  { id: 'auction', label: '叫牌', blurb: '定庄、定主、定要抓多少分' },
+  { id: 'bury', label: '埋底', blurb: '庄家从 20 张里扣 3 张回去' },
+  { id: 'play', label: '打牌', blurb: '17 轮，赢的人领下一轮' },
+  { id: 'scoring', label: '结算', blurb: '算最终得分，据此升级' }
+];
 
 const DECK: ReadonlyMap<string, Card> = new Map(fullDeck().map((card) => [cardKey(card), card]));
 
@@ -70,13 +90,74 @@ export const POINT_ROWS: readonly { readonly label: string; readonly points: num
   { label: '其余（含双王）', points: 0 }
 ];
 
+/** 一墩牌的样子：这一轮的分记给赢家 */
+export const TRICK_DEMO = handOf('CK', 'H5', 'S7');
+
 /* ---------- 2. 级牌与主牌 ---------- */
 
-/** 同一组牌在「主打 ♥」与「无主」两种模型下的分类完全不同：金边即主牌 */
-export const TRUMP_DEMO_CARDS = handOf('H2', 'H10', 'H5', 'S5', 'C5', 'D5', 'S10', 'C9', 'j0', 'j1');
+export interface TrumpGroup {
+  readonly title: string;
+  readonly hint: string;
+  readonly cards: readonly Card[];
+}
 
-/** 主牌全序：主花色小牌 < 副级（三张相等）< 主级 < 小王 < 大王 */
-export const TRUMP_LADDER = handOf('H2', 'H3', 'S5', 'H5', 'j0', 'j1');
+/**
+ * 主牌的三部分（无主时只有两部分）。整副牌现场分类，所以
+ * 「2 张王 + 4 张级牌 + 12 张主花色 = 18」这个口径不可能与引擎漂移。
+ */
+export function trumpGroups(trump: TrumpModel): readonly TrumpGroup[] {
+  const deck = fullDeck();
+  const groups: TrumpGroup[] = [
+    { title: '王', hint: '永远算主牌，也永远最大', cards: sortHand(deck.filter(isJoker), trump) },
+    {
+      title: '级牌',
+      hint: '点数等于庄家级别的那四张，什么花色都算',
+      cards: sortHand(deck.filter((c) => !isJoker(c) && c.rank === trump.rank), trump)
+    }
+  ];
+  if (trump.strain !== 'NT') {
+    const strain: Suit = trump.strain;
+    groups.push({
+      title: `${SUIT_LABEL[strain]} 整门`,
+      hint: '叫牌叫到的那个花色，整门都是主牌',
+      cards: sortHand(deck.filter((c) => !isJoker(c) && c.suit === strain && c.rank !== trump.rank), trump)
+    });
+  }
+  return groups;
+}
+
+/** 某将牌模型下主牌的总张数（有主 18 / 无主 6） */
+export function trumpCount(trump: TrumpModel): number {
+  return trumpGroups(trump).reduce((sum, group) => sum + group.cards.length, 0);
+}
+
+/** 副牌某一门的整门：例级牌 5 时 ♣ 门是 ♣2 ♣3 ♣4 ♣6 … ♣A，**没有 ♣5** */
+export function sideSuitCards(trump: TrumpModel, suit: Suit): readonly Card[] {
+  return sortHand(fullDeck().filter((c) => cardClass(c, trump) === suit), trump);
+}
+
+/**
+ * 主牌内部的大小顺序（从大到小）。这是**唯一一份**顺序数据：页面既用它渲染
+ * 「大王 → 小王 → ♥5 → ♠5 ♦5 ♣5 → ♥A」那一条，也用它生成下面的表格。
+ *
+ * 副级三张完全相等，所以这里给的是**分组**而不是一条严格递减的序列：
+ * 页面上把这三张并排渲染，读者才不会以为 ♠5 > ♦5。
+ * （原来这里是手写的升序数组，页面却标着「从大到小」，左右正好读反。）
+ */
+export const TRUMP_LADDER_GROUPS: readonly {
+  readonly title: string;
+  readonly note: string;
+  readonly cards: readonly Card[];
+}[] = [
+  { title: '大王', note: '最大的一张', cards: handOf('j1') },
+  { title: '小王', note: '仅次于大王', cards: handOf('j0') },
+  { title: '主级', note: '主花色里的那张级牌（示例 ♥5）', cards: handOf('H5') },
+  { title: '副级（三张相等）', note: '三门副牌里的级牌（示例 ♠5 ♦5 ♣5），三张完全一样大，平张时先出的赢', cards: handOf('S5', 'D5', 'C5') },
+  { title: '主花色普通牌', note: '♥2 到 ♥A（跳过 ♥5，它是主级）', cards: handOf('HA') }
+];
+
+/** 顺子可以跨过「主花色 → 级牌 → 王」的边界：♥A → ♠5 → ♥5 在主牌全序里相邻 */
+export const TRUMP_RUN_CROSS = handOf('HQ', 'HK', 'HA', 'S5', 'H5');
 
 /* ---------- 3. 叫牌 ---------- */
 
@@ -88,8 +169,8 @@ export const DEMO_AUCTION: readonly { readonly seat: Seat; readonly call: BidCal
   { seat: 0, call: 'pass' }
 ];
 
-/** 上面这段叫牌的结论，用于文案与测试对齐 */
-export const DEMO_CONTRACT = { points: 45, strain: 'H', declarerSeat: 1 as Seat };
+/** 上面这段叫牌的结论，用于文案与测试对齐。显式标 Contract 类型，否则 strain 会退化成 string */
+export const DEMO_CONTRACT: Contract = { points: 45, strain: 'H', declarerSeat: 1 as Seat };
 
 /**
  * 定约 45♥、示例暗底 10 分、末轮每人 2 张时，闲家到底要抓多少分。
@@ -97,15 +178,7 @@ export const DEMO_CONTRACT = { points: 45, strain: 'H', declarerSeat: 1 as Seat 
  */
 export const DEMO_SETTLE_INPUT = { contract: DEMO_CONTRACT.points, kittyPoints: 10, multiplier: 2 } as const;
 
-/** 「叫法的意图」表：把价格与承担的责任对上 */
-export const AUCTION_INTENTS: readonly {
-  readonly call: string;
-  readonly intent: string;
-}[] = [
-  { call: '40 起步叫', intent: '有牌但想便宜拿下：把决定权交给对手，代价是收益也小' },
-  { call: '45 - 55 加叫', intent: '真有牌且愿意承担；同时在逼对手判断你是抢庄还是诈唬' },
-  { call: '60 以上跳叫', intent: '要么极限强牌，要么就是赌对手不敢接的阻击' }
-];
+/** 「叫法的意图」表已删除：原表写「40 起步叫…代价是收益也小」，而收益并不随叫分变化（见 KITTY_EQUATION 上方的说明）。 */
 
 /* ---------- 4. 埋底与结算 ---------- */
 
@@ -115,9 +188,20 @@ export const BURY_HAND = handOf('H2', 'H3', 'H4', 'H6', 'H10', 'HK', 'S9', 'SJ',
 /** 示例暗底：♥5 + ♦5 + ♠7 = 10 分 */
 export const DEMO_KITTY = handOf('H5', 'D5', 'S7');
 
-/** 一条算式的示例数值：墩分 55 + 底牌 10 × 末轮 2 张 = 75，定约 70 ⇒ 打成 3 级 */
+/** 埋分能撬动多大：末轮 3 张顺子 × 20 分底牌。乘积由页面算，别手写 60 */
+export const KITTY_SWING = { multiplier: 3, kittyPoints: 20 } as const;
+
+/**
+ * 一条算式的示例数值，与叫牌示例**同一副牌**（定约 45♥，见 DEMO_CONTRACT）：
+ * 墩分 55 + 底牌 10 × 末轮 2 张 = 75 ≥ 45 ⇒ 打成 3 级；
+ * 同一边被抠底则是 55 − 20 = 35 < 45 ⇒ 打输，差 10 ⇒ 两家闲家各升 1 级。
+ *
+ * 注意 `contract` 只参与「打成/打输」与闲家差额，**不参与庄家升几级**：
+ * 庄家升级是 madeLevels(finalScore) 的单参数函数（engine/state.ts）。
+ * 所以「叫高一点能多升级」是错的 —— 叫高只是把及格线抬高。
+ */
 export const KITTY_EQUATION = {
-  contract: 70,
+  contract: 45,
   trickPoints: 55,
   kittyPoints: 10,
   multiplier: 2,
@@ -131,7 +215,7 @@ export const MULTIPLIER_ROWS: readonly { readonly lastTrick: string; readonly mu
   { lastTrick: '末轮每家 3 张', multiplier: 3 }
 ];
 
-/* ---------- 5. 打牌：三个练手示例 ---------- */
+/* ---------- 5. 打牌：练手示例 ---------- */
 
 export interface TryPlayDemo {
   readonly id: string;
@@ -146,30 +230,39 @@ export interface TryPlayDemo {
   readonly illegal: readonly (readonly string[])[];
 }
 
-/** 练手 1：领出——单张、同门顺子都行，混门/不连不行 */
-export const TRY_LEAD: TryPlayDemo = {
-  id: 'lead',
-  title: '练手 1 · 领出',
-  task: '你领出（本副级牌 5、主打 ♥）。试着点选牌面：单张、或同门顺子都合法；混门、不相邻都不行。',
-  trump: TRUMP_HEARTS,
-  hand: handOf('S9', 'S10', 'SJ', 'SQ', 'H2', 'H3', 'C6', 'D8'),
-  lead: null,
-  legal: [
-    ['S9'],
-    ['S9', 'S10', 'SJ', 'SQ'],
-    ['H2', 'H3']
-  ],
-  illegal: [
-    ['S9', 'SJ'],
-    ['S9', 'S10', 'SJ', 'SQ', 'H2'],
-    ['C6', 'D8']
-  ]
-};
+/**
+ * 领出那一节现在是静态的 ✓/✗ 对照（不再做成练手题），但每一条仍要过引擎：
+ * `ok` 必须与 validateLead 的结论一致，否则教程就在教一条不存在的规则。
+ */
+export interface LeadCase {
+  readonly ok: boolean;
+  readonly keys: readonly string[];
+  readonly note: string;
+}
+
+/** 领出示例所用的手牌（上面的每一条 case 都必须取自这手牌） */
+export const LEAD_HAND = handOf('S9', 'S10', 'SJ', 'SQ', 'H2', 'H3', 'C6', 'D8');
+
+export const LEAD_CASES: readonly LeadCase[] = [
+  { ok: true, keys: ['S9'], note: '单张，怎么出都行' },
+  { ok: true, keys: ['S9', 'S10', 'SJ', 'SQ'], note: '同门 4 连' },
+  { ok: true, keys: ['H2', 'H3'], note: '♥ 是主牌门，2-3 在主牌里也连着' },
+  { ok: false, keys: ['S9', 'SJ'], note: '中间缺 ♠10，不相邻' },
+  { ok: false, keys: ['S9', 'S10', 'SJ', 'SQ', 'H2'], note: '混门（不允许甩牌）' },
+  { ok: false, keys: ['C6', 'D8'], note: '混门' }
+];
+
+/** 跟牌一节的反面教材：这一门只有 1 张，凑不满 3 张，剩下的随便垫 */
+export const FOLLOW_SHORT_HAND = handOf('CQ', 'S9', 'S10', 'H2', 'D8');
+export const FOLLOW_SHORT_LEAD = handOf('C3', 'C4', 'C6');
+
+/** 练手 2 的正确答案的牌面（页面照这个渲染对照图，不用对 hand 取切片） */
+export const FOLLOW_ANSWER = handOf('C3', 'C4', 'C6', 'CQ');
 
 /** 练手 2：跟牌——该门够张数时必须全出该门，且结构优先（3 顺 + 1 > 2 顺 + 2） */
 export const TRY_FOLLOW: TryPlayDemo = {
   id: 'follow',
-  title: '练手 2 · 跟牌（结构优先）',
+  title: '练手 1 · 跟牌（结构优先）',
   task: '上家领出 ♣8-9-10-J 四张顺子。你手里 ♣ 有 3 顺（3-4-6，级牌 5 不在这一门）+ 2 顺（Q-K），该怎么跟？',
   trump: TRUMP_HEARTS,
   hand: handOf('C3', 'C4', 'C6', 'CQ', 'CK', 'S9', 'H2'),
@@ -187,7 +280,7 @@ export const TRY_FOLLOW: TryPlayDemo = {
 /** 练手 3：缺门——可以杀牌（能赢）也可以垫牌（不能赢） */
 export const TRY_RUFF: TryPlayDemo = {
   id: 'ruff',
-  title: '练手 3 · 缺门杀牌',
+  title: '练手 2 · 缺门杀牌',
   task: '上家领出 ♠7-8-9 三张顺子，你手里一张 ♠ 都没有。出主牌顺子能赢下这轮，垫牌不能。',
   trump: TRUMP_HEARTS,
   hand: handOf('H3', 'H4', 'H6', 'C2', 'C3', 'D4'),
@@ -199,7 +292,8 @@ export const TRY_RUFF: TryPlayDemo = {
   illegal: [['H3', 'H4']]
 };
 
-export const TRY_DEMOS: readonly TryPlayDemo[] = [TRY_LEAD, TRY_FOLLOW, TRY_RUFF];
+/** /rules 里做成可点的练手题（领出那节改成了静态 ✓/✗ 对照，见 LEAD_CASES） */
+export const TRY_DEMOS: readonly TryPlayDemo[] = [TRY_FOLLOW, TRY_RUFF];
 
 /* ---------- 6. 打牌推论里的静态示例 ---------- */
 
