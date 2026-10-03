@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node build/index.js",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test": "node --test --test-isolation=none \"test/*.test.ts\"",
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",

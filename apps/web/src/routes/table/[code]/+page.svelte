@@ -23,7 +23,12 @@
 
   // 只取首次 SSR 数据构造客户端状态，不随后续 data 变化重建（角色与手牌以 SSE 负载为准）
   const client = untrack(
-    () => new TableClient(data.code, { role: data.role, view: data.view, you: data.you, table: data.table })
+    () =>
+      new TableClient(
+        data.code,
+        { role: data.role, view: data.view, you: data.you, table: data.table },
+        data.inherited
+      )
   );
 
   let historyOpen = $state(false);
@@ -44,10 +49,14 @@
   /** 文本里一律用玩家名指代（不再有东/南/西）：座位卡显示的就是这些名字 */
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
 
-  /** 布局锚点：玩家是自己，观战者是固定座位（左＝0、右＝1、下＝2） */
-  const anchor = $derived(anchorSeatOf(you?.seat ?? data.seat));
-  /** 文案里的「我的座位」：观战者是 -1，于是所有座位都显示玩家名 */
-  const label = $derived(labelSeatOf(you?.seat ?? data.seat));
+  /**
+   * 布局锚点与「我的座位」**只由 `you` 决定**（观战者 = 固定锚点 + 谁都不叫「你」）。
+   *
+   * 曾经这里回退到 SSR 的 `data.seat`：那个值只在上次 load 时算过，多标签页里另一处离座、
+   * 或离座当帧 SSE 先到时，观战者会顶着旧座位被叫「你」。`data.seat` 已随之下线。
+   */
+  const anchor = $derived(anchorSeatOf(you?.seat ?? null));
+  const label = $derived(labelSeatOf(you?.seat ?? null));
 
   const leftSeat = $derived((anchor + 1) % 3);
   const rightSeat = $derived((anchor + 2) % 3);
@@ -144,6 +153,22 @@
 
   {#if client.error}
     <p class="mb-2 rounded-lg bg-red-500/20 px-3 py-2 text-xs text-red-200">{client.error}</p>
+  {/if}
+
+  <!-- 中途补位：接下的是别人的手牌与进度，说一声再让人上手（关掉即消，不常驻） -->
+  {#if client.inheritedNotice && you !== null}
+    <div class="mb-2 flex items-center gap-2 rounded-lg bg-gold/15 px-3 py-2 text-xs text-gold ring-1 ring-gold/30">
+      <span class="min-w-0 flex-1">
+        这一副正在进行：你补进了空座，接下这手 <b class="tabular-nums">{you.hand.length}</b> 张牌继续打完。
+      </span>
+      <button
+        type="button"
+        class="shrink-0 rounded-md border border-gold/40 px-2 py-0.5 text-[11px] hover:bg-gold/10"
+        onclick={() => (client.inheritedNotice = false)}
+      >
+        知道了
+      </button>
+    </div>
   {/if}
 
   <div class="felt relative min-h-0 flex-1 rounded-[1.75rem] sm:rounded-[2.5rem]">

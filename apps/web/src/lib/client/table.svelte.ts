@@ -2,6 +2,7 @@ import { cardKey, type BidCall, type Card, type PublicView } from '@sixty/engine
 import type { PlayerHand, Role, StreamPayload, TableView } from '$lib/shared';
 import { saveCredential } from '$lib/identity';
 import { checkPlay } from '$lib/labels';
+import { shouldResetSelection, type SelectionContext } from '$lib/selection';
 
 export type ConnectionState = 'connecting' | 'live' | 'offline';
 
@@ -18,11 +19,14 @@ export class TableClient {
   busy = $state(false);
   error = $state<string | null>(null);
   connection = $state<ConnectionState>('connecting');
+  /** 入座时这一副正在进行 ⇒ 我接下了别人的手牌（一次性提示，关掉即消） */
+  inheritedNotice = $state(false);
 
   #source: EventSource | null = null;
 
-  constructor(code: string, initial: StreamPayload) {
+  constructor(code: string, initial: StreamPayload, inherited = false) {
     this.code = code;
+    this.inheritedNotice = inherited;
     this.#apply(initial);
   }
 
@@ -41,14 +45,20 @@ export class TableClient {
     };
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as StreamPayload;
+      // 只有让选择失去意义的帧才清空：无关连接引起的广播不该刷掉正在选的牌（见 selection.ts）
+      const reset = shouldResetSelection(this.#snapshot(), payload);
       this.#apply(payload);
-      this.selected = [];
+      if (reset) this.selected = [];
       this.connection = 'live';
     };
     source.onerror = () => {
       this.connection = 'offline';
     };
     this.#source = source;
+  }
+
+  #snapshot(): SelectionContext {
+    return { role: this.role, view: this.view, you: this.you };
   }
 
   disconnect(): void {
@@ -115,8 +125,14 @@ export class TableClient {
   }
 
   /** 入座：继承该座位的级别与手牌；角色会随下一帧负载变成 player */
-  sit(): Promise<boolean> {
-    return this.#request(`/api/tables/${this.code}/seat`, { method: 'POST' }).then((p) => p !== null);
+  async sit(): Promise<boolean> {
+    const payload = (await this.#request(`/api/tables/${this.code}/seat`, { method: 'POST' })) as {
+      inherited?: boolean;
+    } | null;
+    if (payload === null) return false;
+    // 这一副正在进行的话，我接下的是别人的进度：提示一次，别让人拿着陌生手牌发愣
+    this.inheritedNotice = payload.inherited === true;
+    return true;
   }
 
   /** 离座：座位空出、本人转为观战者（服务端幂等） */

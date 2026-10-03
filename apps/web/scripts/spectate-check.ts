@@ -138,11 +138,19 @@ async function page(path: string, credential: string): Promise<string> {
   return response.text();
 }
 
-/** 开一条 SSE 并只读第一帧（读完即关） */
-async function firstFrame(
-  code: string,
-  credential: string
-): Promise<{ payload: Payload; close: () => void }> {
+interface Stream {
+  /** 读下一帧（超时即报错，绝不静默挂住） */
+  next: (timeoutMs?: number) => Promise<Payload>;
+  close: () => void;
+}
+
+/**
+ * 开一条 SSE 并按需逐帧读。
+ *
+ * 注意**不要按位置对齐帧**：连接时会先发一帧再立刻广播一帧（`stream/+server.ts`），
+ * 所以「第 N 帧」并不稳定指向某个语义；按内容（版本号、role）判断才对。
+ */
+async function openStream(code: string, credential: string): Promise<Stream> {
   const controller = new AbortController();
   const response = await fetch(`${BASE}/api/tables/${code}/stream`, {
     headers: { authorization: `Bearer ${credential}` },
@@ -152,25 +160,32 @@ async function firstFrame(
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  for (;;) {
-    const chunk = await reader.read();
-    assert(!chunk.done, 'SSE 提前关闭');
-    buffer += decoder.decode(chunk.value, { stream: true });
-    const boundary = buffer.indexOf('\n\n');
-    if (boundary >= 0) {
-      const block = buffer.slice(0, boundary);
-      const line = block.split('\n').find((item) => item.startsWith('data: '));
-      if (line) {
-        return {
-          payload: JSON.parse(line.slice(6)) as Payload,
-          close: () => {
-            controller.abort();
-            void reader.cancel().catch(() => undefined);
-          }
-        };
+
+  const next = async (timeoutMs = 5000): Promise<Payload> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const boundary = buffer.indexOf('\n\n');
+      if (boundary >= 0) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const line = block.split('\n').find((item) => item.startsWith('data: '));
+        if (line) return JSON.parse(line.slice(6)) as Payload;
+        continue;
       }
+      if (Date.now() > deadline) throw new Error(`SSE 等待下一帧超时（${timeoutMs}ms）`);
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error('SSE 提前关闭');
+      buffer += decoder.decode(chunk.value, { stream: true });
     }
-  }
+  };
+
+  return {
+    next,
+    close: () => {
+      controller.abort();
+      void reader.cancel().catch(() => undefined);
+    }
+  };
 }
 
 async function main(): Promise<void> {
@@ -222,13 +237,29 @@ async function main(): Promise<void> {
   const leaked = [...new Set(cardsIn(spectator).map(cardKey))].filter((key) => hands.has(key));
   assert(leaked.length === 0, `观战负载里出现了在座手牌：${leaked.join(',')}`);
 
-  // 3) 观战 SSE：第一帧就是观战负载，且玩家看得到「N 人观战」
-  const frame = await firstFrame(code, guest.credential);
-  assert(frame.payload.role === 'spectator', '观战 SSE 第一帧不是观战负载');
+  // 3) 观战 SSE：观战者第一帧就是公共视图；玩家看得到「N 人观战」；
+  //    并且**玩家会因为别人连上而收到一帧同版本的「无关帧」** —— 这正是客户端不该无条件清空选牌的原因
+  //    （`lib/selection.ts` 的 shouldResetSelection 就是为它写的，客户端没清空才叫修好）。
+  const playerStream = await openStream(code, players[1]!.credential);
+  const playerBefore = await playerStream.next();
+  const versionBefore = playerBefore.view?.version ?? null;
+
+  const frame = await openStream(code, guest.credential);
+  const spectatorFrame = await frame.next();
+  assert(spectatorFrame.role === 'spectator', '观战 SSE 第一帧不是观战负载');
+
   const watched = await payloadOf(code, players[1]!.credential);
   assert(watched.table.spectatorCount === 1, `观战人数徽标应为 1，实际 ${watched.table.spectatorCount}`);
+
+  const rosterFrame = await playerStream.next();
+  assert(
+    rosterFrame.role === 'player' && (rosterFrame.view?.version ?? null) === versionBefore,
+    `玩家应因「有人连上」收到一帧同版本的名单帧（版本 ${versionBefore} → ${rosterFrame.view?.version}）；` +
+      '若这一帧消失了，观战者的在线点与人数就不会更新'
+  );
+  playerStream.close();
   frame.close();
-  console.log('观战负载只有公共信息，SSE 正常，玩家侧观战人数 = 1');
+  console.log('观战负载只有公共信息，SSE 正常，玩家侧观战人数 = 1（并确认存在同版本的无关帧）');
 
   // 4) 观战者不能操作
   const denied = await api(
@@ -266,9 +297,28 @@ async function main(): Promise<void> {
   assert(reload.includes('观战中'), '离座者刷新后被自动塞回了座位（观战记录没生效）');
   console.log('离座：座位空出、本人转观战、刷新不回座、三人未满开不了下一副');
 
-  // 6) 补位：占据空出来的座位，继承级别与**那一手牌**
+  // 6) 中途补位：接下的是别人的手牌与进度，界面必须先说一声
+  //    6a. 直接点「入座」（POST /seat）—— 响应里的 inherited 告诉前端要不要提示
+  const walkin = await claim(`路过-${stamp}`);
+  const walkinPage = await page(`/table/${code}`, walkin.credential);
+  assert(walkinPage.includes('补进了空座'), '中途到达被自动补位时，页面没有提示「接下了别人的牌」');
+  assert(!walkinPage.includes('观战中'), '自动补位后仍显示观战');
+  const giveBack = await api(`/api/tables/${code}/seat`, { method: 'DELETE' }, walkin.credential);
+  assert(giveBack.status === 200, '让出座位失败，后续补位断言没法继续');
+  console.log('中途到达即补位：页面提示「补进了空座、接下 N 张牌继续打完」');
+
+  //    6b. 观战者点「入座」：座位、级别、那一手牌逐张继承，且响应标出 inherited
   const sit = await api(`/api/tables/${code}/seat`, { method: 'POST' }, guest.credential);
   assert(sit.status === 200, `补位入座失败：${sit.status} ${JSON.stringify(sit.payload)}`);
+  assert(
+    (sit.payload as { inherited?: boolean }).inherited === true,
+    '这一副正在进行时入座，响应没有标记 inherited（界面就不会提示接下了别人的手牌）'
+  );
+  const again = await api(`/api/tables/${code}/seat`, { method: 'POST' }, guest.credential);
+  assert(
+    (again.payload as { inherited?: boolean }).inherited === false,
+    '已经在座时重复入座不该再报 inherited（那不是「补位」，是幂等）'
+  );
   const seated = await payloadOf(code, guest.credential);
   assert(seated.role === 'player' && seated.you !== null, '补位后应拿到个人视图');
   assert(seated.you.seat === 0, `补位者应坐在空出来的 0 号座，实际 ${seated.you.seat}`);

@@ -271,6 +271,7 @@ async function main(): Promise<void> {
   assert(!watching.includes('data-marked="true"'), '观战页面出现了底牌标记');
   assert(!/class="card[ "]/.test(watching), '观战页面渲染了牌（手牌或其他人的牌）');
   assert(watching.includes('改名 / 换身份'), '观战页面没有身份快捷编辑入口');
+  assert(!watching.includes('补进了空座'), '观战页面出现了「接下手牌」提示（那是补位玩家的）');
   assertHelpTrigger(watching, '观战', '观战页面');
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');

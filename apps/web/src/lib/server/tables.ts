@@ -145,9 +145,20 @@ export function addWatcher(tableId: number, userId: number): void {
 }
 
 export type EnterResult =
-  | { readonly role: 'player'; readonly table: TableInfo; readonly seat: number }
+  | { readonly role: 'player'; readonly table: TableInfo; readonly seat: number; readonly inherited: boolean }
   | { readonly role: 'spectator'; readonly table: TableInfo }
   | { readonly error: string };
+
+/**
+ * 此刻是否有一副正在进行（结算前）。
+ *
+ * 入座时它为真 ⇒ 你接下的是**别人的牌局进度**（该座位的手牌与级别），需要告知一声：
+ * 否则新来的人会莫名其妙拿着一手陌生的牌、还不知道轮到自己要出什么。
+ */
+function dealInProgress(tableId: number): boolean {
+  const state = getGameState(tableId);
+  return state !== null && state.deal !== null && state.deal.phase !== 'scored';
+}
 
 /**
  * 到达一张同桌（点邀请码/邀请链接、或大厅「加入」）：
@@ -158,7 +169,7 @@ export function enterTable(code: string, userId: number): EnterResult {
   const table = getTableByCode(code);
   if (table === null) return { error: '同桌不存在' };
   const seat = seatOf(table, userId);
-  if (seat !== null) return { role: 'player', table, seat };
+  if (seat !== null) return { role: 'player', table, seat, inherited: false };
 
   const freeSeats = table.seats.filter((id) => id === null).length;
   const role = resolveArrivalRole({ seated: false, watching: watchingOf(table.id, userId), freeSeats });
@@ -170,7 +181,7 @@ export function enterTable(code: string, userId: number): EnterResult {
       userId,
       now()
     );
-    return { role: 'player', table: getTableByCode(code)!, seat: free };
+    return { role: 'player', table: getTableByCode(code)!, seat: free, inherited: dealInProgress(table.id) };
   }
 
   addWatcher(table.id, userId);
@@ -200,11 +211,14 @@ export function leaveSeat(code: string, userId: number): ActionResult {
 }
 
 /** 入座（观战者的「入座」按钮，也是大厅进入满座桌后的补位入口） */
-export function takeSeat(code: string, userId: number): { seat: number } | { error: string } {
+export function takeSeat(
+  code: string,
+  userId: number
+): { seat: number; inherited: boolean } | { error: string } {
   const table = getTableByCode(code);
   if (table === null) return { error: '同桌不存在' };
   const existing = seatOf(table, userId);
-  if (existing !== null) return { seat: existing };
+  if (existing !== null) return { seat: existing, inherited: false };
   const free = freeSeatOf(table);
   if (free === -1) return { error: `座位已满（${SEAT_COUNT} 人），等有人离座` };
   return transaction(() => {
@@ -215,7 +229,7 @@ export function takeSeat(code: string, userId: number): { seat: number } | { err
       userId,
       now()
     );
-    return { seat: free };
+    return { seat: free, inherited: dealInProgress(table.id) };
   });
 }
 

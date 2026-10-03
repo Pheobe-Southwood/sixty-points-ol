@@ -11,7 +11,7 @@ export const POST: RequestHandler = async (event) => {
   if ('error' in result) error(400, result.error);
   const table = getTableByCode(event.params.code);
   if (table !== null) broadcast(table.id);
-  return json({ seat: result.seat });
+  return json({ seat: result.seat, inherited: result.inherited });
 };
 
 /** 离座：座位空出、本人转为观战者；本来不在座也返回成功（幂等） */

@@ -1,5 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
-import { credentialOf, identityFrom } from '$lib/server/auth';
+import { identityFrom } from '$lib/server/auth';
 import { enterTable, payloadFor } from '$lib/server/tables';
 import { normalizeInvite } from '$lib/invite';
 import type { PageServerLoad } from './$types';
@@ -20,8 +20,8 @@ export const load: PageServerLoad = async (event) => {
 
   return {
     code: entered.table.code,
-    seat: entered.role === 'player' ? entered.seat : null,
-    me: { name: identity.name, credential: credentialOf(identity) },
+    // 入座时这一副正在进行 ⇒ 接下的是别人的进度，界面上要说一声
+    inherited: entered.role === 'player' ? entered.inherited : false,
     ...payloadFor(entered.table, identity.id)
   };
 };

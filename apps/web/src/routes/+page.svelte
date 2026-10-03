@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { invalidateAll, goto } from '$app/navigation';
   import { clearCredential, saveCredential, savedCredential } from '$lib/identity';
   import { parseInvite } from '$lib/invite';
@@ -6,9 +7,18 @@
 
   let { data }: PageProps = $props();
 
+  /**
+   * 链接带来的邀请码：只在挂载时取一次。
+   *
+   * 它是**唯一的跳转真相** —— 提示文案与 claim() 之后的跳转都读这一个值，
+   * 入座框（joinCode）只属于「加入」按钮。曾经跳转读 `data.join` 而输入框另存一份，
+   * 屏幕上宣告的目的地会随一个无关输入变化（也触发了 state_referenced_locally 警告）。
+   */
+  const invited = untrack(() => data.join);
+
   let name = $state('');
   let credentialInput = $state('');
-  let joinCode = $state(data.join ?? '');
+  let joinCode = $state(untrack(() => data.join ?? ''));
   let busy = $state(false);
   let message = $state<string | null>(null);
   let renameName = $state('');
@@ -49,8 +59,8 @@
       if (payload?.credential) saveCredential(payload.credential);
       switchInput = '';
       // 从邀请链接被带到大厅的：身份一到位就直接回到那张桌，不必重新粘贴一次链接
-      if (data.join !== null) {
-        await goto(`/table/${data.join}`);
+      if (invited !== null) {
+        await goto(`/table/${invited}`);
         return;
       }
       await invalidateAll();
@@ -157,15 +167,18 @@
     <p class="rounded-xl bg-red-500/20 px-3 py-2 text-sm text-red-200 ring-1 ring-red-400/30">{message}</p>
   {/if}
 
+  <!-- 走到这里说明是被邀请链接带过来的：不管接下来是注册、导入还是换身份，都先说清去向 -->
+  {#if invited !== null}
+    <p class="rounded-xl bg-gold/15 px-3 py-2 text-xs text-gold ring-1 ring-gold/30">
+      身份一到位就会自动回到同桌 <b class="font-mono tracking-widest">{invited}</b>（注册、导入凭据或换身份都会）。<br />
+      想换一张桌，请在下面的入座框里填另一张桌的邀请码再点「加入」。
+    </p>
+  {/if}
+
   {#if data.me === null}
     <section class={card}>
       <h2 class="text-sm font-bold">创建身份</h2>
       <p class="mt-1 text-[11px] text-white/45">无需密码：凭据串就是身份，复制到别的浏览器粘贴即可继续。</p>
-      {#if data.join}
-        <p class="mt-3 rounded-lg bg-gold/15 px-3 py-2 text-[11px] text-gold ring-1 ring-gold/30">
-          注册或导入身份后会自动回到同桌 <b class="font-mono tracking-widest">{data.join}</b>。
-        </p>
-      {/if}
       <form
         class="mt-3 flex gap-2"
         onsubmit={(event) => {
