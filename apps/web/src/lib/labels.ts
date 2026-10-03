@@ -1,15 +1,20 @@
 import {
+  BID_STEP,
   bidLabel,
   cardKey,
   isJoker,
   leadInfo,
   levelLabel,
+  MIN_BID,
   RANK_LABEL,
   rankLabel,
+  STRAINS,
   STRAIN_LABEL,
   SUIT_LABEL,
+  validateCall,
   validateFollow,
   validateLead,
+  type Bid,
   type BidCall,
   type Card,
   type Level,
@@ -97,23 +102,30 @@ export function selectKey(card: Card): string {
   return cardKey(card);
 }
 
-/** 叫牌候选：从当前最高叫品的分数起，给出所有合法叫品（步长 5） */
-export function bidCandidates(view: PersonalView, spread = 4): { points: number; strains: Strain[] }[] {
-  const deal = view.deal;
-  if (!deal) return [];
-  const highest = deal.highestBid;
-  const base = highest?.points ?? 40;
-  const rows: { points: number; strains: Strain[] }[] = [];
-  const strains: Strain[] = ['C', 'D', 'H', 'S', 'NT'];
-  for (let step = 0; step <= spread; step++) {
-    const points = base + step * 5;
-    const legal = strains.filter((strain) => {
-      if (highest === null) return true;
-      if (points !== highest.points) return points > highest.points;
-      const order: Record<Strain, number> = { C: 0, D: 1, H: 2, S: 3, NT: 4 };
-      return order[strain] > order[highest.strain];
-    });
-    if (legal.length > 0) rows.push({ points, strains: legal });
+export interface BidOption {
+  readonly points: number;
+  readonly strains: readonly Strain[];
+}
+
+/**
+ * 叫牌候选：从当前最高叫品的分数起，给出所有合法叫品（步长 5）。
+ *
+ * 合法性只问引擎的 `validateCall` —— 花色序（♣ < ♦ < ♥ < ♠ < 无主）与「至少 40、步长 5」
+ * 都在那一个函数里，界面不许再抄一份，否则改规则时两边会不一致。
+ * 牌桌与牌局编排台共用这一份（后者没有服务端视图，只能传一个 `highest`）。
+ */
+export function bidOptions(highest: Bid | null, spread = 4): readonly BidOption[] {
+  const base = highest === null ? MIN_BID : Math.max(MIN_BID, highest.points);
+  const rows: BidOption[] = [];
+  for (let step = 0; step <= spread; step += 1) {
+    const points = base + step * BID_STEP;
+    const strains = STRAINS.filter((strain) => validateCall({ points, strain }, highest) === null);
+    if (strains.length > 0) rows.push({ points, strains });
   }
   return rows;
+}
+
+/** 牌桌用：从个人视图里取当前最高叫品 */
+export function bidCandidates(view: PersonalView, spread = 4): readonly BidOption[] {
+  return bidOptions(view.deal?.highestBid ?? null, spread);
 }
