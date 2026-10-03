@@ -1,0 +1,74 @@
+/**
+ * MCP 侧消费的 **wire 形状**：服务器负载里与「角色 / 视图 / 同桌」有关的那部分。
+ *
+ * 它必须与浏览器拿到的东西**逐字段一致**（`apps/web/src/lib/shared.ts` 的 `StreamPayload`）：
+ * 一条负载同时喂浏览器与 MCP，才谈得上「同一条服务器权威路径」。因此：
+ *
+ * - 视图类型直接取自引擎（`PublicView` / `PlayerSeat`），不复刻第二套；
+ * - `apps/web/src/lib/shared.ts` 属于 SvelteKit 的 `$lib` 作用域，packages/mcp 引不到，
+ *   所以平台层的那几个 interface 在这里声明一份，由 `scripts/mcp-check.ts` 拿真实响应逐字段核对
+ *   （形状守卫）—— 服务器改了形状而这里没跟上，脚本立刻失败，而不是运行时报 undefined。
+ */
+import type { PlayerSeat, PublicView } from '@sixty/engine';
+
+/** 座位上的玩家 = `player`；不在座位上的人（观战者）= `spectator` */
+export type Role = 'player' | 'spectator';
+
+export interface SeatInfo {
+  readonly seat: number;
+  readonly userId: number | null;
+  readonly name: string | null;
+  readonly online: boolean;
+}
+
+export interface TableView {
+  readonly code: string;
+  readonly seats: readonly SeatInfo[];
+  readonly seatedCount: number;
+  readonly ready: boolean;
+  /** **实时**观战连接数（不是观战记录数） */
+  readonly spectatorCount: number;
+}
+
+/**
+ * 一次读取的完整负载，与浏览器同形。
+ *
+ * - `view` 一律是**公共视图**：观战者能看到的全部内容，没有手牌与底牌；
+ * - `you` 是玩家私有那一份（手牌、是否庄家、拿上来的底牌），观战者为 `null`；
+ * - 角色由服务端按数据库现算，工具面无法自称玩家。
+ */
+export interface StreamPayload {
+  readonly role: Role;
+  readonly view: PublicView | null;
+  readonly you: PlayerSeat | null;
+  readonly table: TableView;
+}
+
+/** GET /api/tables 的一项（与大厅「我的同桌」同形，含我在那张桌的角色） */
+export interface TableSummary {
+  readonly code: string;
+  readonly seated: number;
+  readonly role: Role;
+}
+
+/** 形状守卫的字段清单：声明与服务器漂移时，mcp-check 按这几张表逐个核对 */
+export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = ['seat', 'userId', 'name', 'online'];
+export const TABLE_FIELDS: readonly (keyof TableView)[] = [
+  'code',
+  'seats',
+  'seatedCount',
+  'ready',
+  'spectatorCount'
+];
+export const VIEW_FIELDS: readonly (keyof PublicView)[] = [
+  'version',
+  'status',
+  'dealerSeat',
+  'dealNo',
+  'levels',
+  'progress',
+  'result',
+  'history',
+  'deal'
+];
+export const YOU_FIELDS: readonly (keyof PlayerSeat)[] = ['seat', 'hand', 'isDeclarer', 'originalKitty'];

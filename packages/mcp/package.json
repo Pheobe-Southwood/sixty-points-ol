@@ -1,0 +1,30 @@
+{
+  "name": "@sixty/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "sixty-mcp": "./src/stdio.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "check": "tsc --noEmit",
+    "start": "node src/stdio.ts",
+    "mcp-check": "node scripts/mcp-check.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@sixty/engine": "workspace:*",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.3"
+  }
+}

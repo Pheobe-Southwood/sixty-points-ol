@@ -9,11 +9,15 @@ SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并�
 
 ```
 packages/engine     纯 TS 规则引擎（零依赖，可被服务端与客户端共用）
-  src/              cards / order / validate / trick / auction / state / view
+  src/              cards / order / validate / trick / auction / state / view / help
   test/             node:test 表驱动 + 属性测试（默认 60 个随机整局，GAME_SEEDS 可放大）
+packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定义，两条传输共用）
+  src/              tools（工具表）/ server（挂到 SDK）/ http-api（stdio 取数）/ wire / stdio
+  test/             node:test：工具层单测 + 内存链对上的协议单测 + stdio 启动契约
+  scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
-  src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub
-  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口（含入座/离座）、SSE 流
+  src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub、MCP 进程内适配层
+  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口（含入座/离座）、SSE 流、MCP（/api/mcp）
   scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
@@ -39,7 +43,9 @@ docs/adr/           架构决策记录
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
 pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 / 角色与观战投影
-pnpm check            # 引擎 tsc + 应用 svelte-check
+                      #                    + 在线态判定 + MCP 作弊面守卫
+pnpm test:mcp         # MCP 工具层单测：工具语义、参数校验、等待超时、协议注册一致性、stdio 启动契约
+pnpm check            # 引擎 tsc + MCP 包 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
 pnpm start            # 跑构建产物（默认端口 3000，见下）
@@ -68,9 +74,15 @@ BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再�
 BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换身份：满座第 4 人只看公共信息、
                                                        # 观战负载不含在座手牌、补位继承该座位的手牌与级别、
                                                        # 在座不能改名或换身份、改名后旧凭据失效
+BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条传输各打一整副（stdio 真 spawn + /api/mcp）
+                                                       # 顺带核对 wire 形状、MCP 座位的在线态、以及非法出牌必被服务端拒绝
 ```
 
 冒烟脚本用 `data/smoke-run.json` 保存凭据供续局校验使用。
+
+> 受限沙箱（piped stdio 一律 EPERM，见 AGENTS 规则 5）里 `mcp-check` 要加 `SPAWN=0`：
+> 它改用 SDK 的内存链对驱动同一套工具表，只是不起 stdio 子进程；
+> stdio 那条进程级契约由 `pnpm test:mcp` 里的启动契约测试覆盖（同样需要能 spawn 子进程）。
 
 ## 界面约定
 
@@ -102,6 +114,63 @@ BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换
 无密码：输入名字即注册并签发令牌，浏览器 localStorage 保存 `base64url(名字:令牌)` 的凭据串，
 一键复制到其它浏览器粘贴即可继续同一身份（服务端同时下发 httpOnly cookie 供 SSE 鉴权）。
 
+## 让 LLM 也来玩（MCP）
+
+LLM 在这套系统里**就是一个普通身份**：服务器不区分人类与 LLM，座位上也没有「机器人席位」这种东西。
+仓库提供的是 **MCP 工具面**（工具定义只有一份，理由与取舍见 ADR-0010）；"会不会打牌"由接上来的宿主决定，
+仓库不自带任何打牌策略。
+
+### 1. 先给 agent 一个身份
+
+浏览器里「创建身份」（例如 `小六`）→ 点**复制凭据**。凭据串是 `base64url(名字:令牌)`，
+和"复制到别的浏览器继续用"是同一个东西：MCP 客户端只是**另一台设备**。
+
+**一个座位一个凭据**：同一个凭据同时被人和 agent 用，两边会互相抢着出牌（会看到「还没轮到你」）。
+
+### 2. 接 stdio（本地进程；Claude Code / Claude Desktop 等）
+
+```json
+{
+  "mcpServers": {
+    "sixty-points": {
+      "command": "node",
+      "args": ["/path/to/sixty-points-ol/packages/mcp/src/stdio.ts"],
+      "env": {
+        "SIXTY_BASE_URL": "https://game.example.com",
+        "SIXTY_CREDENTIAL": "<第 1 步复制的凭据串>"
+      }
+    }
+  }
+}
+```
+
+启动时会先自检一次：地址写错、服务没起、凭据无效都**当场以非 0 退出并说明原因**，而不是等到第一次
+工具调用才失败。日志一律走 stderr（stdout 是 MCP 协议通道），缺凭据时会直接告诉你该配哪个环境变量。
+
+### 3. 或者连服务端自带的 `/api/mcp`
+
+不需要本地 Node：`POST https://game.example.com/api/mcp`，用 `Authorization: Bearer <凭据串>` 鉴权。
+它是 Streamable HTTP 的 **JSON 响应模式 + 无状态**：不开 SSE 流、不发会话 id，所以反代
+（Caddy / traefik / Coolify）不需要为它加任何白名单；没有会话，也就没有「谁的会话」这回事。
+
+### 工具（13 个）
+
+| 工具 | 作用 |
+| --- | --- |
+| `get_state` | 读当前局面：**只有你的手牌** + 公开信息，并附 `turn`（轮到谁、能不能动、该做什么） |
+| `wait_for_turn` | 等到能行动再返回（默认 30s、上限 60s；超时返回 `timedOut`，直接再调一次即可） |
+| `read_rules` | 读玩法说明；不传 `key` 返回全部八个阶段（与「?」弹层、`/rules` 同源） |
+| `legal_bids` | 当前所有合法叫品（与牌桌叫牌面板同一份实现） |
+| `check_play` | 出牌前的本地预判（与服务端同一套纯函数；服务端始终是唯一裁判） |
+| `bid`／`bury`／`play`／`deal`／`new_game` | 动作，成功即返回新局面 |
+| `list_my_tables`／`join_table`／`create_table` | 找到该坐哪张桌／用邀请码入座／自己开一张桌 |
+
+工具**不接受座位号**：座位一律由服务端按身份推导（ADR-0002）。所有读写都只经过**个人视图**，
+所以 agent 看不到别人的手牌与底牌；进程内那条路另有静态守卫钉着（随 `pnpm test:web` 跑）。
+
+界面上的那颗点对 agent 也有效：它没有 SSE，但每次请求都会刷新「最近活跃」，
+因此它在打牌时显示**在线**，停手一分钟才转灰。
+
 ## 一键部署
 
 ### Docker Compose（单机 / VPS）
@@ -126,7 +195,8 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 
 ### 预构建镜像（GHCR，GitHub Actions 自动构建）
 
-`.github/workflows/ci.yml` 在 CI 上构建镜像并推到 `ghcr.io/cup113/sixty-points-ol`：先过 `pnpm test` / `pnpm test:web` / `pnpm check`，全绿才出镜像。
+`.github/workflows/ci.yml` 在 CI 上构建镜像并推到 `ghcr.io/cup113/sixty-points-ol`：先过 `pnpm test` / `pnpm test:web` / `pnpm test:mcp` / `pnpm check`，
+再用**构建产物**起服务跑一遍 MCP 端到端（两条传输各打一整副），全绿才出镜像。
 
 | 触发 | 产出的标签 |
 | --- | --- |
@@ -176,6 +246,9 @@ Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker C
 ## 暂未实现（v1 范围外）
 
 聊天/表情、计时器、机器人补位、观战者的全知/延迟视图、多实例水平扩展。
+
+其中「机器人补位」的边界：仓库提供 **MCP 工具面**（见 ADR-0010），让 LLM 能以普通身份坐上空座，
+但仓库里**没有**会自己思考的 agent —— 是否会打牌取决于接上来的宿主。
 
 ## 许可
 

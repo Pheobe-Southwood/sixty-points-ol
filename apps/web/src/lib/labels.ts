@@ -1,17 +1,11 @@
 import {
-  BID_STEP,
   cardKey,
+  checkPlay as engineCheckPlay,
   isJoker,
-  leadInfo,
   levelLabel,
-  MIN_BID,
   RANK_LABEL,
   rankLabel,
-  STRAINS,
   SUIT_LABEL,
-  validateCall,
-  validateFollow,
-  validateLead,
   type Bid,
   type BidCall,
   type Card,
@@ -126,12 +120,9 @@ export interface LegalityContext {
 }
 
 /** 与服务端同一套纯函数做本地预判（最终以服务端判定为准） */
+/** 与服务端、MCP 的 `check_play` 同一套纯函数做本地预判（最终以服务端判定为准） */
 export function checkPlay(ctx: LegalityContext, cards: readonly Card[]): string | null {
-  if (cards.length === 0) return null;
-  if (ctx.lead === null) return validateLead(ctx.hand, cards, ctx.trump);
-  const info = leadInfo(ctx.lead, ctx.trump);
-  if (info === null) return '牌局状态异常';
-  return validateFollow(ctx.hand, cards, info, ctx.trump);
+  return engineCheckPlay(ctx.hand, cards, ctx.trump, ctx.lead);
 }
 
 export function handPoints(cards: readonly Card[]): number {
@@ -169,35 +160,11 @@ export function kittyHandDelta(hand: readonly Card[], kitty: readonly Card[] | n
   return out;
 }
 
-export interface BidOption {
-  readonly points: number;
-  readonly strains: readonly Strain[];
-}
-
 /**
- * 叫牌候选：从当前最高叫品的分数起，给出所有合法叫品（步长 5）。
+ * 叫牌合法集只有一处实现：引擎包（`bidOptions` 是纯规则，`bidCandidates` 只是从视图里取最高叫品）。
  *
- * 合法性只问引擎的 `validateCall` —— 花色序（♣ < ♦ < ♥ < ♠ < 无主）与「至少 40、步长 5」
- * 都在那一个函数里，界面不许再抄一份，否则改规则时两边会不一致。
- * 牌桌与牌局编排台共用这一份（后者没有服务端视图，只能传一个 `highest`）。
+ * 牌桌的叫牌面板、牌局编排台与 MCP 工具面的 `legal_bids` 都走这一份 ——
+ * 合法集不允许有第二个来源，否则改规则时会出现「工具面说合法、服务端说非法」。
+ * 这里保留同名转出，调用方不必改 import。
  */
-export function bidOptions(highest: Bid | null, spread = 4): readonly BidOption[] {
-  const base = highest === null ? MIN_BID : Math.max(MIN_BID, highest.points);
-  const rows: BidOption[] = [];
-  for (let step = 0; step <= spread; step += 1) {
-    const points = base + step * BID_STEP;
-    const strains = STRAINS.filter((strain) => validateCall({ points, strain }, highest) === null);
-    if (strains.length > 0) rows.push({ points, strains });
-  }
-  return rows;
-}
-
-/**
- * 牌桌用：从当前视图里取当前最高叫品。
- *
- * 参数取**公共视图**而不是个人视图：观战者没有 `you`，而叫牌候选只依赖公开信息
- * （叫牌历史与分数），所以观战者与玩家拿到的是同一份候选（观战者不渲染按钮而已）。
- */
-export function bidCandidates(view: PublicView, spread = 4): readonly BidOption[] {
-  return bidOptions(view.deal?.highestBid ?? null, spread);
-}
+export { bidCandidates, bidOptions, type BidOption } from '@sixty/engine';

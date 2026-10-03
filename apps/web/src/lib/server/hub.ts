@@ -46,3 +46,38 @@ export function isUserOnline(tableId: number, userId: number): boolean {
   for (const connection of set) if (connection.userId === userId) return true;
   return false;
 }
+
+/**
+ * 「最近活跃」窗口：谁在最近这段时间里发过请求。
+ *
+ * 为什么需要它：**MCP 工具面不接 SSE**（见 ADR-0010：无长连接、`wait_for_turn` 有界轮询），
+ * 所以只看订阅表的话，一个正在打牌的 agent 在别人屏幕上会永远显示「离线」。
+ * 把「在线」定义成「有 SSE 订阅 **或** 最近活跃」，那颗点就说真话了：
+ * 轮询期间是绿的，停手一个窗口之后转灰。
+ */
+export const ACTIVE_WINDOW_MS = 60_000;
+
+const lastSeen = new Map<number, number>();
+
+function prune(reference: number): void {
+  for (const [userId, at] of lastSeen) {
+    if (reference - at >= ACTIVE_WINDOW_MS) lastSeen.delete(userId);
+  }
+}
+
+/** 记一次该身份的请求（view/action/mcp 都算） */
+export function touch(userId: number): void {
+  const now = Date.now();
+  prune(now);
+  lastSeen.set(userId, now);
+}
+
+export function isRecentlyActive(userId: number, windowMs: number = ACTIVE_WINDOW_MS): boolean {
+  const at = lastSeen.get(userId);
+  if (at === undefined) return false;
+  if (Date.now() - at >= windowMs) {
+    lastSeen.delete(userId);
+    return false;
+  }
+  return true;
+}

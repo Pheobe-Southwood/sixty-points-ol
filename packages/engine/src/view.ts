@@ -1,5 +1,5 @@
 import { SEATS, type Card, type Seat } from './cards.ts';
-import type { Bid, BidCall } from './auction.ts';
+import { bidOptions, type Bid, type BidCall, type BidOption } from './auction.ts';
 import {
   auctionTurn,
   capturedPoints,
@@ -142,6 +142,19 @@ function publicDealOf(state: GameState): PublicDealView | null {
     summary: deal.summary
   };
 }
+
+/**
+ * 牌桌用：从当前视图里取当前最高叫品。
+ *
+ * 参数取**公共视图**而不是个人视图：观战者没有 `you`，而叫牌候选只依赖公开信息
+ * （叫牌历史与分数），所以观战者与玩家拿到的是同一份候选（观战者不渲染按钮而已）。
+ *
+ * 合法集本身在引擎的 `bidOptions`（唯一实现）：牌桌面板、牌局编排台与 MCP 的 `legal_bids` 共用。
+ */
+export function bidCandidates(view: PublicView, spread = 4): readonly BidOption[] {
+  return bidOptions(view.deal?.highestBid ?? null, spread);
+}
+
 
 function highestNonPass(entries: readonly BidEntry[]): Bid | null {
   for (let i = entries.length - 1; i >= 0; i--) {

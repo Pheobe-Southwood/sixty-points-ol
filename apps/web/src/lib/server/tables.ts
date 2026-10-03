@@ -12,7 +12,7 @@ import type { Role, SeatInfo, StreamPayload, TableView } from '$lib/shared';
 import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '$lib/invite';
 import { projectionFor, resolveArrivalRole } from '$lib/role';
 import { db, now, transaction } from './db';
-import { broadcast, connectionUserIds, isUserOnline } from './hub';
+import { broadcast, connectionUserIds, isRecentlyActive, isUserOnline, touch } from './hub';
 
 export interface TableInfo {
   readonly id: number;
@@ -249,7 +249,8 @@ export function tableView(table: TableInfo): TableView {
       seat,
       userId: row?.user_id ?? null,
       name: row?.name ?? null,
-      online: row ? isUserOnline(table.id, row.user_id) : false
+      // 「在线」= 有 SSE 订阅，或最近有请求（MCP 侧没有 SSE，只能靠请求说话，见 hub.ts）
+      online: row ? isUserOnline(table.id, row.user_id) || isRecentlyActive(row.user_id) : false
     };
   });
   const seatedCount = seats.filter((s) => s.userId !== null).length;
@@ -299,6 +300,8 @@ function appendEvents(tableId: number, events: readonly { type: string }[]): voi
  * 角色每次按数据库现算，绝不接受客户端传入（观战者无法自称玩家）。
  */
 export function payloadFor(table: TableInfo, userId: number): StreamPayload {
+  // 读到自己的负载就算「最近活跃」：MCP 侧没有 SSE，靠这个让座位卡不显示假离线（见 ADR-0010）
+  touch(userId);
   const seat = seatOf(table, userId);
   return {
     ...projectionFor(getGameState(table.id), seat === null ? null : (seat as Seat)),
@@ -311,6 +314,8 @@ export function applyTableAction(code: string, userId: number, action: Action): 
   const table = getTableByCode(code);
   if (table === null) return { ok: false, message: '同桌不存在' };
   const seat = seatOf(table, userId);
+  // 一次动作也是「最近活跃」：失败的动作同样说明这个人此刻在场（见 ADR-0010）
+  touch(userId);
   if (seat === null) return { ok: false, message: '你在观战，入座后才能操作' };
 
   const seated = table.seats.filter((id) => id !== null).length;

@@ -61,3 +61,23 @@ export function validateFollow(
   if (missing.length > 0) return '该门牌不足，必须先出完该门所有牌';
   return null;
 }
+
+/**
+ * 出牌的本地预判：`lead` 为 null 表示本轮还没人出牌（你是领出）。
+ * 返回 null 表示合法，否则是给玩家看的中文原因。
+ *
+ * 界面（`$lib/labels` 的 checkPlay）与 MCP 工具面的 `check_play` 都走这一处 ——
+ * 服务端始终是唯一裁判，这只是同一套规则的提前告知。
+ */
+export function checkPlay(
+  hand: readonly Card[],
+  cards: readonly Card[],
+  t: TrumpModel,
+  lead: readonly Card[] | null
+): string | null {
+  if (cards.length === 0) return null;
+  if (lead === null) return validateLead(hand, cards, t);
+  const info = leadInfo(lead, t);
+  if (info === null) return '牌局状态异常';
+  return validateFollow(hand, cards, info, t);
+}

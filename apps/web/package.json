@@ -17,7 +17,10 @@
     "spectate": "node scripts/spectate-check.ts"
   },
   "dependencies": {
-    "@sixty/engine": "workspace:*"
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@sixty/engine": "workspace:*",
+    "@sixty/mcp": "workspace:*",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.11",

@@ -1,9 +1,12 @@
 /**
  * 各阶段的玩法说明（纯数据 + 纯函数）。
  *
- * 界面上不再有任何常驻提示文案：说明只存在于左下的「?」弹层与 `/rules` 教程，
- * 两处共用这份文本，避免同一句话在三个地方各写一遍再各自过期。
- * `anchor` 指向 `/rules` 的小节 id，由 test/help.test.ts 对着真实页面校验。
+ * 这份文本是**唯一**的说明来源：牌桌左下角的「?」弹层、`/rules` 教程、以及 MCP 工具面的
+ * `read_rules` 工具都读它，避免同一句话在几处各写一遍再各自过期。
+ * `anchor` 指向 `/rules` 的小节 id，由 apps/web/test/help.test.ts 对着真实页面校验。
+ *
+ * 它住在引擎包里而不是 web 的 `$lib/` 下，是因为 MCP 工具面（packages/mcp）也要读它，
+ * 而 `$lib` 是 SvelteKit 的作用域；本文件保持纯数据 + 纯函数、零依赖。
  */
 
 export type HelpKey =
@@ -24,6 +27,19 @@ export interface HelpEntry {
   /** 每条一句，逐条渲染成列表；此处不出现方位称谓，玩家一律用「你/队友/庄家」等角色表述 */
   readonly body: readonly string[];
 }
+
+/** 全部阶段键，顺序即讲解顺序（read_rules 不传 key 时按此顺序返回） */
+export const HELP_KEYS: readonly HelpKey[] = [
+  'lobby',
+  'auction',
+  'bury-declarer',
+  'bury-defender',
+  'play-lead',
+  'play-follow',
+  'play-wait',
+  'scored',
+  'spectate'
+];
 
 const ENTRIES: Record<HelpKey, HelpEntry> = {
   lobby: {

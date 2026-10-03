@@ -8,6 +8,8 @@
     "start": "pnpm --filter web start",
     "test": "pnpm --filter @sixty/engine test",
     "test:web": "pnpm --filter web test",
+    "test:mcp": "pnpm --filter @sixty/mcp test",
+    "mcp-check": "pnpm --filter @sixty/mcp mcp-check",
     "check": "pnpm -r check"
   },
   "devDependencies": {
