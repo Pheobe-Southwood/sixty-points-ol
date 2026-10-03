@@ -159,7 +159,7 @@
     <h1 class="mt-1 text-4xl font-black tracking-[.2em] text-ivory">六十分</h1>
     <p class="mt-2 text-xs text-white/60">
       三人 1v2 · 桥牌式叫牌 · 双升式打牌与升级 ·
-      <a class="font-semibold text-gold hover:underline" href="/rules">新手教程</a>
+      <a class="font-semibold text-gold hover:underline" href="/learn">规则演示</a>
     </p>
   </header>
 
@@ -302,15 +302,16 @@
 
     <a
       class="flex items-center justify-between gap-3 rounded-2xl bg-black/20 p-4 ring-1 ring-white/10 transition hover:bg-black/30"
-      href="/rules"
+      href="/learn"
     >
       <span>
-        <span class="block text-sm font-bold text-white/80">新手教程</span>
+        <span class="block text-sm font-bold text-white/80">规则演示（幻灯片）</span>
         <span class="mt-0.5 block text-[11px] leading-relaxed text-white/50">
-          用真实牌面走一遍：叫牌 → 埋底 → 打牌 → 结算升级，附打牌推论与三道练手题
+          基本概念十几屏讲清楚，再用三副真实牌局从叫牌走到结算：每一步都有讲解，能自动播放
         </span>
       </span>
       <span class="shrink-0 text-gold">→</span>
     </a>
+    <a class="self-center text-[11px] text-white/40 hover:text-white" href="/rules">想逐段查证规则？看文字教程 →</a>
   {/if}
 </main>

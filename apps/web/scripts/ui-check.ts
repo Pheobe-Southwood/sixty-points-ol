@@ -27,7 +27,9 @@
  * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 我` 四项、顺序固定；抽屉默认是关闭态
  *    （`inert` + 滑出屏幕）；而「我」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
- * 另外对 /rules 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方。
+ * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
+ * /learn 还额外守住幻灯机骨架（幻灯片语义、自动播放、每屏 aria-label、无裸花色字母）
+ * 与深链（`?s=245-trick-8` 必须直接服务端渲染出那一墩的牌面，而不是先给封面再靠 JS 跳）。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
@@ -475,6 +477,37 @@ async function main(): Promise<void> {
     '出货样式表里找不到断线提示条的底色 .bg-amber-400/15（提示会失去告警观感）'
   );
 
+  // 10) 规则演示页（/learn）：新版面同样跑 position 守卫，并守住幻灯机的骨架与牌局章
+  const learn = await page('/learn');
+  assertNoPositionMix(learn, '规则演示页');
+  assert(!/[东南西]/.test(learn), '规则演示页出现方位称谓');
+  assert(learn.includes('aria-roledescription="幻灯片"'), '演示页缺少「幻灯片」语义');
+  assert(learn.includes('自动播放'), '演示页没有自动播放按钮');
+  assert(learn.includes('规则演示'), '演示页没有章节入口');
+  assert(learn.includes('href="/rules"'), '演示页没有指向文字教程的入口');
+  assert(
+    /aria-label="第 \d+ 屏，共 \d+ 屏/.test(learn),
+    `演示页每屏没有「第 n 屏，共 N 屏」的 aria-label：${learn.slice(0, 200)}`
+  );
+  assert(bareStrainLetters(learn).length === 0, `演示页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
+
+  // 10b) 深链直接落在牌局某一墩：必须带着真实牌面服务端渲染出来（不是先给封面再靠 JS 跳）
+  const trickSlide = await page('/learn?s=245-trick-8');
+  assert(trickSlide.includes('第 8 墩'), '深链没有直接渲染出指定的那一屏');
+  const trickCards = (trickSlide.match(/class="card[ "]/g) ?? []).length;
+  assert(trickCards >= 6, `深链的那一墩至少要有 6 张牌面（三家各一手 + 底牌），实际 ${trickCards}`);
+  assert(trickSlide.includes('本墩'), '牌局章没有写出这一墩的信息');
+  assertNoPositionMix(trickSlide, '牌局章深链页');
+  // 结算屏也是深链：必须把算式与升级都渲染出来
+  const settleSlide = await page('/learn?s=245-settle');
+  assert(settleSlide.includes('打成') || settleSlide.includes('打输'), '结算屏没有写打成/打输');
+  assert(/升 \d+ 级/.test(settleSlide), '结算屏没有写升级级数');
+
+  // 11) 入口：大厅指向演示页，教程页指向演示页（互链不能单边）
+  const home = await page('/', players[0]!.credential);
+  assert(home.includes('href="/learn"'), '大厅没有指向规则演示的入口');
+  assert(rules.includes('href="/learn"'), '文字教程页没有指向规则演示的入口');
+
   console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
   console.log(`教程：9 个小节齐备（含观战与离座），渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
@@ -484,6 +517,7 @@ async function main(): Promise<void> {
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
   console.log('页头：只剩 大厅 / 邀请码（+ 观战者的入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/我 四项页签常驻右边缘，抽屉默认 inert');
   console.log('抽屉：查阅面进抽屉、动作面留桌面；「我」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
+  console.log(`演示：/learn 有幻灯片语义与自动播放；深链 ?s=245-trick-8 直接渲染出 ${trickCards} 张真实牌面；大厅与文字教程都指向它`);
   console.log('UI OK');
 }
 
