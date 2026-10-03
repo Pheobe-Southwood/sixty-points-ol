@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "start": "node build/index.js",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",
     "lobby": "node scripts/lobby-check.ts"

@@ -88,9 +88,15 @@ button:disabled {
   --cw: 68px;
 }
 
+/* 窄屏回退：即便首帧未测量（或 JS 未就绪）也不裁切 ——
+   50px 牌宽 + 70% 重叠下，20 张约 335px、17 张约 290px，均 ≤ 375px 机型的可用宽度 */
 @media (max-width: 640px) {
   .card-lg {
-    --cw: 52px;
+    --cw: 50px;
+  }
+
+  .fan .card {
+    margin-left: calc(var(--cw, 50px) * -0.7);
   }
 }
 
@@ -165,6 +171,13 @@ button:disabled {
 }
 
 /* ---------- 手牌扇形 ---------- */
+/* 多行容器：窄屏放不下可读下限时切行，行距容纳选中牌上移的 26px */
+.fan-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
 .fan {
   display: flex;
   justify-content: center;
@@ -177,6 +190,11 @@ button:disabled {
 
 .fan .card:first-child {
   margin-left: 0;
+}
+
+/* 已测量：间距由组件按容器实测宽度算出（保证不裁切且角标可读） */
+.fan[data-measured='true'] .card:not(:first-child) {
+  margin-left: calc(var(--step, 0px) - var(--cw, 68px));
 }
 
 .fan.selectable .card {

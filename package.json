@@ -7,6 +7,7 @@
     "build": "pnpm --filter web build",
     "start": "pnpm --filter web start",
     "test": "pnpm --filter @sixty/engine test",
+    "test:web": "pnpm --filter web test",
     "check": "pnpm -r check"
   },
   "devDependencies": {
