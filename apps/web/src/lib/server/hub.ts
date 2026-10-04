@@ -7,14 +7,42 @@ export interface Connection {
 
 const channels = new Map<number, Set<Connection>>();
 
-export function register(tableId: number, connection: Connection): () => void {
+/**
+ * 每个身份当前有几条连接（跨所有桌）。
+ *
+ * 用途只有一个：一条连接断开时判断「他是不是哪儿都不在了」——
+ * 多标签页/多设备共用一个身份时，关掉一个标签页不该让他在别的桌上闪成离线（见 ADR-0013）。
+ */
+const connectionCount = new Map<number, number>();
+
+/**
+ * 注册一条连接，返回**注销函数**。
+ *
+ * 注销函数返回 `boolean`：**true = 该身份在全局已经没有任何连接了**（调用方据此作废「最近活跃」）。
+ * 它本身是幂等的：重复调用只有第一次生效 —— 否则计数会被减两次，把「还有别的标签页」判成「没了」。
+ */
+export function register(tableId: number, connection: Connection): () => boolean {
   const set = channels.get(tableId) ?? new Set<Connection>();
   set.add(connection);
   channels.set(tableId, set);
+  connectionCount.set(connection.userId, (connectionCount.get(connection.userId) ?? 0) + 1);
+
+  let released = false;
   return () => {
+    if (released) return false;
+    released = true;
+    const left = (connectionCount.get(connection.userId) ?? 1) - 1;
+    if (left <= 0) connectionCount.delete(connection.userId);
+    else connectionCount.set(connection.userId, left);
     set.delete(connection);
     if (set.size === 0) channels.delete(tableId);
+    return left <= 0;
   };
+}
+
+/** 该身份此刻是否还有任何一条连接（任何桌都算） */
+export function hasAnyConnection(userId: number): boolean {
+  return (connectionCount.get(userId) ?? 0) > 0;
 }
 
 /**
@@ -121,4 +149,16 @@ export function isRecentlyActive(userId: number, windowMs: number = ACTIVE_WINDO
     return false;
   }
   return true;
+}
+
+/**
+ * 作废「最近活跃」（返回是否真的清掉了）。
+ *
+ * 连接真的断了的时候调用：窗口还没过期，"最近活跃"会把一个**已经走掉的人**再显示成在线
+ * 最多 60 秒（实测：关标签页后 58 秒那颗点才变灰）。断线是比窗口更硬的证据，所以它优先。
+ *
+ * 只对有 SSE 的客户端成立；MCP 座位没有连接可断，照旧靠请求说话（见 ADR-0013）。
+ */
+export function forget(userId: number): boolean {
+  return lastSeen.delete(userId);
 }

@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { requireIdentity } from '$lib/server/auth';
-import { getTableByCode, payloadFor } from '$lib/server/tables';
+import { connectionClosed, getTableByCode, payloadFor } from '$lib/server/tables';
 import { broadcast, register } from '$lib/server/hub';
 import type { RequestHandler } from './$types';
 
@@ -16,45 +16,56 @@ export const GET: RequestHandler = async (event) => {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // `closed` = 别再往这条流里写；`cleaned` = 收尾动作已经做过（幂等，见下）
       let closed = false;
-      const send = (): void => {
+      let cleaned = false;
+      let ping: ReturnType<typeof setInterval> | undefined;
+
+      /** 往流里写；写不动了就收尾 —— 那就是「socket 已经死了」的信号 */
+      const write = (chunk: string): void => {
         if (closed) return;
         try {
-          const current = getTableByCode(table.code) ?? table;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payloadFor(current, userId))}\n\n`));
+          controller.enqueue(encoder.encode(chunk));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
-      const unregister = register(tableId, { userId, push: send });
-      send();
-      // 座位在线状态变化也要让其他人看到
-      broadcast(tableId);
+      const pushFrame = (): void => {
+        const current = getTableByCode(table.code) ?? table;
+        write(`data: ${JSON.stringify(payloadFor(current, userId))}\n\n`);
+      };
 
-      const ping = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(': ping\n\n'));
-        } catch {
-          closed = true;
-        }
-      }, 25_000);
-
-      const stop = (): void => {
-        if (closed) return;
+      /**
+       * 收尾：**唯一的**注销路径 —— 客户端断开（abort）与写不出去都走它。
+       *
+       * 两条路都必须在，理由各一：abort 覆盖「关标签页」这类正常断开；写不出去覆盖 socket 已经死掉
+       * 而 abort 没来的情形。以前写失败只把自己标成 closed、**不注销**，于是那条死连接永远留在连接表里 ——
+       * 既是假在线，还会被后续每一次广播反复刷新（见 ADR-0013）。
+       */
+      const cleanup = (): void => {
+        if (cleaned) return;
+        cleaned = true;
         closed = true;
-        clearInterval(ping);
+        if (ping !== undefined) clearInterval(ping);
         unregister();
+        // 他不在了 ⇒ 「最近活跃」也该作废，否则那颗点还要绿最多 60 秒（他若还有别的连接则不动）
+        connectionClosed(userId);
+        broadcast(tableId);
         try {
           controller.close();
         } catch {
           /* already closed */
         }
-        broadcast(tableId);
       };
 
-      event.request.signal.addEventListener('abort', stop);
+      const unregister = register(tableId, { userId, push: pushFrame });
+      pushFrame();
+      // 座位在线状态变化也要让其他人看到
+      broadcast(tableId);
+
+      ping = setInterval(() => write(': ping\n\n'), 25_000);
+      event.request.signal.addEventListener('abort', cleanup);
     }
   });
 

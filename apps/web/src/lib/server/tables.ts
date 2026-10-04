@@ -12,7 +12,7 @@ import type { Role, SeatInfo, StreamPayload, TableView } from '$lib/shared';
 import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '$lib/invite';
 import { projectionFor, resolveArrivalRole } from '$lib/role';
 import { db, now, transaction } from './db';
-import { broadcast, connectionUserIds, isRecentlyActive, isUserOnline, touch } from './hub';
+import { broadcast, connectionUserIds, forget, hasAnyConnection, isRecentlyActive, isUserOnline, touch } from './hub';
 
 export interface TableInfo {
   readonly id: number;
@@ -137,8 +137,8 @@ function tableIdsOf(userId: number): number[] {
   return rows.map((row) => row.id);
 }
 
-/** 这个身份刚上线：通知他出现的每一张桌（见 hub.ts 的 `touch`） */
-function announce(userId: number): void {
+/** 这个身份的在场状态变了（刚上线 / 刚断开）：通知他出现的每一张桌 */
+export function announcePresence(userId: number): void {
   for (const id of tableIdsOf(userId)) broadcast(id);
 }
 
@@ -149,7 +149,21 @@ function announce(userId: number): void {
  * 一个窗口内每个身份至多一次。
  */
 function touched(userId: number): void {
-  if (touch(userId)) announce(userId);
+  if (touch(userId)) announcePresence(userId);
+}
+
+/**
+ * 某条 SSE 连接断了之后调用（**必须在注销之后**，见 ADR-0013）。
+ *
+ * 断线比「最近活跃」更硬：他已经不在了，却因为 60 秒窗口还挂着「在线」——
+ * 实测关标签页之后那颗点要 58 秒才变灰。所以这里把窗口作废，让他立刻离线。
+ *
+ * 唯一的例外是**他还有别的连接**（另一个标签页、另一台设备）：那时他没走，
+ * 不该因为关掉一个标签页就在别的桌上闪成离线。
+ */
+export function connectionClosed(userId: number): void {
+  if (hasAnyConnection(userId)) return;
+  if (forget(userId)) announcePresence(userId);
 }
 
 /** 该身份是否还占着任何一张桌的座位（改名/换身份的前提，见 ADR-0009） */

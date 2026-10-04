@@ -1,17 +1,26 @@
 /**
- * 在线态的判定与**投递**：谁在最近这段时间里发过请求，以及「刚上线」这件事有没有推到别人的屏幕上。
+ * 在线态的判定与**投递**：谁在最近这段时间里发过请求，以及「刚上线/刚断开」有没有推到别人的屏幕上。
  *
  * MCP 工具面**不接 SSE**（见 ADR-0010：无长连接、`wait_for_turn` 有界轮询），
  * 所以「有 SSE 订阅」不足以描述它 —— 第一条规则补上另一半，界面上那颗点才不会对一个
  * 正在打牌的 agent 一直显示「离线」。第二条（翻转要广播）见 ADR-0012：
  * 光把「在线」的**取值**改对不够，值变了得有人把它**送出去**。
+ * 第三条（断开时作废窗口）见 ADR-0013：断线是比 60 秒窗口更硬的证据。
  *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ACTIVE_WINDOW_MS, broadcast, isRecentlyActive, register, touch } from '../src/lib/server/hub.ts';
+import {
+  ACTIVE_WINDOW_MS,
+  broadcast,
+  forget,
+  hasAnyConnection,
+  isRecentlyActive,
+  register,
+  touch
+} from '../src/lib/server/hub.ts';
 
 test('活跃度：没请求过就不算在线', () => {
   assert.equal(isRecentlyActive(9001), false);
@@ -58,6 +67,53 @@ function fakeConnection(userId: number, onPush?: () => void): { userId: number; 
   };
   return connection;
 }
+
+// ---------------------------------------------------------------- 断开时的收尾（ADR-0013）
+
+test('作废活跃：forget 之后不再算在线，并且如实报告「是否真的清掉了」', () => {
+  const user = 9501;
+  touch(user);
+  assert.equal(isRecentlyActive(user), true);
+  assert.equal(forget(user), true, '清掉了要返回 true（调用方据此决定要不要广播）');
+  assert.equal(isRecentlyActive(user), false, '断线之后不该还挂着窗口里的在线');
+  assert.equal(forget(user), false, '本来就没记录时说 false，别让调用方白广播一轮');
+});
+
+test('连接计数：注销函数告诉你「这是不是他的最后一条连接」', () => {
+  const user = 9502;
+  const off = register(9_500_001, { userId: user, push: () => {} });
+  assert.equal(hasAnyConnection(user), true);
+
+  // 同一身份在另一张桌也连着（多标签页/多设备）
+  const other = register(9_500_002, { userId: user, push: () => {} });
+  assert.equal(off(), false, '他还有别的连接：不该判成「人不在了」');
+  assert.equal(hasAnyConnection(user), true);
+  assert.equal(other(), true, '这才是最后一条');
+  assert.equal(hasAnyConnection(user), false);
+});
+
+test('注销是幂等的：重复调用不会把计数减穿（否则会误判「人走了」）', () => {
+  const user = 9503;
+  const off = register(9_500_003, { userId: user, push: () => {} });
+  const keep = register(9_500_003, { userId: user, push: () => {} });
+  assert.equal(off(), false);
+  assert.equal(off(), false, '第二次调用不该再减一次');
+  assert.equal(hasAnyConnection(user), true, '还有一条连接在，计数不该被减穿');
+  keep();
+  assert.equal(hasAnyConnection(user), false);
+});
+
+test('不同身份互不干扰：一个人断开不影响另一个人的计数', () => {
+  const mine = 9504;
+  const other = 9505;
+  const offOther = register(9_500_004, { userId: other, push: () => {} });
+  const offMine = register(9_500_005, { userId: mine, push: () => {} });
+  assert.equal(offMine(), true);
+  assert.equal(hasAnyConnection(other), true, '别人的连接不该被牵连');
+  offOther();
+});
+
+// ---------------------------------------------------------------- 广播
 
 test('广播：没有连接的桌是空操作（入座早于观战者连上时就是这个情形）', () => {
   broadcast(9_000_001);

@@ -654,6 +654,87 @@ async function assertJoinPushesToHumans(kind: 'stdio' | 'http', label: string): 
 }
 
 /**
+ * **离线守卫**：真的断了的时候，那颗点要**立刻**变灰，而不是等 60 秒的活跃窗口。
+ *
+ * 缺陷的形状（见 ADR-0013）：注销连接只清连接表，「最近活跃」还留着 —— 于是关掉标签页之后，
+ * 别人的屏幕上他还会绿最多一分钟（实测 58 秒）。守卫**不能**读一次 `/view` 就下结论：
+ * 读本身是一次请求，若读的人恰好从离线变在线，会触发广播、给那条（已死的）连接的主人续上窗口 ——
+ * 第一版探针就是这么被自己骗过去的。所以这里的观察者**从 t=0 起就持续轮询**（下面 `pollSeat` 每 100ms 读一次），
+ * 一直热着，不会有翻转广播来续命。
+ */
+async function assertDisconnectGoesOffline(kind: 'stdio' | 'http', label: string): Promise<void> {
+  // A 桌：丙坐座位 2，乙（观者）当观察者持续轮询；B 桌只用来放丙的第二条连接
+  const a = await guardTable(kind, '离线');
+  const b = await guardTable(kind, '旁观');
+  const guest = await claim(`离线丙${RUN}${kind[0]}`);
+  assert.ok(guest !== undefined);
+  await http(`/api/tables/${a.code}/join`, { method: 'POST' }, guest.credential);
+
+  /** 座位 2 此刻在服务端算出来的 online（用观者凭据读，读的人保持热） */
+  const seat2Online = async (): Promise<boolean> => {
+    const payload = (await http(`/api/tables/${a.code}/view`, {}, a.watcher.credential)) as {
+      table: { seats: { seat: number; online: boolean }[] };
+    };
+    return payload.table.seats.find((seat) => seat.seat === 2)?.online === true;
+  };
+
+  /** 轮询等它变成期望值，返回耗时；超时返回 null */
+  const waitOnline = async (want: boolean, budgetMs: number): Promise<number | null> => {
+    const startedAt = Date.now();
+    for (;;) {
+      if ((await seat2Online()) === want) return Date.now() - startedAt;
+      if (Date.now() - startedAt >= budgetMs) return null;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  const firstStream = openStream(a.code, guest.credential);
+  try {
+    const baseline = await waitOnline(true, 3_000);
+    assert.ok(
+      baseline !== null,
+      `${label}：丙刚连上就该显示在线（基线不成立的话，后面的断言是空的）`
+    );
+
+    firstStream.close();
+    const elapsed = await waitOnline(false, 3_000);
+    if (elapsed === null) {
+      // 失败信息里给出最可能的两个原因，省得下一个人重新推一遍
+      throw new Error(
+        `${label}：丙断开 3 秒后仍显示在线（旧行为要等满 60 秒的活跃窗口）—— ` +
+          '检查连接注销后有没有作废「最近活跃」（tables.ts 的 connectionClosed / hub.ts 的 forget）'
+      );
+    }
+    console.log(`  ${label}：断开后 ${elapsed}ms 就变灰（活跃窗口不再拖后腿）`);
+  } finally {
+    firstStream.close();
+  }
+
+  // 他还有别的连接（另一张桌看着牌）时，断开其中一条**不该**让他闪成离线 ——
+  // 判据是「这个身份还有没有连接」，不是「这张桌还有没有连接」（在线本来就是身份级判定）
+  const elsewhere = openStream(b.code, guest.credential);
+  const onTable = openStream(a.code, guest.credential);
+  try {
+    const back = await waitOnline(true, 3_000);
+    assert.ok(back !== null, `${label}：两条连接都连着时应当在线`);
+    onTable.close();
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    assert.equal(
+      await seat2Online(),
+      true,
+      `${label}：他还在另一张桌连着，却在这张桌上被判成离线 —— 作废窗口前要先看「还有没有别的连接」`
+    );
+    elsewhere.close();
+    const elapsed = await waitOnline(false, 3_000);
+    assert.ok(elapsed !== null, `${label}：最后一条连接也断了，却仍是「在线」`);
+    console.log(`  ${label}：还有别的连接时不误判，全部断开后 ${elapsed}ms 变灰`);
+  } finally {
+    elsewhere.close();
+    onTable.close();
+  }
+}
+
+/**
  * **推送守卫之二**：座位出现这件事不能依赖「入座者随后还会再读一次局面」。
  *
  * 这条是分开的、而且必须分开：`payloadFor` 里的「离线→在线」翻转也会广播，所以一个**第一次**
@@ -759,6 +840,8 @@ async function runTransport(
   // 推送守卫：人类屏幕要跟着动 —— 这是「工具面不只自己能用，还得让别人看见」的那一半
   await assertJoinPushesToHumans(kind, title);
   await assertJoinPushesEvenWhenJoinerIsActive(kind, title);
+  // 离线守卫：真断了就要立刻变灰，不能靠 60 秒窗口慢慢忘
+  await assertDisconnectGoesOffline(kind, title);
 
   console.log(`${title} 通过`);
 }
