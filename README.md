@@ -5,7 +5,7 @@ SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并�
 
 [![CI](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml/badge.svg)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/github/license/cup113/sixty-points-ol?label=license)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-385-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-386-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![Last commit](https://img.shields.io/github/last-commit/cup113/sixty-points-ol)](https://github.com/cup113/sixty-points-ol/commits/main)
 [![Node](https://img.shields.io/badge/node-24-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-11.22-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)

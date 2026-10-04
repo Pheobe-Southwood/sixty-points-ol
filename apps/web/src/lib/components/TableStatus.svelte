@@ -17,8 +17,11 @@
 <!-- inset-x-0 全宽居中：绝对定位收缩盒若只配 left-1/2 会被限制在半边宽度，窄屏会挤成多行。
      不再单列「级牌 X」（庄家座位卡上的级别数字就是它），也不再写「庄已抓 X / 需 Y」
      ——分母就是旁边那个定约分，重复一次只会让状态条更长。 -->
+<!-- 纯信息条（没有一个可点元素）⇒ 让开点击：它横跨整幅毡面，会在座位卡的
+     「+ 机器人」/「请离」按钮带上空吃掉点击（手机端 `top-[5.5rem]` 正落在按钮上沿）。
+     信息条本身没有交互，让开它不影响任何东西。 -->
 <div
-  class="absolute inset-x-0 top-[5.5rem] flex flex-wrap justify-center gap-1.5 px-2 text-[10px] sm:top-6 sm:text-[11px]"
+  class="pointer-events-none absolute inset-x-0 top-[5.5rem] flex flex-wrap justify-center gap-1.5 px-2 text-[10px] sm:top-6 sm:text-[11px]"
 >
   <span class={chip}>第 <b>{trickNo}</b> 轮</span>
   {#if contract}
