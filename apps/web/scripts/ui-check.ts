@@ -12,8 +12,11 @@
  *    —— 这一条抓的是**出货样式表**，不是源码（源码删了但产物没重建，一样会被抓到）。
  * 5. 叫品一律写「分数 + 花色字形」：页面文本里不许再出现 `40 C` 这种裸花色字母
  *    —— 回归的是「叫牌历史走引擎 bidLabel(40 梅花)、候选按钮走 strainGlyph(♣)」那种一物两写。
- * 6. 出牌按钮：必须带 `.play-btn`（z-index 抬到手牌之上 + ≥44px 命中区），
- *    且叫牌面板里的「不叫」必须存在 —— 叫牌轮数很多时它就是被顶出屏幕的那一个。
+ * 6. 出牌按钮：必须带 `.play-btn`（z-index 抬到手牌之上 + ≥44px 命中区）。
+ *    叫牌面板必须自己就是**唯一**的滚动区，而「不叫」必须是它内部的 sticky 底部页脚
+ *    （判据在 src/lib/panel-guard.ts，源码守卫 test/bid-panel.test.ts 用的是同一份）
+ *    —— 旧守只断言「页面里有 max-h-* 与 overflow-y-auto」，这两个类一直都在，所以对
+ *    「面板把最后一行裁掉、按钮再也滚不回来」这次故障完全瞎。
  * 7. 底牌可见性：庄家埋底页要能看见「你拿上来的底牌」；闲家的同一页不能出现它。
  *    这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家，观战者更没有）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
@@ -21,7 +24,12 @@
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
-const BASE = process.env['BASE'] ?? 'http://127.0.0.1:5178';
+import { checkBidPanelReachability } from '../src/lib/panel-guard.ts';
+
+// BASE 优先取环境变量；没有 env 注入的场景（例如沙箱里通过 bridge 跑）可以直接把地址当参数传：
+//   node scripts/ui-check.ts http://127.0.0.1:3000
+// 只看 http(s) 开头的参数，这样 `pnpm run ui -- <url>` 多出来的 `--` 也不会被当成地址。
+const BASE = process.env['BASE'] ?? process.argv.slice(2).find((arg) => arg.startsWith('http')) ?? 'http://127.0.0.1:5178';
 
 const POSITION_CLASSES = ['static', 'fixed', 'absolute', 'relative', 'sticky'] as const;
 
@@ -207,16 +215,17 @@ async function main(): Promise<void> {
   assert(auction.includes('还没人叫'), '叫牌面板顶部没有「还没人叫」大字位');
   const dealerLabel = /第 1 副 · (.+?) 发牌/.exec(auction)?.[1];
   assert(dealerLabel !== undefined, '叫牌面板没有写出谁发牌');
-  const dealerIndex = players.findIndex((p) => p.name === dealerLabel);
+  // 界面用「你」指代浏览者本人，而这一页正是 players[0] 拿自己的凭据取的：发牌人恰是
+  // players[0] 时页面写的是「你 发牌」，拿名字去 findIndex 会得到 -1（1/3 概率假红）。
+  const dealerIndex = dealerLabel === '你' ? 0 : players.findIndex((p) => p.name === dealerLabel);
   assert(dealerIndex >= 0, `找不到发牌人「${dealerLabel}」对应的座位`);
   assert(
     auction.includes('叫牌中') || auction.includes('轮到你'),
     '叫牌面板没有标出当前轮到谁'
   );
-  assert(
-    /max-h-\[56%\]/.test(auction) && auction.includes('overflow-y-auto'),
-    '叫牌面板没有高度上限/可滚动历史（轮数一多按钮会被顶出屏幕）'
-  );
+  // 此刻不一定是自己的轮次（发牌人随机），所以只看面板本身、不要求「不叫」在页面上
+  const panelIdle = checkBidPanelReachability(auction, { requirePassButton: false });
+  assert(panelIdle.ok, `叫牌面板不可达：${panelIdle.reason}`);
 
   // 5c) 轮到自己时：候选按钮是花色字形、「不叫」在页面里；随后 1 叫 + 2 pass 成交
   const dealerCred = players[dealerIndex]!.credential;
@@ -225,6 +234,9 @@ async function main(): Promise<void> {
   const secondBidder = await page(`/table/${code}`, players[nextIndex]!.credential);
   assert(secondBidder.includes('轮到你'), '第二位叫牌人的页面没有「轮到你」');
   assertBidControls(secondBidder, '叫牌页面（轮到你）');
+  // 「不叫」必须钉在面板底部的 sticky 页脚上：面板自己是唯一滚动区，按钮任何视口高度都在
+  const panelMine = checkBidPanelReachability(secondBidder);
+  assert(panelMine.ok, `轮到自己时「不叫」不可达：${panelMine.reason}`);
   for (const glyph of ['♣', '♦', '♥', '♠']) {
     assert(secondBidder.includes(glyph), `叫牌候选按钮里缺花色字形 ${glyph}`);
   }
@@ -362,7 +374,7 @@ async function main(): Promise<void> {
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
   console.log(`教程：9 个小节齐备（含观战与离座），渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
   console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌只剩金边`);
-  console.log('叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、「不叫」在页面里');
+  console.log('叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、面板自己滚且「不叫」是它的 sticky 底部');
   console.log('底牌：庄家埋底页有「你拿上来的底牌」+ 6 处标记；闲家页面 0 处标记');
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
   console.log('UI OK');

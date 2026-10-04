@@ -43,7 +43,7 @@ docs/adr/           架构决策记录
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
 pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 / 角色与观战投影
-                      #                    + 在线态判定 + MCP 作弊面守卫
+                      #                    + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
 pnpm test:mcp         # MCP 工具层单测：工具语义、参数校验、等待超时、协议注册一致性、stdio 启动契约
 pnpm check            # 引擎 tsc + MCP 包 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
@@ -69,7 +69,8 @@ BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：p
                                                        # 邀请码可点复制、常驻提示已清空、? 按阶段给说明、无方位称谓、
                                                        # /rules 九个小节齐备且渲染真实牌面、
                                                        # 王牌面（名字只在角落索引、正中是 ☀/☾ 图案）、
-                                                       # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）
+                                                       # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）、
+                                                       # 叫牌面板是唯一滚动区、「不叫」是它内部的 sticky 底部（不会被裁掉）
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
 BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换身份：满座第 4 人只看公共信息、
                                                        # 观战负载不含在座手牌、补位继承该座位的手牌与级别、
