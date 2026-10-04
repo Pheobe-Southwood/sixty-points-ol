@@ -203,6 +203,30 @@ test('claim：响应丢失时的指路**不能**是「先去看局面」（它�
   assert.equal(calls.length, 1, 'claim 也是写路径：一次都不重发');
 });
 
+/**
+ * 回归：`claim` 在**带着凭据**的连接上也不许挂 `Authorization`。
+ *
+ * 挂上之后 `/api/auth/claim` 会把调用方当成 `current`，于是「claim 自己的名字」走那条幂等分支、
+ * 把调用方**自己那把活凭据**回给工具面，工具面再照着交接说明让人类去导入 —— 人类与 agent 从此
+ * 共用一串、互相抢出牌，而 ADR-0014 的「凭据只交给人、不接管」当场破产。
+ * 进程内那条路（`/api/mcp` 的 claim 端口）没有 `current`，任何撞名都失败；两条传输必须同答案。
+ */
+test('claim：连接带着凭据也不挂 Authorization（否则同名会把自己那把凭据交出去）', async () => {
+  const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ name: '小六', credential: 'issued.cred' }));
+  const api = httpApi({ baseUrl: BASE, credential: 'own.cred', fetchImpl });
+
+  await api.claim('小六');
+  assert.equal(
+    'authorization' in calls[0]!.headers,
+    false,
+    'claim 一旦带上凭据，服务端就会把同名的既有身份（可能就是你自己的）返回给我们'
+  );
+
+  // 非空转的对照组：同一份凭据在别的调用上**必须**带上 —— 否则上面那条断言也可能只是「全局都没挂」
+  await api.listTables();
+  assert.equal(calls[1]!.headers['authorization'], 'Bearer own.cred', '除了 claim，别的调用照旧要带凭据');
+});
+
 test('claim：服务端没给凭据串时（200 但形状不对）说得清楚', async () => {
   const { fetchImpl } = recordingFetch(() => jsonResponse({ name: '小六' }));
   const api = httpApi({ baseUrl: BASE, credential: '', fetchImpl });

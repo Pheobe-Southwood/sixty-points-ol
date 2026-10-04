@@ -910,6 +910,27 @@ async function assertBadCredentialRejected(): Promise<void> {
   console.log('  坏凭据被 401 拒绝（真客户端也连不上），而「没带凭据」照常连上');
 }
 
+/**
+ * **跨传输一致性守卫**：`claim` 一个**自己已经拥有的名字**。
+ *
+ * 这条来自一次真实缺陷。stdio 那条路 POST `/api/auth/claim`，而只要那个请求带上 `Authorization`，
+ * 服务端就把调用方当成 `current`，于是走*幂等*分支、把调用方**自己那把活凭据**回给工具面 ——
+ * 工具面接着照交接说明让人类去导入，人类与 agent 从此共用一串、互相抢出牌（README 的
+ * 「一个座位一个凭据」当场作废，ADR-0014 的「不接管」也当场破产）。
+ * 进程内那条路（`/api/mcp` 的 claim 端口）只有 `createIdentity`，没有 `current` 这个概念，
+ * 任何撞名都失败 —— 所以两条传输都必须**失败**，且响应里不许出现凭据。
+ */
+async function assertClaimRejectsOwnName(client: Client, ownName: string, label: string): Promise<void> {
+  const denied = await callToolRaw(client, 'claim', { name: ownName });
+  assert.equal(
+    denied.ok,
+    false,
+    `${label}：claim 自己的名字（${ownName}）居然成功了 —— 那等于把调用方自己那把凭据当成「给人类的新身份」交出去`
+  );
+  assert.match(denied.text, /这个名字已被使用/, `${label}：撞名要给一句人话`);
+  assert.equal(denied.text.includes('credential'), false, `${label}：撞名时把凭据串交出去了`);
+}
+
 // ---------------------------------------------------------------- 座位双向（leave_seat / take_seat）
 
 /**
@@ -988,7 +1009,7 @@ async function listTools(client: Client): Promise<number> {
 
 async function runTransport(
   kind: 'stdio' | 'http',
-  session0: { code: string; credential: string },
+  session0: { code: string; credential: string; name: string },
   others: readonly { seat: number; credential: string }[]
 ): Promise<void> {
   const title =
@@ -1018,6 +1039,9 @@ async function runTransport(
       tables.tables.some((table) => table.code === session0.code),
       `list_my_tables 没列出 ${session0.code}（GET /api/tables 没把新端点接上？）`
     );
+
+    // 同一个调用在两条传输上必须同一个答案（这次的真实缺陷就在这条线上）
+    await assertClaimRejectsOwnName(client, session0.name, title);
 
     // 上一副结算后 history 会多一行，所以每副单独算预算
     for (let index = 0; index < DEALS; index++) {
@@ -1088,8 +1112,8 @@ async function main(): Promise<void> {
     { seat: 2, credential: seatC.credential }
   ] as const;
 
-  await runTransport('stdio', { code, credential: mcpSeat.credential }, others);
-  await runTransport('http', { code, credential: mcpSeat.credential }, others);
+  await runTransport('stdio', { code, credential: mcpSeat.credential, name: NAMES[0] }, others);
+  await runTransport('http', { code, credential: mcpSeat.credential, name: NAMES[0] }, others);
 
   // 与传输无关的那条：坏凭据必须 401，而「没带凭据」照常连上（两种情况分开）
   await assertBadCredentialRejected();

@@ -47,6 +47,17 @@ interface RequestOptions {
    * 对它说「先去看局面」是错的指路，所以那个工具自带一句。
    */
   readonly failureText?: ((detail: string) => string) | undefined;
+  /**
+   * 这次请求要不要带上自己的凭据（**默认要**）。
+   *
+   * 只有 `claim` 给 `false`：它打的是公开端点 `/api/auth/claim`，而那个端点**一旦看见 `Authorization`
+   * 就把调用方当成 `current`** —— 于是「claim 自己的名字」会走那条*幂等*分支，把**你自己那把活凭据**
+   * 原样回给你，工具面接着会把它当作「给人类的新身份」交出去（ADR-0014 的「凭据只交给人、不接管」
+   * 当场破产，人类与 agent 随后共用同一串、互相抢出牌）。
+   * 进程内那条路（`/api/mcp` 的 claim 端口）只有 `createIdentity`，任何撞名都失败、也没有 `current`
+   * 这个概念 —— **不带凭据才是两条传输答案一致的那一个**。
+   */
+  readonly sendCredential?: boolean | undefined;
 }
 
 /**
@@ -66,7 +77,7 @@ export function httpApi(options: HttpApiOptions): GameApi {
     const headers: Record<string, string> = {
       ...(init.headers as Record<string, string> | undefined)
     };
-    if (credential.length > 0) headers['authorization'] = `Bearer ${credential}`;
+    if (behavior.sendCredential !== false && credential.length > 0) headers['authorization'] = `Bearer ${credential}`;
     if (init.body !== undefined) headers['content-type'] = 'application/json';
 
     // 写路径（`POST /action`、`POST /api/tables`、`POST /join`、`DELETE /seat`）在服务端没有幂等键：
@@ -152,12 +163,16 @@ export function httpApi(options: HttpApiOptions): GameApi {
     },
 
     async claim(name: string): Promise<ClaimedIdentity> {
-      // 这一步**不带凭据**（公开端点，与浏览器大厅那个「创建身份」同一个），所以走这条路可以是
-      // 一个完全没有身份的连接 —— 这正是「AI 帮人类把身份配起来」的入口（见 ADR-0014）。
+      // 这一步**不带凭据**（`sendCredential: false`）：`/api/auth/claim` 是公开端点，与浏览器大厅
+      // 那个「创建身份」同一个；而它一旦看见 `Authorization` 就把调用方当成 `current`，于是
+      // 「claim 自己的名字」会走那条*幂等*分支、把你自己那把活凭据回给你（见 RequestOptions 的说明）。
+      // 浏览器那条路保留自己的幂等语义（大厅重提交自己的名字就该拿回凭据），MCP 这一侧的定义是
+      // **新建或失败** —— 不带凭据才是两条传输一致的那一个。
       const payload = (await request(
         '/api/auth/claim',
         { method: 'POST', body: JSON.stringify({ name }) },
         {
+          sendCredential: false,
           // claim 没有局面可核对，所以不能套用那句「先用 get_state 核对」
           failureText: (detail) =>
             `无法确认这个身份是否已经建好（${detail}）：同名再 claim 一次会告诉你「这个名字已被使用」，` +
