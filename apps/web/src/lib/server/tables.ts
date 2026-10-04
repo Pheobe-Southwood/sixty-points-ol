@@ -427,7 +427,7 @@ export function applyTableAction(code: string, userId: number, action: Action): 
     appendEvents(table.id, result.events);
   });
   broadcast(table.id);
-  // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0014）。
+  // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0015）。
   // 放在 broadcast 之后：机器人动作会再次广播，链式推进到人类回合为止。
   scheduleBots(table.id);
   return { ok: true };

@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_table ON events (table_id, seq);
 `);
 
-// 机器人座位（ADR-0014）：老库补列。上面的 CREATE TABLE 只对新建库生效，
+// 机器人座位（ADR-0015）：老库补列。上面的 CREATE TABLE 只对新建库生效，
 // 已有的 users 表要靠探测 + ALTER，否则一升级就崩。
 {
   const columns = db.prepare('PRAGMA table_info(users)').all() as unknown as { name: string }[];

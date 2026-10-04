@@ -19,7 +19,7 @@ export interface SeatInfo {
   readonly userId: number | null;
   readonly name: string | null;
   readonly online: boolean;
-  /** 机器人座位（服务器代打的无凭据身份，见 ADR-0014）；`mcp-check` 的形状守卫会逐字段核对 */
+  /** 机器人座位（服务器代打的无凭据身份，见 ADR-0015）；`mcp-check` 的形状守卫会逐字段核对 */
   readonly bot: boolean;
 }
 

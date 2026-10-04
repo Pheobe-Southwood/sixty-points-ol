@@ -59,7 +59,7 @@ export function findByName(name: string): Identity | null {
   return row ?? null;
 }
 
-/** 按名字查**可登录**的身份：机器人行被排除（ADR-0014 —— 机器人没有凭据串，也不许有） */
+/** 按名字查**可登录**的身份：机器人行被排除（ADR-0015 —— 机器人没有凭据串，也不许有） */
 function findAuthByName(name: string): Identity | null {
   const row = db.prepare('SELECT id, name, token FROM users WHERE name = ? AND is_bot = 0').get(
     name
