@@ -140,9 +140,15 @@ export class TableClient {
     return this.#request(`/api/tables/${this.code}/seat`, { method: 'DELETE' }).then((p) => p !== null);
   }
 
-  /** 加机器人：占第一个空座（进行中加入即补位）；服务端校验「在座人类 + 未达上限」 */
-  addBot(): Promise<boolean> {
-    return this.#request(`/api/tables/${this.code}/bot`, { method: 'POST' }).then((p) => p !== null);
+  /**
+   * 加机器人：`seat` 是**点的那张空座卡**（进行中加入即补位）。
+   * 服务端校验「在座人类 + 未达上限 + 该座位确实空着」。
+   */
+  addBot(seat: number): Promise<boolean> {
+    return this.#request(`/api/tables/${this.code}/bot`, {
+      method: 'POST',
+      body: JSON.stringify({ seat })
+    }).then((p) => p !== null);
   }
 
   /** 请机器人离座：离座语义（本副停在空座上等补位），身份随之删除、名字可复用 */

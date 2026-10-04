@@ -17,6 +17,7 @@
     bot = false,
     canAddBot = false,
     canRemoveBot = false,
+    busy = false,
     onAddBot,
     onRemoveBot,
     class: klass = ''
@@ -27,12 +28,14 @@
     isDeclarer?: boolean;
     isTurn?: boolean;
     online?: boolean;
-    /** 这个座位是机器人（服务器代打的无凭据身份，见 ADR-0014） */
+    /** 这个座位是机器人（服务器代打的无凭据身份，见 ADR-0015） */
     bot?: boolean;
     /** 空座且可以加机器人（在座人类、机器人未达上限） */
     canAddBot?: boolean;
     /** 这是机器人座位且当前身份能请它离座（在座人类） */
     canRemoveBot?: boolean;
+    /** 有请求在飞：与「入座」「离座」一致，动作按钮一律禁用，防双击连加两个 */
+    busy?: boolean;
     onAddBot?: () => void;
     onRemoveBot?: () => void;
     class?: string;
@@ -97,7 +100,8 @@
   {#if empty && canAddBot && onAddBot}
     <button
       type="button"
-      class="mt-2 w-full rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/70 transition hover:bg-white/10"
+      disabled={busy}
+      class="mt-2 w-full rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/70 transition hover:bg-white/10 disabled:opacity-40"
       onclick={onAddBot}
     >
       + 机器人
@@ -105,7 +109,8 @@
   {:else if bot && canRemoveBot && onRemoveBot}
     <button
       type="button"
-      class="mt-2 w-full rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/60 transition hover:bg-white/10"
+      disabled={busy}
+      class="mt-2 w-full rounded-md border border-white/15 px-2 py-0.5 text-[11px] text-white/60 transition hover:bg-white/10 disabled:opacity-40"
       onclick={onRemoveBot}
     >
       请离

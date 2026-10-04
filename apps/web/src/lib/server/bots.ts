@@ -1,5 +1,5 @@
 /**
- * 机器人座位的服务端实现（ADR-0014）：无令牌特殊身份 + 进程内代打。
+ * 机器人座位的服务端实现（ADR-0015）：无令牌特殊身份 + 进程内代打。
  *
  * 信息面与动作面各只有一条路：
  * - **看**：`viewFor`（浏览器 / MCP 同款的个人视图投影）—— 机器人拿不到别人的手牌与底牌，
@@ -22,9 +22,34 @@ export { BOT_LIMIT };
 
 const BOT_NAME_POOL = ['小六', '小七', '小八', '小九', '小十'] as const;
 
-/** 拟人延迟（毫秒）：测试把它调零换确定性；上限不低于下限 */
-const DELAY_MIN_MS = Math.max(0, Number(process.env['SIXTY_BOT_DELAY_MIN_MS'] ?? 500));
-const DELAY_MAX_MS = Math.max(DELAY_MIN_MS, Number(process.env['SIXTY_BOT_DELAY_MAX_MS'] ?? 1500));
+/**
+ * 拟人延迟（毫秒）的解析：**非法值一律退回默认**，绝不把 NaN 传下去。
+ *
+ * 为什么值得单独一个纯函数：`Math.max(0, Number('500ms'))` 是 `NaN`，而 `randomInt(0, NaN)`
+ * 会抛错 —— 而调度器在 `hooks.server.ts` 的**模块加载期**就会跑（启动补扫），
+ * 于是「compose 里把延迟写成 `0.5s`」这种笔误会让**整个服务起不来**。
+ * 单独抽出来也因为它是纯函数，测试可以直接喂坏值，不受模块缓存影响。
+ */
+export interface BotDelayRange {
+  readonly min: number;
+  readonly max: number;
+}
+
+const DEFAULT_DELAY_MIN_MS = 500;
+const DEFAULT_DELAY_MAX_MS = 1500;
+
+export function botDelayRange(env: Record<string, string | undefined> = process.env): BotDelayRange {
+  const parse = (raw: string | undefined, fallback: number): number => {
+    if (raw === undefined) return fallback;
+    const trimmed = raw.trim();
+    if (trimmed === '') return fallback; // 空串 = 没设（compose 里 `X=` 很常见）
+    const value = Number(trimmed);
+    if (!Number.isFinite(value)) return fallback; // '500ms' / '0.5s' 之类
+    return Math.max(0, Math.floor(value)); // 取整：randomInt 只吃安全整数
+  };
+  const min = parse(env['SIXTY_BOT_DELAY_MIN_MS'], DEFAULT_DELAY_MIN_MS);
+  return { min, max: Math.max(min, parse(env['SIXTY_BOT_DELAY_MAX_MS'], DEFAULT_DELAY_MAX_MS)) };
+}
 
 interface BotSeatRow {
   readonly seat: number;
@@ -70,18 +95,34 @@ function createBotIdentity(): { id: number; name: string } {
 export type BotResult<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
 
 /**
- * 加一个机器人：占第一个空座（进行中加入＝**补位**，接手该座位的手牌与级别）。
+ * 加一个机器人（进行中加入＝**补位**，接手该座位的手牌与级别）。
  * 只有**在座的人类**能加（观战者不能改桌面构成）；上限 `BOT_LIMIT`。
+ *
+ * `seat` 可选：界面上每张空座卡都有自己的「+ 机器人」，点哪张就该坐哪张
+ * （补位进哪个座位是有差别的：那个座位可能正好轮得到、或手牌更好）。
+ * 不传就取第一个空座 —— `bot-check` 与既有测试依赖这个默认行为。
  */
-export function addBot(code: string, actorId: number): BotResult<{ seat: number; name: string }> {
+export function addBot(
+  code: string,
+  actorId: number,
+  seat?: number
+): BotResult<{ seat: number; name: string }> {
   const table = getTableByCode(code);
   if (table === null) return { ok: false, error: '同桌不存在' };
   if (seatOf(table, actorId) === null) return { ok: false, error: '加机器人需要你先入座' };
   if (botSeats(table.id).length >= BOT_LIMIT) {
     return { ok: false, error: `机器人至多 ${BOT_LIMIT} 个（至少留一个人类座位按「开下一副」）` };
   }
-  const free = table.seats.findIndex((id) => id === null);
-  if (free === -1) return { ok: false, error: '座位已满，等有人离座' };
+
+  let free: number;
+  if (seat === undefined) {
+    free = table.seats.findIndex((id) => id === null);
+    if (free === -1) return { ok: false, error: '座位已满，等有人离座' };
+  } else {
+    if (!Number.isInteger(seat) || seat < 0 || seat > 2) return { ok: false, error: '座位号不合法' };
+    if (table.seats[seat] !== null) return { ok: false, error: '那个座位已经有人了' };
+    free = seat;
+  }
 
   const { id, name } = createBotIdentity();
   transaction(() => {
@@ -157,6 +198,7 @@ function clearTimer(tableId: number, userId: number): void {
 export function scheduleBots(tableId: number): void {
   const table = getTableById(tableId);
   if (table === null) return;
+  const { min, max } = botDelayRange();
   for (const { user_id: userId } of botSeats(tableId)) {
     if (seatOf(table, userId) === null) continue; // 竞态兜底：座位已没了
     const payload = viewFor(table, userId);
@@ -164,7 +206,7 @@ export function scheduleBots(tableId: number): void {
     const key = `${tableId}:${userId}`;
     const existing = timers.get(key);
     if (existing !== undefined) clearTimeout(existing);
-    const delay = DELAY_MIN_MS + randomInt(0, DELAY_MAX_MS - DELAY_MIN_MS + 1);
+    const delay = min + randomInt(0, max - min + 1);
     timers.set(
       key,
       setTimeout(() => {

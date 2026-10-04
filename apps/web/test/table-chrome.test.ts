@@ -32,6 +32,8 @@ const drawer = read('../src/lib/components/TableDrawer.svelte');
 const bidPanel = read('../src/lib/components/BidPanel.svelte');
 const kittyPanel = read('../src/lib/components/KittyPanel.svelte');
 const mePanel = read('../src/lib/components/MePanel.svelte');
+const seatCard = read('../src/lib/components/SeatCard.svelte');
+const seatActions = read('../src/lib/components/SeatActions.svelte');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -143,5 +145,32 @@ test('查阅面进抽屉，动作面留桌面', () => {
     code(kittyPanel).includes('originalKitty'),
     false,
     '「底牌」页引用了 originalKitty：拿上来的那 3 张只活在毡面的埋底面板里，两处不许混同'
+  );
+});
+
+test('动作按钮都要在有请求在飞时禁用（慢网下防双击），机器人按钮也不例外', () => {
+  // 参照物：入座/离座一直是对的；加机器人这些后加的按钮当初漏了 busy 判断
+  assert.ok(
+    code(seatActions).includes('disabled={client.busy}'),
+    '「入座」按钮不再禁用 busy —— 参照物变了，请检查这条守卫是不是在空转'
+  );
+  // 不用正则拼标签（标签里有 `+`，正则里是量词）——按 <button 切块找，读起来也直白
+  const buttons = code(seatCard).split('<button').slice(1);
+  for (const label of ['+ 机器人', '请离']) {
+    const block = buttons.find((piece) => piece.includes(label));
+    assert.ok(block !== undefined, `座位卡里找不到「${label}」按钮`);
+    assert.ok(
+      block.includes('disabled={busy}'),
+      `「${label}」按钮没有 disabled={busy}：慢网下会被人连点两次`
+    );
+  }
+  assert.ok(
+    pageCode.includes('busy={client.busy}'),
+    '同桌页没有把 client.busy 传给座位卡 —— 上面那条 disabled={busy} 就会永远是 false'
+  );
+  // 按钮位置必须带语义：点哪张空座卡就加进哪张（曾经过：无论点哪个都加进第一个空座）
+  assert.ok(
+    pageCode.includes('onAddBot={() => void addBot(seat)}'),
+    '空座卡的「+ 机器人」没有把自己的座位传出去 —— 又会变成「点第二个、坐到第一个」'
   );
 });

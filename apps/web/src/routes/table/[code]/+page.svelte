@@ -109,14 +109,17 @@
 
   /**
    * 机器人动作只在**自己坐在这一桌**时出现（观战者不改变桌面构成，服务端也会拒）。
-   * 上限 2：至少留一个人类座位去按「开下一副」（机器人从不发起桌面级动作，见 ADR-0014）。
+   * 上限 2：至少留一个人类座位去按「开下一副」（机器人从不发起桌面级动作，见 ADR-0015）。
    */
   const botCount = $derived((client.table?.seats ?? []).filter((seat) => seat.bot).length);
   const canAddBot = $derived(seated && botCount < BOT_LIMIT);
 
-  /** 加机器人：占第一个空座（进行中加入即补位）；结果随 SSE 广播回来 */
-  async function addBot(): Promise<void> {
-    await client.addBot();
+  /**
+   * 加机器人：**点哪张空座卡就坐哪张**（补位进哪个座位是有差别的：那个座位可能正好轮得到、
+   * 或者手牌更好）。结果随 SSE 广播回来，不做乐观更新。
+   */
+  async function addBot(seat: number): Promise<void> {
+    await client.addBot(seat);
   }
 
   function levelAt(index: number): Level {
@@ -196,9 +199,10 @@
         online={seatAt(seat)?.online ?? false}
         bot={seatAt(seat)?.bot ?? false}
         canAddBot={canAddBot && (seatAt(seat)?.name ?? null) === null}
-        onAddBot={() => void addBot()}
+        onAddBot={() => void addBot(seat)}
         canRemoveBot={seated}
         onRemoveBot={() => (botRemoveSeat = seat)}
+        busy={client.busy}
         isMe={seated && seat === (you?.seat ?? -1)}
         isTurn={isTurnAt(seat)}
         isDeclarer={deal?.declarerSeat === seat}

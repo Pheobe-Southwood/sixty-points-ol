@@ -1,5 +1,5 @@
 /**
- * 机器人座位的进程内集成测试（ADR-0014）：真 SQLite、真调度器、真引擎，只把
+ * 机器人座位的进程内集成测试（ADR-0015）：真 SQLite、真调度器、真引擎，只把
  * **拟人延迟调零**换取确定性。
  *
  * 覆盖别处测不到的五件事：
@@ -13,23 +13,18 @@
  * 沙箱里按包跑：`pnpm run test:web`（`--import ./test/loader.mjs` 见 package.json）。
  */
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { cardsPoints, type Action } from '@sixty/engine';
 import { moveFor, type BotMove } from '@sixty/bot';
 
-// 必须在 db 模块**被求值之前**生效：所以服务端模块一律动态 import（静态 import 会先执行）
-const DB_PATH = fileURLToPath(new URL('../data/bots-test.db', import.meta.url));
-process.env['SIXTY_DB'] = DB_PATH;
-process.env['SIXTY_BOT_DELAY_MIN_MS'] = '0';
-process.env['SIXTY_BOT_DELAY_MAX_MS'] = '0';
-for (const suffix of ['', '-wal', '-shm']) rmSync(`${DB_PATH}${suffix}`, { force: true });
+// 库与延迟的准备必须在服务端模块被求值之前完成（见 server-db.ts 的注释）
+await import('./server-db.ts');
 
 const { db } = await import('../src/lib/server/db.ts');
 const {
   BOT_LIMIT,
   addBot,
+  botDelayRange,
   botSeats,
   botsIdle,
   forgetBotTimers,
@@ -142,8 +137,7 @@ test('1 人 + 2 机器人：从发牌打到结算，机器人真的动了手', a
   const started = applyTableAction(fixture.code, fixture.humanId, { type: 'deal' });
   assert.ok(started.ok, `发牌失败：${started.ok ? '' : started.message}`);
 
-  const botIds = botSeats(tableId).map((row) => row.user_id);
-  assert.equal(botIds.length, 2, '满座桌应有两个机器人');
+  assert.equal(botSeats(tableId).length, 2, '满座桌应有两个机器人');
 
   let scored = false;
   let rounds = 0;
@@ -168,14 +162,17 @@ test('1 人 + 2 机器人：从发牌打到结算，机器人真的动了手', a
   assert.equal(deal.captured.flat().length + deal.kitty.length, 54);
   assert.equal(cardsPoints(deal.captured.flat()) + cardsPoints(deal.kitty), 100);
 
-  // 机器人确实出过手：事件表里出现它们座位的叫牌/埋底/出牌
+  // 机器人确实出过手：事件表里出现它们**座位**的叫牌/埋底/出牌
+  // （注意比的是座位号，不是 user id —— 两者只是碰巧都是小整数，比错了会时红时绿）
+  const botSeatNumbers = botSeats(tableId).map((row) => row.seat);
+  assert.equal(botSeatNumbers.length, 2);
   const acted = db
     .prepare(
       `SELECT COUNT(*) AS n FROM events
        WHERE table_id = ? AND type IN ('bid','bury','play')
          AND json_extract(payload, '$.seat') IN (?, ?)`
     )
-    .get(tableId, botIds[0]!, botIds[1]!) as { n: number };
+    .get(tableId, botSeatNumbers[0]!, botSeatNumbers[1]!) as { n: number };
   assert.ok(acted.n > 0, '事件表里没有机器人动作：调度器没把动作发出去');
 });
 
@@ -237,6 +234,66 @@ test('权限与上限：未入座加不了、至多 2 个、非机器人座位�
   assert.ok(!notBot.ok && notBot.error.includes('机器人'), '人类座位不该能被当成机器人踢掉');
   const byOutsider = removeBot(table.code, outsider.id, botSeats(tableIdOf(table.code))[0]!.seat);
   assert.ok(!byOutsider.ok, '未入座者不该能踢机器人');
+});
+
+test('指定座位加机器人：就坐点的那张空座；已占座位与越界座位被拒', () => {
+  const me = human();
+  const table = createTable(me.id); // 我坐 0 号位
+  const tableId = tableIdOf(table.code);
+
+  const atTwo = addBot(table.code, me.id, 2);
+  assert.ok(atTwo.ok, `指定 2 号位失败：${atTwo.ok ? '' : atTwo.error}`);
+  if (atTwo.ok) assert.equal(atTwo.value.seat, 2, '必须坐进指定的座位，而不是第一个空座');
+  assert.deepEqual(botSeats(tableId).map((row) => row.seat), [2]);
+
+  const taken = addBot(table.code, me.id, 0); // 0 号位是我自己
+  assert.ok(!taken.ok && taken.error.includes('已经有人'), '已占座位应当被拒');
+
+  const outOfRange = addBot(table.code, me.id, 9);
+  assert.ok(!outOfRange.ok, '越界座位号应当被拒');
+
+  // 不指定座位时仍是「第一个空座」（脚本与既有调用依赖这条默认行为）
+  const byDefault = addBot(table.code, me.id);
+  assert.ok(byDefault.ok);
+  if (byDefault.ok) assert.equal(byDefault.value.seat, 1, '不指定时取第一个空座');
+});
+
+test('botDelayRange：坏值一律退回默认，绝不产生 NaN（初版会让服务起不来）', () => {
+  assert.deepEqual(botDelayRange({}), { min: 500, max: 1500 }, '没设就用默认');
+  assert.deepEqual(
+    botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '', SIXTY_BOT_DELAY_MAX_MS: '' }),
+    { min: 500, max: 1500 },
+    '空串 = 没设（compose 里 `X=` 很常见）'
+  );
+  assert.deepEqual(
+    botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '500ms', SIXTY_BOT_DELAY_MAX_MS: '0.5s' }),
+    { min: 500, max: 1500 },
+    '带单位/非数字的笔误退回默认，而不是 NaN'
+  );
+  assert.deepEqual(
+    botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '-5', SIXTY_BOT_DELAY_MAX_MS: '10' }),
+    { min: 0, max: 10 },
+    '负数夹到 0'
+  );
+  assert.deepEqual(
+    botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '0.5', SIXTY_BOT_DELAY_MAX_MS: '2.9' }),
+    { min: 0, max: 2 },
+    '小数取整：randomInt 只吃安全整数'
+  );
+  assert.deepEqual(
+    botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '3000', SIXTY_BOT_DELAY_MAX_MS: '1000' }),
+    { min: 3000, max: 3000 },
+    '上限低于下限时抬到下限'
+  );
+  const bad = botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: 'NaN', SIXTY_BOT_DELAY_MAX_MS: 'Infinity' });
+  for (const value of [bad.min, bad.max]) {
+    assert.ok(Number.isInteger(value) && Number.isFinite(value), `解析结果必须是有限整数：${value}`);
+  }
+  // 合法值照常生效（调零就是靠它）
+  assert.deepEqual(botDelayRange({ SIXTY_BOT_DELAY_MIN_MS: '0', SIXTY_BOT_DELAY_MAX_MS: '0' }), {
+    min: 0,
+    max: 0
+  });
 });
 
 // ---------------------------------------------------------------------------
