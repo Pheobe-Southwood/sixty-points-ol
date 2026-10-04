@@ -118,18 +118,11 @@
   function selectTab(key: DrawerTabKey): void {
     active = active === key ? null : key;
   }
-
-  const dotClass = $derived(
-    client.connection === 'live'
-      ? 'bg-emerald-400'
-      : client.connection === 'offline'
-        ? 'bg-rose-500'
-        : 'bg-amber-300'
-  );
 </script>
 
 <main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
-  <!-- 页头只留必要信息：大厅、邀请码、连接点，以及观战者补位用的「入座」。
+  <!-- 页头只留必要信息：大厅、邀请码，以及观战者补位用的「入座」——
+       连接正常时页头一个像素都不占（断线才由下面那条提示出声）。
        战报/叫牌/底牌/我 全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。 -->
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -142,9 +135,21 @@
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
       <SeatActions {client} variant="sit-only" />
-      <span class={['h-2 w-2 rounded-full', dotClass]} title="连接状态"></span>
     </div>
   </header>
+
+  <!-- 连接异常只在坏的时候出声：`live`（常态）与首帧的 `connecting` 都不占像素 ——
+       手机上没有 hover，旧的那枚绿点既解释不了、也没有动作可做；EventSource 自己会重连，
+       所以这里只需说明「画面可能停在上一帧」。role="status" 让读屏也能听到重连。
+       被否的替代（常驻圆点 / 挪进「我」页 / connecting 也提示）见 CONTEXT.md。 -->
+  {#if client.connection === 'offline'}
+    <p
+      role="status"
+      class="mb-2 rounded-lg bg-amber-400/15 px-3 py-1.5 text-xs text-amber-200 ring-1 ring-amber-400/30"
+    >
+      连接中断，正在重连…画面可能停在上一帧。
+    </p>
+  {/if}
 
   {#if client.error}
     <p class="mb-2 rounded-lg bg-red-500/20 px-3 py-2 text-xs text-red-200">{client.error}</p>

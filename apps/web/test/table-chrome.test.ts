@@ -13,6 +13,10 @@
  *   （「改名 / 换身份」与「座位已满」），一旦被改成 `{#if active === 'me'}`，
  *   那两条端到端守卫就会从「入口真的在页面上」退化成「标签名存在」。
  *
+ * 还有一条关于**页头里不该有什么**：连接状态不是常驻指示器，只在 SSE 断开时
+ * 于页头下方出一句话 —— 绿点已下线（手机上没有 hover 能解释它），但也不许反过来
+ * 改成常显（每次加载闪一条、顶动牌桌）。
+ *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
@@ -51,16 +55,34 @@ test('页头只留必要信息：别的都在抽屉里，加一样就要在这�
     assert.equal(
       header.includes(banned),
       false,
-      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 连接点 / 观战者的入座）`
+      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 观战者的入座）`
     );
   }
-  for (const needed of ['← 大厅', 'InviteCode', 'SeatActions', 'dotClass']) {
+  for (const needed of ['← 大厅', 'InviteCode', 'SeatActions']) {
     assert.ok(header.includes(needed), `页头少了「${needed}」（这是页头白名单里必须保留的一项）`);
   }
   assert.ok(
     header.includes('variant="sit-only"'),
     '页头的入座按钮不是 sit-only 变体：页头只该有「入座」，离座与座位已满归「我」页'
   );
+  // 连接圆点已下线：它只在没事的时候亮着，而手机上没有 hover 解释它。
+  // 断线提示必须留在页头**之外**（见下一条测试），不然页头又会被撑高、回到老问题。
+  for (const gone of ['dotClass', 'h-2 w-2 rounded-full', '连接中断']) {
+    assert.equal(
+      header.includes(gone),
+      false,
+      `页头里出现了「${gone}」：连接状态不再是常驻指示器，断线提示在页头下方单独成条`
+    );
+  }
+});
+
+test('连接状态只在断线时出声：正常态不占像素，也不许改成常显', () => {
+  assert.ok(
+    pageCode.includes("client.connection === 'offline'"),
+    '断线提示不是「只在 offline 时出现」：常显会在每次加载时闪一条并顶动牌桌（见 CONTEXT.md）'
+  );
+  assert.ok(pageCode.includes('连接中断'), '找不到断线提示的文案（它要说明画面可能停在上一帧）');
+  assert.ok(pageCode.includes('role="status"'), '断线提示缺 role="status"：读屏听不到重连');
 });
 
 test('四个页签与顺序只在 drawer-tabs.ts 里写一次，且与你的清单一致', () => {
