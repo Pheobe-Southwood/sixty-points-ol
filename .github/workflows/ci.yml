@@ -37,7 +37,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm test:web
+      - run: pnpm test:mcp
       - run: pnpm check
+      # MCP 端到端：跑**构建产物**，两条传输（stdio 真 spawn + /api/mcp）各打一整副。
+      # 这一步顺带守住「产物里 external 化的 MCP SDK 在运行期可解析」——
+      # 也就是 Dockerfile 运行阶段那份 node_modules 布局是否真的够用。
+      - run: pnpm build
+      - name: MCP 端到端（两条传输各打一副）
+        run: |
+          SIXTY_DB="$PWD/data/ci.db" PORT=5178 node apps/web/build/index.js > /tmp/sixty-server.log 2>&1 &
+          for _ in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:5178/ >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          if ! curl -fsS http://127.0.0.1:5178/ >/dev/null; then
+            echo "服务端没起来，日志如下："
+            cat /tmp/sixty-server.log
+            exit 1
+          fi
+          BASE=http://127.0.0.1:5178 pnpm mcp-check
 
   image:
     needs: verify

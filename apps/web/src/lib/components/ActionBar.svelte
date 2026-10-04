@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
+  import { helpKeyOf, phaseHelp } from '@sixty/engine';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import { helpKeyOf, phaseHelp } from '$lib/help';
   import { whoLabel } from '$lib/labels';
   import HelpPopover from './HelpPopover.svelte';
 

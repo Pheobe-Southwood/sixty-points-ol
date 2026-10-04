@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node"],
+    // MCP SDK 的类型没有按 exactOptionalPropertyTypes 写（如 Transport.sessionId 是
+    // `string | undefined` 而接口写 `string?`），与它对接的这一层必须放宽这一项；
+    // 引擎与 web 仍保持全严 —— 这个放宽只覆盖 packages/mcp。
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["src", "test", "scripts"]
+}

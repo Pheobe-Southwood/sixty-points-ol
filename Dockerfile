@@ -11,10 +11,13 @@ RUN npm i -g pnpm@11.22.0
 # 先只拷依赖清单，命中缓存后无需每次重装
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/engine/package.json packages/engine/
+COPY packages/mcp/package.json packages/mcp/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile
 
-# 再拷源码并构建（引擎以 TS 源码被 Vite 打包进产物）
+# 再拷源码并构建（引擎与 MCP 包都以 TS 源码被 Vite 打包进产物；
+# MCP SDK（@modelcontextprotocol/sdk、zod）是被 external 化的运行期依赖，
+# 因此它声明在 apps/web 的 dependencies 里，随下面的 apps/web/node_modules 一起进运行镜像）
 COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps ./apps
@@ -36,6 +39,9 @@ VOLUME ["/data"]
 COPY --from=build --chown=node:node /repo/node_modules ./node_modules
 COPY --from=build --chown=node:node /repo/apps/web/node_modules ./apps/web/node_modules
 COPY --from=build --chown=node:node /repo/packages/engine ./packages/engine
+# MCP 包本体：apps/web/node_modules/@sixty/mcp 是指向它的符号链接（不拷就是断链），
+# 且 sixty-mcp 这个 stdio 入口也能在容器里直接跑（对着同一个实例用另一份凭据）
+COPY --from=build --chown=node:node /repo/packages/mcp ./packages/mcp
 COPY --from=build --chown=node:node /repo/apps/web/build ./apps/web/build
 COPY --from=build --chown=node:node /repo/apps/web/package.json ./apps/web/package.json
 COPY --from=build --chown=node:node /repo/package.json ./package.json

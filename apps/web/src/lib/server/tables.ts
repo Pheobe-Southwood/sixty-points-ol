@@ -12,7 +12,7 @@ import type { Role, SeatInfo, StreamPayload, TableView } from '$lib/shared';
 import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '$lib/invite';
 import { projectionFor, resolveArrivalRole } from '$lib/role';
 import { db, now, transaction } from './db';
-import { broadcast, connectionUserIds, isUserOnline } from './hub';
+import { broadcast, connectionUserIds, forget, hasAnyConnection, isRecentlyActive, isUserOnline, touch } from './hub';
 
 export interface TableInfo {
   readonly id: number;
@@ -118,6 +118,54 @@ export function seatOf(table: TableInfo, userId: number): number | null {
   return index === -1 ? null : index;
 }
 
+/**
+ * 该身份出现在哪些桌（占着座位，或留着观战记录）。
+ *
+ * 「在线」是**身份级**的判定（`hub` 里按 userId 存），所以一个人刚上线这件事要在他出现的
+ * **每一张**桌都推一帧 —— 在 A 桌坐着、拿 B 桌的码轮询的 agent，不该在 A 桌一直显示离线。
+ * 不改 `myTables` 的返回形状来做这件事：那份形状有浏览器消费者（等于 wire 形状）。
+ */
+function tableIdsOf(userId: number): number[] {
+  const rows = db
+    .prepare(
+      `SELECT t.id AS id FROM tables t
+       LEFT JOIN seats s ON s.table_id = t.id AND s.user_id = ?
+       LEFT JOIN spectators w ON w.table_id = t.id AND w.user_id = ?
+       WHERE s.user_id IS NOT NULL OR w.user_id IS NOT NULL`
+    )
+    .all(userId, userId) as unknown as { id: number }[];
+  return rows.map((row) => row.id);
+}
+
+/** 这个身份的在场状态变了（刚上线 / 刚断开）：通知他出现的每一张桌 */
+export function announcePresence(userId: number): void {
+  for (const id of tableIdsOf(userId)) broadcast(id);
+}
+
+/**
+ * 记一次活跃，并在「离线→在线」翻转时通知各桌。
+ *
+ * 每个请求都推是不行的（`wait_for_turn` 每 1.5 秒读一次局面），所以这里只认翻转 ——
+ * 一个窗口内每个身份至多一次。
+ */
+function touched(userId: number): void {
+  if (touch(userId)) announcePresence(userId);
+}
+
+/**
+ * 某条 SSE 连接断了之后调用（**必须在注销之后**，见 ADR-0013）。
+ *
+ * 断线比「最近活跃」更硬：他已经不在了，却因为 60 秒窗口还挂着「在线」——
+ * 实测关标签页之后那颗点要 58 秒才变灰。所以这里把窗口作废，让他立刻离线。
+ *
+ * 唯一的例外是**他还有别的连接**（另一个标签页、另一台设备）：那时他没走，
+ * 不该因为关掉一个标签页就在别的桌上闪成离线。
+ */
+export function connectionClosed(userId: number): void {
+  if (hasAnyConnection(userId)) return;
+  if (forget(userId)) announcePresence(userId);
+}
+
 /** 该身份是否还占着任何一张桌的座位（改名/换身份的前提，见 ADR-0009） */
 export function seatedTableCode(userId: number): string | null {
   const row = db
@@ -164,15 +212,21 @@ function dealInProgress(tableId: number): boolean {
  * 到达一张同桌（点邀请码/邀请链接、或大厅「加入」）：
  * 已在座 → 玩家；有观战记录 → 观战（刷新不会被自动塞回座位）；有空座 → 自动入座；满座 → 观战。
  * 规则本身在 `resolveArrivalRole` 里，有单测；这里只做数据库动作。
+ *
+ * **变更之后要广播**（见 ADR-0012）：浏览器玩家随后必然连上 SSE，而 `stream` 在连接时会广播一次，
+ * 于是「入座」过去总是顺带把别人的屏幕刷新了 —— 那个隐含前提对 MCP 座位不成立（它没有 SSE），
+ * 所以人类屏幕上会一直显示「还差 1 人」、按钮一直是灰的，直到有人先出一次牌。
  */
 export function enterTable(code: string, userId: number): EnterResult {
   const table = getTableByCode(code);
   if (table === null) return { error: '同桌不存在' };
   const seat = seatOf(table, userId);
+  // 已经在座：什么都没变，不广播（重复 join_table 不该产生帧）
   if (seat !== null) return { role: 'player', table, seat, inherited: false };
 
   const freeSeats = table.seats.filter((id) => id === null).length;
-  const role = resolveArrivalRole({ seated: false, watching: watchingOf(table.id, userId), freeSeats });
+  const watching = watchingOf(table.id, userId);
+  const role = resolveArrivalRole({ seated: false, watching, freeSeats });
   if (role === 'player') {
     const free = freeSeatOf(table);
     db.prepare('INSERT INTO seats (table_id, seat, user_id, joined_at) VALUES (?, ?, ?, ?)').run(
@@ -181,10 +235,13 @@ export function enterTable(code: string, userId: number): EnterResult {
       userId,
       now()
     );
+    broadcast(table.id);
     return { role: 'player', table: getTableByCode(code)!, seat: free, inherited: dealInProgress(table.id) };
   }
 
   addWatcher(table.id, userId);
+  // 观战记录已经在了就连记录都没变，没必要推
+  if (!watching) broadcast(table.id);
   return { role: 'spectator', table };
 }
 
@@ -196,7 +253,9 @@ export function leaveSeat(code: string, userId: number): ActionResult {
   if (table === null) return { ok: false, message: '同桌不存在' };
   if (seatOf(table, userId) === null) {
     // 幂等：本来就没在座，只确保观战意愿记下（按钮双击/重试不该报错）
+    const watching = watchingOf(table.id, userId);
     addWatcher(table.id, userId);
+    if (!watching) broadcast(table.id);
     return { ok: true };
   }
   transaction(() => {
@@ -207,6 +266,7 @@ export function leaveSeat(code: string, userId: number): ActionResult {
       now()
     );
   });
+  broadcast(table.id);
   return { ok: true };
 }
 
@@ -218,10 +278,11 @@ export function takeSeat(
   const table = getTableByCode(code);
   if (table === null) return { error: '同桌不存在' };
   const existing = seatOf(table, userId);
+  // 已经在座：幂等，没有变化
   if (existing !== null) return { seat: existing, inherited: false };
   const free = freeSeatOf(table);
   if (free === -1) return { error: `座位已满（${SEAT_COUNT} 人），等有人离座` };
-  return transaction(() => {
+  const result = transaction(() => {
     db.prepare('DELETE FROM spectators WHERE table_id = ? AND user_id = ?').run(table.id, userId);
     db.prepare('INSERT INTO seats (table_id, seat, user_id, joined_at) VALUES (?, ?, ?, ?)').run(
       table.id,
@@ -231,6 +292,8 @@ export function takeSeat(
     );
     return { seat: free, inherited: dealInProgress(table.id) };
   });
+  broadcast(table.id);
+  return result;
 }
 
 export function tableView(table: TableInfo): TableView {
@@ -249,7 +312,8 @@ export function tableView(table: TableInfo): TableView {
       seat,
       userId: row?.user_id ?? null,
       name: row?.name ?? null,
-      online: row ? isUserOnline(table.id, row.user_id) : false
+      // 「在线」= 有 SSE 订阅，或最近有请求（MCP 侧没有 SSE，只能靠请求说话，见 hub.ts）
+      online: row ? isUserOnline(table.id, row.user_id) || isRecentlyActive(row.user_id) : false
     };
   });
   const seatedCount = seats.filter((s) => s.userId !== null).length;
@@ -299,6 +363,9 @@ function appendEvents(tableId: number, events: readonly { type: string }[]): voi
  * 角色每次按数据库现算，绝不接受客户端传入（观战者无法自称玩家）。
  */
 export function payloadFor(table: TableInfo, userId: number): StreamPayload {
+  // 读到自己的负载就算「最近活跃」：MCP 侧没有 SSE，靠这个让座位卡不显示假离线（见 ADR-0010）。
+  // 翻转时顺手广播：别人的屏幕上那颗点该变绿了 —— 不然它要等到下一次动作才更新（见 ADR-0012）。
+  touched(userId);
   const seat = seatOf(table, userId);
   return {
     ...projectionFor(getGameState(table.id), seat === null ? null : (seat as Seat)),
@@ -311,6 +378,8 @@ export function applyTableAction(code: string, userId: number, action: Action): 
   const table = getTableByCode(code);
   if (table === null) return { ok: false, message: '同桌不存在' };
   const seat = seatOf(table, userId);
+  // 一次动作也是「最近活跃」：失败的动作同样说明这个人此刻在场（见 ADR-0010）
+  touched(userId);
   if (seat === null) return { ok: false, message: '你在观战，入座后才能操作' };
 
   const seated = table.seats.filter((id) => id !== null).length;

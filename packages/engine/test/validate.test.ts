@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { leadInfo, validateFollow, validateLead } from '../src/validate.ts';
+import { followMode, holdingOf, leadInfo, playHint, validateFollow, validateLead } from '../src/validate.ts';
 import { BJ, SJ, c } from './helpers.ts';
 
 const T = { strain: 'H' as const, rank: 7 };
@@ -90,5 +90,59 @@ describe('跟牌：主牌领出', () => {
     const hand = [c('H', 7), SJ, BJ];
     assert.equal(followErr(hand, lead, [SJ, BJ]), null);
     assert.equal(followErr(hand, lead, [c('H', 7), SJ]), null);
+  });
+});
+
+describe('playHint：只给约束，不给手牌', () => {
+  const lead = [c('C', 2), c('C', 3)]; // 副牌 2 顺
+
+  it('你是领出：没有任何跟牌约束', () => {
+    const hand = [c('C', 5), c('D', 2)];
+    assert.deepEqual(playHint(hand, T, null), { lead: null, holdingCount: hand.length, rule: 'lead-run-or-single' });
+    assert.deepEqual(playHint(hand, T, []), { lead: null, holdingCount: hand.length, rule: 'lead-run-or-single' });
+  });
+
+  it('该门够：rule=must-follow-class，并给出领出门与张数', () => {
+    const hand = [c('C', 5), c('C', 6), c('C', 8), c('D', 2)];
+    assert.deepEqual(playHint(hand, T, lead), {
+      lead: { cardClass: 'C', size: 2 },
+      holdingCount: 3,
+      rule: 'must-follow-class'
+    });
+  });
+
+  it('该门不够：rule=must-empty-class，holdingCount 如实', () => {
+    const hand = [c('C', 5), c('D', 2), c('D', 3)];
+    assert.deepEqual(playHint(hand, T, lead), {
+      lead: { cardClass: 'C', size: 2 },
+      holdingCount: 1,
+      rule: 'must-empty-class'
+    });
+  });
+
+  it('主牌门的领出报 "T"（级牌与王都算主牌）', () => {
+    const hint = playHint([c('H', 4), c('D', 2)], T, [c('H', 2), c('H', 3)]);
+    assert.deepEqual(hint.lead, { cardClass: 'T', size: 2 });
+  });
+
+  it('提示与裁判同源：rule 说的分支，正是 validateFollow 走的那一支', () => {
+    const enough = [c('C', 5), c('C', 6), c('C', 8), c('D', 2)];
+    const short = [c('C', 5), c('D', 2), c('D', 3)];
+
+    // enough：出非该门 → 必须报「必须全部跟该门」；short 走的是另一支 → 报「先出完该门」
+    assert.equal(playHint(enough, T, lead).rule, 'must-follow-class');
+    assert.match(followErr(enough, lead, [c('D', 2), c('C', 5)]) ?? '', /必须全部跟该门/);
+    assert.equal(playHint(short, T, lead).rule, 'must-empty-class');
+    assert.match(followErr(short, lead, [c('D', 2), c('D', 3)]) ?? '', /先出完该门/);
+
+    // followMode 与 holdingOf 是裁判自己用的那两个函数：阈值只有一处
+    const info = leadInfo(lead, T)!;
+    for (const hand of [enough, short]) {
+      assert.equal(
+        playHint(hand, T, lead).rule,
+        followMode(holdingOf(hand, T, 'C').length, info.size),
+        'playHint 的分支判断与 validateFollow 用的不是同一个阈值'
+      );
+    }
   });
 });

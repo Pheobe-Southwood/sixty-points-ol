@@ -5,3 +5,4 @@ export * from './validate.ts';
 export * from './trick.ts';
 export * from './state.ts';
 export * from './view.ts';
+export * from './help.ts';

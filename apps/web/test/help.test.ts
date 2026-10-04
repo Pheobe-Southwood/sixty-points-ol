@@ -1,7 +1,10 @@
 /**
- * 阶段说明单测：界面上不再有常驻提示，说明只活在「?」弹层与 /rules 里，
+ * 阶段说明单测：界面上不再有常驻提示，说明只活在「?」弹层、/rules 与 MCP 工具面的 read_rules 里，
  * 所以这份文本必须①每个阶段都有、②写完整、③不再出现方位称谓、
  * ④anchor 指向的 /rules 小节真实存在（对着页面文件核对，而不是各写一份常量）。
+ *
+ * 文本本身住在引擎包（packages/engine/src/help.ts），因为 MCP 工具面也要读它；
+ * 本文件留在 web，是因为它校验的 anchor 属于 /rules 页面。
  *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
@@ -9,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { helpKeyOf, phaseHelp, type HelpContext, type HelpKey } from '../src/lib/help.ts';
+import { HELP_KEYS, helpKeyOf, phaseHelp, type HelpContext, type HelpKey } from '@sixty/engine';
 
 const ALL_KEYS: readonly HelpKey[] = [
   'lobby',
@@ -102,6 +105,12 @@ test('阶段条的四步都连着真实小节', () => {
     assert.ok(page.includes(`href={\`#\${phase.id}\`}`), '阶段条没有按 phase.id 生成链接');
   }
   assert.ok(page.includes('PHASES'), '阶段条没有走 scenarios 的 PHASES 数据');
+});
+
+test('测试里的阶段清单与引擎导出的 HELP_KEYS 一致', () => {
+  // HELP_KEYS 是 MCP 工具面 read_rules 的遍历顺序；新增一个阶段必须两边都改，
+  // 否则工具面会漏掉一整段说明，而这里的守卫会直接红。
+  assert.deepEqual([...ALL_KEYS].sort(), [...HELP_KEYS].sort(), 'HELP_KEYS 与本文件的 ALL_KEYS 不一致');
 });
 
 test('不同阶段的内容确实不同（防空转）', () => {

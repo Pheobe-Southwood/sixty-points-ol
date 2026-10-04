@@ -1,0 +1,252 @@
+/**
+ * 测试替身：一个最小的内存版服务器。
+ *
+ * 它与真服务器对齐三件事：
+ *   1. 座位号由服务端注入（工具面永远不传 seat）；
+ *   2. 负载形状与浏览器一致：`view` 是**公共视图**（不含 `you`），`you` 单独一份；
+ *   3. 角色由服务端决定 —— `seat: null` 就是观战者（`view` 有、`you` 为 null、动作被拒）。
+ *
+ * 规则判定直接复用引擎的 dispatch —— 测试里不需要重写一遍规则，
+ * 真实的两条 HTTP 链路由 scripts/mcp-check.ts 端到端覆盖。
+ */
+import {
+  auctionTurn,
+  createGame,
+  dispatch,
+  personalView,
+  playTurn,
+  publicView,
+  type Action,
+  type Card,
+  type GameState,
+  type Seat
+} from '@sixty/engine';
+import { ApiError, type GameApi, type SeatlessAction, type TablePayload } from '../src/api.ts';
+import type { Role, TableSummary, TableView } from '../src/wire.ts';
+
+/** 固定 RNG：同一局在每次运行里都一样，测试只看规则不看随机 */
+export const rng = (): number => 0.5;
+
+export function fakeTableView(code = 'ABC123', online = true, spectatorCount = 0): TableView {
+  return {
+    code,
+    seats: [
+      { seat: 0, userId: 1, name: '甲', online: true },
+      { seat: 1, userId: 2, name: '乙', online },
+      { seat: 2, userId: 3, name: '丙', online: false }
+    ],
+    seatedCount: 3,
+    ready: true,
+    spectatorCount
+  };
+}
+
+function must(result: ReturnType<typeof dispatch>): GameState {
+  if (!result.ok) throw new Error(`测试用例自身的动作非法：${result.message}`);
+  return result.state;
+}
+
+/** 发完牌、还没人叫牌 */
+export function dealtState(): GameState {
+  return must(dispatch(createGame(0), { type: 'deal' }, rng));
+}
+
+/** 拍卖成交（座位 0 叫 40♣、其余 pass），庄家拿着 20 张、还没埋底 */
+export function contractState(): GameState {
+  let state = dealtState();
+  state = must(dispatch(state, { type: 'bid', seat: 0, call: { points: 40, strain: 'C' } }, rng));
+  state = must(dispatch(state, { type: 'bid', seat: 1, call: 'pass' }, rng));
+  state = must(dispatch(state, { type: 'bid', seat: 2, call: 'pass' }, rng));
+  return state;
+}
+
+/** 拍卖成交（座位 0 叫 40♣、其余 pass），庄家已埋底，进入打牌且由庄家领出 */
+export function playingState(): GameState {
+  const state = contractState();
+  const hand = state.deal!.hands[0]!;
+  return must(dispatch(state, { type: 'bury', seat: 0, cards: hand.slice(0, 3) }, rng));
+}
+
+/** 座位 0 之外的某一手：合法的一张单张（找不到返回 null，正常牌局不会发生） */
+function anyLegalSingle(state: GameState, seat: Seat): Card | null {
+  const hand = state.deal!.hands[seat]!;
+  for (const card of hand) {
+    if (dispatch(state, { type: 'play', seat, cards: [card] }, rng).ok) return card;
+  }
+  return null;
+}
+
+/**
+ * 让**除了「我的座位」之外**的某个座位走上一步。
+ *
+ * 这是测试里唯一能让牌局真的往前走的东西：`FakeApi` 只持有一张桌的状态，没有别的客户端，
+ * 所以「动作自带等待」要靠注入的 `sleep` 调它 —— 否则等的是一个永远不会变的局面。
+ *
+ * `mine` 是留给工具面驱动的那个座位（默认 0；要测「跟牌」时会把它设成 1，
+ * 这样座位 0 的首攻由这里代打，轮到 1 时正好是跟牌）。
+ *
+ * 返回 false = 现在轮到我，或者本副已经结算/走不动（调用方据此停下）。
+ */
+export function advanceOtherSeats(api: FakeApi, mine: Seat = 0): boolean {
+  const state = api.state;
+  const deal = state?.deal ?? null;
+  if (state === null || deal === null) return false;
+
+  if (deal.phase === 'auction') {
+    const seat = auctionTurn(deal);
+    if (seat === mine) return false;
+    api.state = must(dispatch(state, { type: 'bid', seat, call: 'pass' }, rng));
+    return true;
+  }
+  if (deal.phase === 'bury') {
+    const seat = deal.contract!.declarerSeat;
+    if (seat === mine) return false;
+    api.state = must(dispatch(state, { type: 'bury', seat, cards: deal.hands[seat]!.slice(0, 3) }, rng));
+    return true;
+  }
+  if (deal.phase === 'play') {
+    const seat = playTurn(deal);
+    if (seat === null || seat === mine) return false;
+    const card = anyLegalSingle(state, seat);
+    if (card === null) return false;
+    api.state = must(dispatch(state, { type: 'play', seat, cards: [card] }, rng));
+    return true;
+  }
+  return false;
+}
+
+/** 一直让别的座位走，直到轮到我或本副结束 */
+export function advanceUntilMyTurn(api: FakeApi, mine: Seat = 0, maxSteps = 200): number {
+  let steps = 0;
+  while (steps < maxSteps && advanceOtherSeats(api, mine)) steps += 1;
+  return steps;
+}
+
+/**
+ * 一整副打完的**结算后**状态（三家都由引擎直驱）。
+ *
+ * 用途是那类需要「牌史最长、`history` 已有内容」的断言（投影体积、结算阶段的行为）——
+ * 顺手也证明了 `advanceOtherSeats` 那套走子确实能把一副牌走完。
+ */
+export function scoredState(): GameState {
+  let state = dealtState();
+  for (let step = 0; step < 600 && state.deal!.phase !== 'scored'; step += 1) {
+    const deal = state.deal!;
+    if (deal.phase === 'auction') {
+      const seat = auctionTurn(deal);
+      const call = deal.auction.length === 0 ? { points: 40, strain: 'C' } as const : 'pass' as const;
+      state = must(dispatch(state, { type: 'bid', seat, call }, rng));
+      continue;
+    }
+    if (deal.phase === 'bury') {
+      const seat = deal.contract!.declarerSeat;
+      state = must(dispatch(state, { type: 'bury', seat, cards: deal.hands[seat]!.slice(0, 3) }, rng));
+      continue;
+    }
+    const seat = playTurn(deal)!;
+    const card = anyLegalSingle(state, seat);
+    if (card === null) throw new Error(`座位 ${seat} 找不到合法单张，用例本身坏了`);
+    state = must(dispatch(state, { type: 'play', seat, cards: [card] }, rng));
+  }
+  if (state.deal!.phase !== 'scored') throw new Error('一整副没走完（600 步上限）');
+  return state;
+}
+
+/**
+ * 把一副牌的结算历史**凑够 n 条**（只为投影的边界用例）。
+ *
+ * 不真打 n 副：整局打不了几副就会结束（闲家涨级很快），而这里要的只是「历史比上限长」。
+ */
+export function scoredStateWithHistory(n: number): GameState {
+  const state = scoredState();
+  const row = state.history[0];
+  if (row === undefined) throw new Error('没有结算历史可用');
+  return {
+    ...state,
+    dealNo: n,
+    history: Array.from({ length: n }, (_, index) => ({ ...row, dealNo: index + 1 }))
+  };
+}
+
+export interface FakeApiOptions {
+  readonly state?: GameState | null;
+  /** `null` = 观战者（不在座位上） */
+  readonly seat?: Seat | null;
+  readonly tables?: readonly TableSummary[];
+  /** 非 null 时 act/table 一律抛这个错（模拟服务端拒绝或断线） */
+  readonly failWith?: ApiError | null;
+}
+
+export class FakeApi implements GameApi {
+  state: GameState | null;
+  readonly seat: Seat | null;
+  tables: TableSummary[];
+  failWith: ApiError | null;
+  /** 工具面实际发出的动作，逐条记录（用来断言「不带 seat」） */
+  readonly actions: SeatlessAction[] = [];
+  readonly created: string[] = [];
+  readonly entered: string[] = [];
+  /** table() 被调用了几次（wait_for_turn 的轮询次数靠它数） */
+  reads = 0;
+
+  constructor(options: FakeApiOptions = {}) {
+    this.state = options.state === undefined ? dealtState() : options.state;
+    this.seat = options.seat === undefined ? 0 : options.seat;
+    this.tables = options.tables === undefined ? [{ code: 'ABC123', seated: 3, role: 'player' }] : [...options.tables];
+    this.failWith = options.failWith ?? null;
+  }
+
+  get role(): Role {
+    return this.seat === null ? 'spectator' : 'player';
+  }
+
+  async table(code: string): Promise<TablePayload> {
+    this.reads += 1;
+    if (this.failWith !== null) throw this.failWith;
+    const state = this.state;
+    if (state === null) {
+      return { role: this.role, view: null, you: null, table: fakeTableView(code) };
+    }
+    return {
+      role: this.role,
+      // 与真服务器一致：公共视图里不含 you，玩家私有那一份单独放在 you
+      view: publicView(state),
+      you: this.seat === null ? null : personalView(state, this.seat).you,
+      table: fakeTableView(code)
+    };
+  }
+
+  async act(_code: string, action: SeatlessAction): Promise<void> {
+    this.actions.push(action);
+    if (this.failWith !== null) throw this.failWith;
+    // 与 applyTableAction 一致：观战者不能动手
+    if (this.seat === null) throw new ApiError('你在观战，入座后才能操作', 400);
+    let state = this.state;
+    if (state === null) {
+      // 与 applyTableAction 一致：还没开局时只有 deal 有意义
+      if (action.type !== 'deal') throw new ApiError('三人到齐后由任意一人发牌', 400);
+      state = createGame(0);
+    }
+    const serverAction: Action =
+      action.type === 'bid' || action.type === 'bury' || action.type === 'play'
+        ? { ...action, seat: this.seat }
+        : action;
+    this.state = must(dispatch(state, serverAction, rng));
+  }
+
+  async listTables(): Promise<readonly TableSummary[]> {
+    if (this.failWith !== null) throw this.failWith;
+    return this.tables;
+  }
+
+  async createTable(): Promise<string> {
+    const code = 'NEW111';
+    this.created.push(code);
+    this.tables = [...this.tables, { code, seated: 1, role: 'player' }];
+    return code;
+  }
+
+  async enterTable(code: string): Promise<void> {
+    this.entered.push(code);
+  }
+}

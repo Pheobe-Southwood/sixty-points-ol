@@ -3,3 +3,5 @@ packages:
   - apps/*
 allowBuilds:
   esbuild: false
+minimumReleaseAgeExclude:
+  - '@modelcontextprotocol/sdk@1.32.0'
