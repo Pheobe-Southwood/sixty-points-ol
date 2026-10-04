@@ -21,7 +21,7 @@ import {
   type GameState,
   type Seat
 } from '@sixty/engine';
-import { ApiError, type GameApi, type SeatlessAction, type TablePayload } from '../src/api.ts';
+import { ApiError, type ClaimedIdentity, type GameApi, type SeatlessAction, type TablePayload } from '../src/api.ts';
 import type { Role, TableSummary, TableView } from '../src/wire.ts';
 
 /** 固定 RNG：同一局在每次运行里都一样，测试只看规则不看随机 */
@@ -175,17 +175,32 @@ export interface FakeApiOptions {
   readonly tables?: readonly TableSummary[];
   /** 非 null 时 act/table 一律抛这个错（模拟服务端拒绝或断线） */
   readonly failWith?: ApiError | null;
+  /** false = **无身份会话**（工具表照旧全列，但只有 read_rules 与 claim 调得动，见 ADR-0014） */
+  readonly authenticated?: boolean;
+  /** 已经被占用的名字：claim 传这些名字一律失败（绝不返回既有身份，见 ADR-0009） */
+  readonly takenNames?: readonly string[];
+  /** take_seat 是否报告「接下了这个座位的手牌」（补位那条路） */
+  readonly inheritedOnTake?: boolean;
 }
 
 export class FakeApi implements GameApi {
   state: GameState | null;
-  readonly seat: Seat | null;
+  /** 可变：`leaveSeat` / `takeSeat` 会翻转它，于是 get_state 的角色跟着变 */
+  seat: Seat | null;
   tables: TableSummary[];
   failWith: ApiError | null;
+  readonly authenticated: boolean;
+  private readonly takenNames: Set<string>;
+  private readonly inheritedOnTake: boolean;
   /** 工具面实际发出的动作，逐条记录（用来断言「不带 seat」） */
   readonly actions: SeatlessAction[] = [];
   readonly created: string[] = [];
   readonly entered: string[] = [];
+  /** 座位工具留下的痕迹 */
+  readonly left: string[] = [];
+  readonly sat: string[] = [];
+  /** claim 过的名字 */
+  readonly claimed: string[] = [];
   /** table() 被调用了几次（wait_for_turn 的轮询次数靠它数） */
   reads = 0;
 
@@ -194,6 +209,9 @@ export class FakeApi implements GameApi {
     this.seat = options.seat === undefined ? 0 : options.seat;
     this.tables = options.tables === undefined ? [{ code: 'ABC123', seated: 3, role: 'player' }] : [...options.tables];
     this.failWith = options.failWith ?? null;
+    this.authenticated = options.authenticated ?? true;
+    this.takenNames = new Set(options.takenNames ?? []);
+    this.inheritedOnTake = options.inheritedOnTake ?? false;
   }
 
   get role(): Role {
@@ -248,5 +266,30 @@ export class FakeApi implements GameApi {
 
   async enterTable(code: string): Promise<void> {
     this.entered.push(code);
+  }
+
+  /** 与 tables.ts 一致：离座即转观战者；本来不在座也成功（幂等） */
+  async leaveSeat(code: string): Promise<void> {
+    this.left.push(code);
+    if (this.failWith !== null) throw this.failWith;
+    this.seat = null;
+  }
+
+  /** 与 tables.ts 一致：占用座位；已在座是空操作 */
+  async takeSeat(code: string): Promise<{ seat: Seat; inherited: boolean }> {
+    this.sat.push(code);
+    if (this.failWith !== null) throw this.failWith;
+    this.seat = this.seat ?? 0;
+    return { seat: this.seat, inherited: this.inheritedOnTake };
+  }
+
+  /** 与 /api/auth/claim 一致：撞名一律失败，绝不返回那条既有身份 */
+  async claim(name: string): Promise<ClaimedIdentity> {
+    this.claimed.push(name);
+    if (this.failWith !== null) throw this.failWith;
+    if (this.takenNames.has(name)) {
+      throw new ApiError('这个名字已被使用，请换一个，或用凭据串导入你的身份', 400);
+    }
+    return { name, credential: Buffer.from(`${name}:fake-token`, 'utf8').toString('base64url') };
   }
 }

@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { createMcpServer } from '@sixty/mcp';
-import { requireIdentity } from '$lib/server/auth';
+import { ApiError, createMcpServer } from '@sixty/mcp';
+import { credentialOf, createIdentity, credentialPresent, identityFrom, normalizeName } from '$lib/server/auth';
 import { serverApi } from '$lib/server/mcp-api';
 import type { RequestHandler } from './$types';
 
@@ -12,11 +12,31 @@ import type { RequestHandler } from './$types';
  * 这样中间层（Caddy / traefik / Coolify）不需要为它加任何「不缓冲」白名单，
  * 服务端也不用在内存里养会话表 —— 每个请求自带 `Authorization: Bearer <凭据串>`，
  * 身份当场解析、用完即弃。设计与理由见 ADR-0010。
+ *
+ * **凭据是可选的**（ADR-0014）：没带凭据就是一个**无身份会话** —— 工具表照旧全列，但只有
+ * `read_rules`（纯本地）与 `claim`（建身份、把凭据串交给人类）调得动，其余返回指路错误。
+ * 「没带凭据」与「凭据无效」必须分开：前者合法，后者一律 401，绝不静默降级成匿名。
  */
 export const POST: RequestHandler = async (event) => {
-  const identity = requireIdentity(event);
+  const identity = identityFrom(event);
+  if (identity === null && credentialPresent(event)) {
+    error(401, '凭据无效或已失效：请重新复制凭据串（没有凭据时可以直接连，但只有 read_rules 与 claim 能用）');
+  }
 
-  const server = createMcpServer({ api: serverApi(identity.id) });
+  const server = createMcpServer({
+    api: serverApi(identity?.id ?? null, {
+      // 未鉴权也能建身份 —— 但撞名一律失败，绝不签发那条既有身份（否则输入别人的名字就等于冒名入座）
+      claim: (raw) => {
+        const name = normalizeName(raw);
+        if (name === null) throw new ApiError('名字需为 1-12 个字符，且不含冒号', 400);
+        const created = createIdentity(name);
+        if (created === null) {
+          throw new ApiError('这个名字已被使用，请换一个，或用凭据串导入你的身份', 400);
+        }
+        return { name: created.name, credential: credentialOf(created) };
+      }
+    })
+  });
   const transport = new WebStandardStreamableHTTPServerTransport({
     // JSON 模式：整段响应在 resolveJson 之后才拼出来，所以 handleRequest 返回的
     // Response 里的 body 已经是完整的（不依赖连接继续活着）

@@ -118,27 +118,43 @@ function keysDeep(value: unknown, acc: string[] = []): string[] {
 
 // ---------------------------------------------------------------- 工具表与投影
 
-test('工具表：13 个工具且名字不重复', () => {
+test('工具表：16 个工具且名字不重复', () => {
   const names = TOOLS.map((tool) => tool.name);
   assert.equal(new Set(names).size, names.length, '工具名有重复');
   assert.deepEqual([...names].sort(), [
     'bid',
     'bury',
     'check_play',
+    'claim',
     'create_table',
     'deal',
     'get_state',
     'join_table',
+    'leave_seat',
     'legal_bids',
     'list_my_tables',
     'new_game',
     'play',
     'read_rules',
+    'take_seat',
     'wait_for_turn'
   ]);
   for (const tool of TOOLS) {
     assert.ok(tool.description.length > 10, `${tool.name} 缺少能看懂的描述`);
   }
+});
+
+/**
+ * 安全边界：**无身份也能用的工具恰好只有两个**。
+ *
+ * `requiresIdentity` 省略即「要身份」（默认拒绝），所以这条断言是「有人把某个工具标成不需要身份」
+ * 的唯一警报 —— 那是本次改动里唯一会让未鉴权会话多做一件事的编辑（见 ADR-0014）。
+ * 这里写死字面量而不是从表里推导：从表里推导就变成同义反复，抓不住任何东西。
+ */
+test('无身份白名单：恰好是 read_rules 与 claim（默认拒绝，新工具漏写标志也不会漏出去）', () => {
+  const open = TOOLS.filter((tool) => tool.requiresIdentity === false).map((tool) => tool.name).sort();
+  assert.deepEqual(open, ['claim', 'read_rules'], '未鉴权的工具集合变了：这是一条安全边界，改它要改 ADR-0014');
+  assert.equal(toolByName('get_state')?.requiresIdentity, undefined, '需要身份的工具不该显式写 requiresIdentity');
 });
 
 test('get_state：紧凑投影 + you 分开给，并说清现在轮到谁', async () => {
@@ -571,4 +587,95 @@ test('桌面工具：查桌 / 建桌 / 入座', async () => {
   const entered = await call<TableState>('join_table', api, { code: 'new111' });
   assert.deepEqual(api.entered, ['NEW111'], '邀请码应先归一大写再进桌');
   assert.equal(entered.code, 'NEW111');
+});
+
+// ---------------------------------------------------------------- 无身份会话（见 ADR-0014）
+
+test('无身份会话：只有 read_rules 与 claim 调得动，其余一律指路且不碰取数出口', async () => {
+  const api = new FakeApi({ authenticated: false });
+  const rules = await call<{ entries: unknown[] }>('read_rules', api);
+  assert.ok(rules.entries.length > 0, 'read_rules 是纯本地读，没有身份也该读得到');
+
+  // 指路错误要把「怎么配 / 怎么自己建 / 哪些不用身份」都说清，否则模型只会一遍遍撞墙
+  for (const [name, args] of [
+    ['get_state', {}],
+    ['play', { cards: ['C5'] }],
+    ['create_table', {}]
+  ] as const) {
+    await assert.rejects(
+      () => call(name, api, args),
+      (error: unknown) => error instanceof ToolError && /还没有身份/.test(error.message) && /claim/.test(error.message),
+      `${name} 在无身份会话里必须被挡下并指路 claim`
+    );
+  }
+  assert.equal(api.reads, 0, '被挡下的调用不该碰到取数出口');
+  assert.deepEqual(api.actions, []);
+  assert.deepEqual(api.left, []);
+  assert.deepEqual(api.created, []);
+});
+
+test('claim：未鉴权就能建身份，返回凭据串与交接说明；撞名一律失败', async () => {
+  const api = new FakeApi({ authenticated: false, takenNames: ['小明'] });
+  const claimed = await call<{ name: string; credential: string; note: string }>('claim', api, { name: '小六' });
+
+  assert.equal(claimed.name, '小六');
+  assert.deepEqual(api.claimed, ['小六']);
+  assert.ok(claimed.credential.length > 10, '凭据串不该是空的');
+  assert.match(claimed.note, /粘贴凭据串/, '交接说明要讲清人类怎么把它用起来');
+  assert.match(claimed.note, /不会接管/, '必须写明本会话不接管这个身份');
+
+  // 撞名：原话转达且**不能**带出任何凭据（否则等于返回了别人的身份，见 ADR-0009）
+  await assert.rejects(
+    () => call('claim', api, { name: '小明' }),
+    (error: unknown) =>
+      error instanceof ToolError && error.message === '服务器拒绝：这个名字已被使用，请换一个，或用凭据串导入你的身份'
+  );
+});
+
+test('claim：名字的长度先由参数校验挡一道，非法参数不打到服务端', async () => {
+  const api = new FakeApi({ authenticated: false });
+  await assert.rejects(() => call('claim', api, { name: '' }), /参数格式不正确：name/);
+  await assert.rejects(() => call('claim', api, { name: '一二三四五六七八九十十一十二十三' }), /参数格式不正确：name/);
+  assert.deepEqual(api.claimed, []);
+});
+
+// ---------------------------------------------------------------- 座位双向
+
+test('leave_seat：只回一句回执（不附局面）、不读局面、码归一成大写', async () => {
+  const api = new FakeApi({ tables: [{ code: 'abc123', seated: 3, role: 'player' }] });
+  const out = await call<{ ok: boolean; code: string; role: string; note: string }>('leave_seat', api, {});
+
+  assert.equal(out.ok, true);
+  assert.equal(out.code, 'ABC123');
+  assert.equal(out.role, 'spectator');
+  assert.equal('view' in out, false, '离座回执不该带局面：工具面出参每个回合都要重发');
+  assert.equal('turn' in out, false);
+  assert.match(out.note, /take_seat/, '要告诉它怎么坐回来');
+  assert.deepEqual(api.left, ['ABC123']);
+  assert.equal(api.reads, 0, '离座不需要读局面');
+});
+
+test('take_seat：回完整局面，补位时明说接下了这个座位的手牌', async () => {
+  const api = new FakeApi({
+    state: playingState(),
+    seat: null,
+    tables: [{ code: 'ABC123', seated: 2, role: 'spectator' }],
+    inheritedOnTake: true
+  });
+  const out = await call<TableState & { note?: string }>('take_seat', api, {});
+
+  assert.deepEqual(api.sat, ['ABC123']);
+  assert.equal(out.role, 'player');
+  assert.equal(out.you?.hand.length, 17, '补位者必须拿到这个座位的手牌，否则不知道该出什么');
+  assert.match(out.note ?? '', /补进/, '补位要显式说明，免得拿着陌生手牌发愣');
+  assert.match(out.note ?? '', /座位 0/);
+});
+
+test('take_seat：空座本来就空（不是补位）时不谎称接手了别人的牌', async () => {
+  const api = new FakeApi({ state: null, seat: null, tables: [{ code: 'ABC123', seated: 1, role: 'spectator' }] });
+  const out = await call<TableState & { note?: string }>('take_seat', api, {});
+
+  assert.equal(out.role, 'player');
+  assert.match(out.note ?? '', /座位 0/);
+  assert.equal(/补进/.test(out.note ?? ''), false);
 });

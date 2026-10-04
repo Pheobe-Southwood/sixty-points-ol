@@ -41,8 +41,26 @@ export interface ToolSpec {
   readonly description: string;
   /** zod raw shape：SDK 直接拿它生成 JSON Schema，本层用它做同一份校验 */
   readonly input: z.ZodRawShape;
+  /**
+   * 这个工具要不要身份。**省略 ＝ 要**（默认拒绝）：新工具忘了写它，也不会漏进无身份会话。
+   *
+   * 工具表对所有会话**一视同仁地全列**（无身份会话也要能看见配好凭据后会拿到什么），
+   * 这道门在**调用**时把守（`callTool`）。只有两个工具是 `false`：`read_rules`（纯本地读规则）
+   * 与 `claim`（建身份并把凭据串交给人类），见 ADR-0014。
+   */
+  readonly requiresIdentity?: boolean;
   readonly run: (rt: ToolRuntime, args: Record<string, unknown>) => Promise<unknown>;
 }
+
+/**
+ * 无身份会话碰到需要身份的工具时统一说这一句。
+ *
+ * 这是模型唯一的指路牌（工具清单不会替它筛），所以三件事都要说清：怎么配、怎么自己建、哪些不用身份。
+ */
+export const NO_IDENTITY_HINT =
+  '还没有身份：让人类在浏览器里建身份、点「复制凭据」，把凭据串填进 SIXTY_CREDENTIAL（stdio）或 ' +
+  'Authorization: Bearer（/api/mcp）后重连即可使用全部工具；也可以直接用 claim 建一个身份，' +
+  '把它返回的凭据串交给人类。read_rules 与 claim 不需要身份。';
 
 export const DEFAULT_WAIT_SECONDS = 30;
 export const MAX_WAIT_SECONDS = 60;
@@ -129,7 +147,7 @@ export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat 
       phase,
       isYourTurn: false,
       canAct: false,
-      hint: '你在观战（没有座位）：能读局面与说明，动作要求先入座 —— 用 join_table 进桌。'
+      hint: '你在观战（没有座位）：能读局面与说明，动作要求先入座 —— 用 take_seat 坐上空座（另有邀请码时才用 join_table 进桌）。'
     };
   }
 
@@ -273,7 +291,7 @@ interface PlayContext {
 
 /** 出牌校验需要的三样东西；拿不齐时返回一句人话 */
 function playContextOf(payload: StreamPayload): PlayContext | string {
-  if (payload.role !== 'player') return '你在观战，没有手牌可出（先用 join_table 入座）';
+  if (payload.role !== 'player') return '你在观战，没有手牌可出（先用 take_seat 坐上空座）';
   const deal = payload.view?.deal ?? null;
   if (payload.view === null || deal === null || deal.trump === null || deal.phase !== 'play') {
     return '现在不是出牌阶段';
@@ -385,6 +403,8 @@ export const TOOLS: readonly ToolSpec[] = [
     name: 'read_rules',
     description: `读玩法说明（**整局读一次就够**，内容不会变）：不传 key 返回全部 ${HELP_KEYS.length} 段；key 取 ${HELP_KEYS.join('/')}。`,
     input: { key: z.string().optional().describe('阶段键；省略则返回全部阶段') },
+    // 纯本地读引擎里的说明文本，不碰服务器 —— 所以没有身份也能用（ADR-0014）
+    requiresIdentity: false,
     run: async (_rt, args) => {
       const raw = args['key'];
       if (raw !== undefined && !HELP_KEYS.includes(raw as HelpKey)) {
@@ -397,6 +417,25 @@ export const TOOLS: readonly ToolSpec[] = [
           return { key: k, title: entry.title, anchor: entry.anchor, lines: entry.body };
         }),
         note: '完整图文教程在 /rules#<anchor>；升级表与顺子示例都在里面。'
+      };
+    }
+  },
+  {
+    name: 'claim',
+    description:
+      '还没有身份时用它新建一个：返回名字与凭据串（交给人类用）。名字全局唯一，已被占用就失败；本工具**不**接管这个身份。',
+    input: { name: z.string().min(1).max(12).describe('身份名，1-12 字符、不含冒号') },
+    // 未鉴权也能用：这正是「AI 帮人类把身份配起来」的那一步（见 ADR-0014）
+    requiresIdentity: false,
+    run: async (rt, args) => {
+      const claimed = await rt.api.claim(args['name'] as string);
+      return {
+        name: claimed.name,
+        credential: claimed.credential,
+        note:
+          '把凭据串交给人类：在**同一个服务器**的站点用大厅的「粘贴凭据串」导入，或填进他自己的 MCP 配置' +
+          '（stdio 是 SIXTY_CREDENTIAL，/api/mcp 是 Authorization: Bearer）。本会话不会接管这个身份，' +
+          '凭据也只对签发它的服务器有效。'
       };
     }
   },
@@ -493,6 +532,43 @@ export const TOOLS: readonly ToolSpec[] = [
     }
   },
   {
+    name: 'leave_seat',
+    description:
+      '离座：座位空出、本人转为观战者（本副不废，停在空座上等人补位）；本来不在座也成功。要回座用 take_seat。',
+    input: codeField,
+    // 只回一句回执，不附局面：离座后只剩公共视图，而工具面出参是每个回合都要重发的
+    run: async (rt, args) => {
+      const code = await resolveCode(rt, args['code']);
+      await rt.api.leaveSeat(code);
+      return {
+        ok: true,
+        code,
+        role: 'spectator',
+        note:
+          '你现在是观战者（能读局面与说明，动作要求先入座）。座位空着，本副停在空座上等人补位；' +
+          '要坐回来用 take_seat。'
+      };
+    }
+  },
+  {
+    name: 'take_seat',
+    description:
+      '补位入座：占用第一个空座，**继承该座位的级别与手牌**（本副尚未结算时会接下这手牌继续打）；已在座是空操作。',
+    input: codeField,
+    // 补位者会接到一手陌生的牌，所以这里必须回完整局面（否则模型不知道该出什么）
+    run: async (rt, args) => {
+      const code = await resolveCode(rt, args['code']);
+      const { seat, inherited } = await rt.api.takeSeat(code);
+      const state = await stateOf(rt, code);
+      return inherited
+        ? {
+            ...state,
+            note: `你补进了座位 ${seat} 的空座：接下这个座位的手牌继续打完这一副（级别也随座位继承），**不是**从头开始。`
+          }
+        : { ...state, note: `你坐在座位 ${seat} 上。` };
+    }
+  },
+  {
     name: 'create_table',
     description: '自己开一张新同桌，返回邀请码（随后要把码告诉同桌的另外两人）。',
     input: {},
@@ -507,8 +583,14 @@ export function toolByName(name: string): ToolSpec | undefined {
   return TOOLS.find((tool) => tool.name === name);
 }
 
-/** 统一的调用入口：先按 zod shape 校验参数，再把错误收敛成一句人话（SDK 侧转成 isError） */
+/**
+ * 统一的调用入口：先按 zod shape 校验参数，再把错误收敛成一句人话（SDK 侧转成 isError）
+ *
+ * 无身份会话的**唯一**那道门也在这里：工具表照旧全列（模型要能看见配好凭据后会拿到什么），
+ * 但需要身份的工具在碰 `GameApi` 之前就被挡下 —— 默认拒绝（`requiresIdentity` 省略即「要身份」，见 ADR-0014）。
+ */
 export async function callTool(spec: ToolSpec, rt: ToolRuntime, rawArgs: unknown): Promise<unknown> {
+  if (spec.requiresIdentity !== false && rt.api.authenticated !== true) throw new ToolError(NO_IDENTITY_HINT);
   const parsed = z.object(spec.input).safeParse(rawArgs ?? {});
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

@@ -13,13 +13,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ApiError } from '../src/api.ts';
-import { httpApi } from '../src/http-api.ts';
+import { httpApi, probeServer } from '../src/http-api.ts';
 
 const BASE = 'http://127.0.0.1:1';
 
 interface Call {
   readonly url: string;
   readonly method: string;
+  readonly headers: Record<string, string>;
+  readonly body: string | null;
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -30,14 +32,19 @@ function jsonResponse(payload: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
-/** 记录每次调用，并把响应体读取改成「先记一笔，再按脚本抛错」 */
+/** 记录每次调用（含请求头与请求体），并把响应体读取改成「先记一笔，再按脚本抛错」 */
 function recordingFetch(
   plan: (call: Call, index: number) => Response | Promise<Response>
 ): { fetchImpl: typeof fetch; calls: Call[] } {
   const calls: Call[] = [];
   // 参数类型直接借 `fetch` 自己的（这个包不带 DOM lib，全局 `RequestInfo` 名字不可见）
   const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const call: Call = { url: String(input), method: (init?.method ?? 'GET').toUpperCase() };
+    const call: Call = {
+      url: String(input),
+      method: (init?.method ?? 'GET').toUpperCase(),
+      headers: (init?.headers as Record<string, string> | undefined) ?? {},
+      body: typeof init?.body === 'string' ? init.body : null
+    };
     calls.push(call);
     return plan(call, calls.length - 1);
   }) as typeof fetch;
@@ -154,4 +161,103 @@ test('写：创建失败且服务端没给邀请码时（200 但形状不对）�
   const { fetchImpl } = recordingFetch(() => jsonResponse({}));
   const api = httpApi({ baseUrl: BASE, credential: 'x', fetchImpl });
   await assert.rejects(() => api.createTable(), /服务器没有返回邀请码/);
+});
+
+// ---------------------------------------------------------------- 无身份会话（见 ADR-0014）
+
+test('无身份会话：authenticated 为 false，且请求不带 Authorization 头', async () => {
+  const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ name: '小六', credential: 'abc.def' }));
+  const api = httpApi({ baseUrl: BASE, credential: '   ', fetchImpl });
+
+  assert.equal(api.authenticated, false, '只有空白的凭据也算没带凭据');
+  assert.equal(httpApi({ baseUrl: BASE, credential: 'abc' }).authenticated, true);
+
+  await api.claim('小六');
+  assert.equal('authorization' in calls[0]!.headers, false, 'claim 是公开端点：不该带（也不该带空的）Authorization');
+});
+
+test('claim：POST /api/auth/claim 传 name，成功返回名字与凭据串', async () => {
+  const { fetchImpl, calls } = recordingFetch(() => jsonResponse({ name: '小六', credential: 'abc.def' }));
+  const api = httpApi({ baseUrl: BASE, credential: '', fetchImpl });
+
+  const claimed = await api.claim('小六');
+  assert.deepEqual(claimed, { name: '小六', credential: 'abc.def' });
+  assert.equal(calls[0]!.method, 'POST');
+  assert.equal(calls[0]!.url, `${BASE}/api/auth/claim`);
+  assert.deepEqual(JSON.parse(calls[0]!.body ?? 'null'), { name: '小六' });
+});
+
+test('claim：响应丢失时的指路**不能**是「先去看局面」（它没有局面可核对）', async () => {
+  const { fetchImpl, calls } = recordingFetch(() => committedThenLost({ name: '小六', credential: 'abc' }));
+  const api = httpApi({ baseUrl: BASE, credential: '', fetchImpl });
+
+  await assert.rejects(
+    () => api.claim('小六'),
+    (error: unknown) =>
+      error instanceof ApiError &&
+      error.status === 0 &&
+      error.message.includes('无法确认这个身份是否已经建好') &&
+      error.message.includes('这个名字已被使用') &&
+      !error.message.includes('get_state')
+  );
+  assert.equal(calls.length, 1, 'claim 也是写路径：一次都不重发');
+});
+
+test('claim：服务端没给凭据串时（200 但形状不对）说得清楚', async () => {
+  const { fetchImpl } = recordingFetch(() => jsonResponse({ name: '小六' }));
+  const api = httpApi({ baseUrl: BASE, credential: '', fetchImpl });
+  await assert.rejects(() => api.claim('小六'), /服务器没有返回凭据串/);
+});
+
+// ---------------------------------------------------------------- 座位双向
+
+test('座位双向：leave_seat 走 DELETE、take_seat 走 POST，都是写路径（不重发）', async () => {
+  const { fetchImpl, calls } = recordingFetch((call) =>
+    call.method === 'DELETE' ? jsonResponse({ ok: true }) : jsonResponse({ seat: 2, inherited: true })
+  );
+  const api = httpApi({ baseUrl: BASE, credential: 'x', fetchImpl });
+
+  await api.leaveSeat('ABC123');
+  assert.equal(calls[0]!.method, 'DELETE');
+  assert.equal(calls[0]!.url, `${BASE}/api/tables/ABC123/seat`);
+
+  const taken = await api.takeSeat('ABC123');
+  assert.equal(calls[1]!.method, 'POST');
+  assert.equal(calls[1]!.url, `${BASE}/api/tables/ABC123/seat`);
+  assert.deepEqual(taken, { seat: 2, inherited: true });
+
+  // 失败时只发一次：DELETE 在服务端本来幂等，但策略统一 —— 非 GET 一律不重发
+  const failing = recordingFetch(() => {
+    throw new Error('连接被重置');
+  });
+  const broken = httpApi({ baseUrl: BASE, credential: 'x', fetchImpl: failing.fetchImpl });
+  await assert.rejects(() => broken.leaveSeat('ABC123'), /无法确认这次请求是否已经生效/);
+  assert.equal(failing.calls.length, 1);
+});
+
+test('take_seat：服务端没给座位号（形状不对）时说得清楚', async () => {
+  const { fetchImpl } = recordingFetch(() => jsonResponse({ inherited: true }));
+  const api = httpApi({ baseUrl: BASE, credential: 'x', fetchImpl });
+  await assert.rejects(() => api.takeSeat('ABC123'), /服务器没有返回座位号/);
+});
+
+// ---------------------------------------------------------------- 无凭据启动探活
+
+test('无凭据启动：探活打的是首页；非 2xx 与连不上都抛带地址的错', async () => {
+  const ok = recordingFetch(() => jsonResponse({}));
+  await probeServer(BASE, ok.fetchImpl);
+  assert.equal(ok.calls[0]!.method, 'GET');
+  assert.equal(ok.calls[0]!.url, `${BASE}/`);
+
+  const bad = recordingFetch(() => jsonResponse({ message: 'nope' }, 500));
+  await assert.rejects(
+    () => probeServer(BASE, bad.fetchImpl),
+    (error: unknown) =>
+      error instanceof ApiError && error.status === 0 && /连不上服务器.*500/s.test(error.message)
+  );
+
+  const dead = recordingFetch(() => {
+    throw new Error('ECONNREFUSED');
+  });
+  await assert.rejects(() => probeServer(BASE, dead.fetchImpl), /连不上服务器.*ECONNREFUSED/s);
 });

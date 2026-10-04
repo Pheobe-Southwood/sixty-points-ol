@@ -30,9 +30,17 @@ import { advanceUntilMyTurn, FakeApi, scoredState } from './fake-api.ts';
 /** 每次工具调用/结果的框架开销（tool_use 名称、参数、外壳），与负载无关的那部分 */
 const FRAME = 160;
 
-const SCHEMA_LIMIT = 4_800;
+/**
+ * schema 上限：13 → 16 个工具（claim / leave_seat / take_seat）后实测 5,511，留的余量仍小于
+ * 一个最便宜的工具（零参数约 211）—— 也就是「再加一个工具」仍然必须先想清楚这笔账（见 ADR-0011/0014）。
+ */
+const SCHEMA_LIMIT = 5_650;
 const DELIVERED_LIMIT = 38_000;
-const CUMULATIVE_LIMIT = 420_000;
+/**
+ * 累计读入的上限同步抬高了 **18,000**：那是 16 个工具比 13 个工具多出来的 schema 在整副牌上的账
+ * （约 +855 字符 × 21 次调用）。这不是放宽标准 —— 一次多余的往返仍要 +8,000 左右，照样会红。
+ */
+const CUMULATIVE_LIMIT = 438_000;
 const END_STATE_LIMIT = 3_100;
 const CALLS_LIMIT = 22;
 /** 第二副的负载会长一点（`history` 多一行），但不该长出一截 */

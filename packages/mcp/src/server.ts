@@ -8,8 +8,8 @@ export const SERVER_VERSION = '0.1.0';
 /**
  * 一次性说明（`initialize` 的 `instructions` 字段）：**共用的话只说一遍**。
  *
- * 这些句子（一副牌的调用节奏、牌码格式、座位由服务端定）本来要写进 13 个工具描述里，
- * 而工具描述是每个请求都随上下文重发的 —— 放在这里既省体积，也保证 13 个工具的说法一致。
+ * 这些句子（一副牌的调用节奏、牌码格式、座位由服务端定）本来要写进 15 个工具描述里，
+ * 而工具描述是每个请求都随上下文重发的 —— 放在这里既省体积，也保证 15 个工具的说法一致。
  * 单个工具的描述仍然自给自足：有客户端不注入 `instructions` 时，工具本身也不会说不清。
  */
 export const SERVER_INSTRUCTIONS = [
@@ -21,6 +21,20 @@ export const SERVER_INSTRUCTIONS = [
   '牌码在出参与入参里同形，you.hand 的元素可以原样喂回 play / bury。',
   '轮到你时 turn 里已经给了合法叫品 legalBids 或跟牌约束 legalPlay，不必逐个试探。',
   '动作不接受座位号：座位一律由服务端按凭据判定（服务端是唯一裁判）。'
+].join('\n');
+
+/**
+ * 无身份会话的说明（ADR-0014）。
+ *
+ * 工具表对未带凭据的连接**照旧全列**（模型要能看见配好凭据后会拿到什么），所以这一段必须在开场
+ * 就说清「现在只有两个能用」以及「怎么才会变成有身份」，否则模型会把开局几步花在撞那堵墙上。
+ */
+export const ANONYMOUS_INSTRUCTIONS = [
+  '当前这个连接**没有身份**：现在只有 read_rules（读玩法说明，纯本地）与 claim（新建一个身份）能用，',
+  '其余工具一律回一句指路错误。',
+  '要让人玩起来：用 claim 传一个名字，把它返回的凭据串交给人类 —— 人类在浏览器大厅用「粘贴凭据串」',
+  '导入（或填进他自己的 MCP 客户端配置：stdio 是 SIXTY_CREDENTIAL，/api/mcp 是 Authorization: Bearer），',
+  '之后带上凭据重连即可使用全部工具。本会话不会接管 claim 建出来的身份。'
 ].join('\n');
 
 export interface ServerOptions {
@@ -35,11 +49,18 @@ export interface ServerOptions {
  *
  * stdio 侧（src/stdio.ts）与 web 的 `/api/mcp` 路由都只调这个函数，
  * 所以两条传输的工具清单、描述、错误形状不可能漂移。
+ *
+ * 工具清单**不按凭据筛**：无身份会话也 list 到全集（它得知道配好凭据后能拿到什么），
+ * 「需要身份」这道门在 `callTool` 里按 `requiresIdentity` 把守（默认拒绝，见 ADR-0014）。
  */
 export function createMcpServer(options: ServerOptions): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { instructions: SERVER_INSTRUCTIONS }
+    {
+      instructions: options.api.authenticated
+        ? SERVER_INSTRUCTIONS
+        : `${SERVER_INSTRUCTIONS}\n\n${ANONYMOUS_INSTRUCTIONS}`
+    }
   );
   const runtime: ToolRuntime = {
     api: options.api,

@@ -16,6 +16,9 @@
  *   - 在线守卫：MCP 座位没有 SSE，打牌期间必须靠「最近活跃」显示在线
  *   - 权威守卫：故意发一手非法牌，服务端必须拒绝（工具层不许替它放水）
  *   - 预算守卫：一副牌的 MCP 调用数与实收字符数都在上界内
+ *   - 无身份守卫（ADR-0014）：不带凭据也能用 read_rules 与 claim、**看不见的其余工具会指路**、
+ *     坏凭据一律 401（绝不静默降级成匿名）、claim 撞名不返回任何凭据
+ *   - 座位守卫：leave_seat / take_seat 双向；离座后 join_table **不会**把你塞回座位（ADR-0007 的到达语义）
  *
  * 运行（服务端需已启动）：
  *   BASE=http://127.0.0.1:5178 pnpm --filter @sixty/mcp mcp-check
@@ -46,6 +49,7 @@ import {
   httpApi,
   SEAT_FIELDS,
   TABLE_FIELDS,
+  TOOLS,
   VIEW_FIELDS,
   YOU_FIELDS,
   type CompactView,
@@ -122,7 +126,10 @@ function envFor(credential: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (typeof value === 'string') env[key] = value;
   env['SIXTY_BASE_URL'] = BASE;
-  env['SIXTY_CREDENTIAL'] = credential;
+  // 空凭据 = **没配凭据**（无身份会话），而不是「配了一个空串」：两者在 stdio 里同义，
+  // 但这里要如实模拟「宿主没填这个变量」（见 ADR-0014）
+  if (credential.length > 0) env['SIXTY_CREDENTIAL'] = credential;
+  else delete env['SIXTY_CREDENTIAL'];
   return env;
 }
 
@@ -131,7 +138,8 @@ async function connect(kind: 'stdio' | 'http', credential: string): Promise<Clie
 
   if (kind === 'http') {
     const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/api/mcp`), {
-      requestInit: { headers: { authorization: `Bearer ${credential}` } }
+      // 没有凭据就**一个头都不带**：这正是未鉴权会话那条路
+      ...(credential.length > 0 ? { requestInit: { headers: { authorization: `Bearer ${credential}` } } } : {})
     });
     await client.connect(transport);
     return client;
@@ -776,6 +784,201 @@ async function assertJoinPushesEvenWhenJoinerIsActive(kind: 'stdio' | 'http', la
   }
 }
 
+// ---------------------------------------------------------------- 无身份会话（ADR-0014）
+
+/**
+ * **无身份守卫**：不带凭据也能读规则、也能建身份，其余工具**指路**而不是装作能用。
+ *
+ * 这条只能对真实服务器验证：`read_rules` 是纯本地的（工具层就够），但「其余工具被挡下」与
+ * 「claim 真的建出一个能用的身份」都要过服务端那条路才算数。
+ *
+ * 撞名那条是 ADR-0009 的回归守卫：`claim` 一旦返回既有身份，输入别人的名字就等于接管他的座位与手牌。
+ */
+async function assertAnonymous(kind: 'stdio' | 'http', label: string): Promise<void> {
+  const client = await connect(kind, '');
+  try {
+    const listed = (await client.listTools()).tools.map((toolItem) => toolItem.name);
+    assert.equal(
+      listed.length,
+      TOOLS.length,
+      `${label}：无身份会话也要 list 到全集（模型得看得见配好凭据后能拿到什么）`
+    );
+
+    const rules = await tool<{ entries: { key: string }[] }>(client, 'read_rules', {});
+    assert.deepEqual(
+      rules.entries.map((entry) => entry.key),
+      [...HELP_KEYS],
+      `${label}：read_rules 是纯本地的，没有身份也该读得到全部阶段`
+    );
+
+    const denied = await callToolRaw(client, 'get_state', {});
+    assert.equal(denied.ok, false, `${label}：无身份会话居然读到了局面`);
+    assert.match(denied.text, /还没有身份/, `${label}：被挡下时要说清是没有身份，而不是报一个服务端错误`);
+    assert.match(denied.text, /claim/, `${label}：指路错误没告诉模型怎么拿到身份`);
+
+    // 建一个身份，把凭据串交给人类 —— 这是 AI 帮人配置的那一步
+    const name = `匿名甲${RUN}${kind[0]}`;
+    const claimed = await tool<{ name: string; credential: string; note: string }>(client, 'claim', { name });
+    assert.equal(claimed.name, name);
+    assert.ok(claimed.credential.length > 20, `${label}：claim 没有返回凭据串`);
+    assert.match(claimed.note, /粘贴凭据串/, `${label}：交接说明要让人类知道怎么用这串东西`);
+
+    // 那个凭据必须真的能用（换一条连接，带上海投的 Bearer）
+    const reuse = await connect('http', claimed.credential);
+    try {
+      const mine = await tool<{ tables: readonly TableSummary[] }>(reuse, 'list_my_tables', {});
+      assert.ok(Array.isArray(mine.tables), `${label}：claim 出来的凭据用不了`);
+    } finally {
+      await reuse.close();
+    }
+
+    // 撞名：必须失败，而且**响应里不能出现凭据**（那正是接管别人的口子）
+    const again = await callToolRaw(client, 'claim', { name });
+    assert.equal(again.ok, false, `${label}：同名 claim 居然成功了`);
+    assert.match(again.text, /这个名字已被使用/, `${label}：撞名要给一句人话`);
+    assert.equal(again.text.includes('credential'), false, `${label}：撞名时把凭据串交出去了（ADR-0009 的口子）`);
+
+    // 带冒号的名字会让凭据串（名字:令牌）解析不出令牌 —— 参数层只挡长度，这条只有对真服务器才验得到
+    const colon = await callToolRaw(client, 'claim', { name: 'a:b' });
+    assert.equal(colon.ok, false, `${label}：带冒号的名字居然建成功了`);
+    assert.match(colon.text, /冒号/, `${label}：名字格式被拒时要说清原因`);
+
+    console.log(`  ${label}：无身份会话可用（全集 ${listed.length} 个工具，只有 read_rules/claim 能动手）`);
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * **坏凭据守卫**：带了但无效必须 401，绝不静默降级成匿名会话。
+ *
+ * 对照组（不带凭据 → 200）必须在同一条守卫里：少了它，「401」也可能只是因为那台服务器根本不收匿名请求，
+ * 于是这条断言证明不了「区分了两种情况」。
+ */
+async function assertBadCredentialRejected(): Promise<void> {
+  /** base64url("test:token")：形状合法、令牌错 */
+  const badHeader = 'Bearer dGVzdDp0b2tlbg';
+  const body = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'mcp-check-bad-cred', version: '0.1.0' }
+    }
+  });
+
+  // 状态码只看裸响应：SDK 客户端会把 401 折成一句「POSTing to endpoint」的错，
+  // 里面没有状态码 —— 用它断言就会变成断言错误文案，而不是断言服务端的判定。
+  const bad = await fetch(`${BASE}/api/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: badHeader },
+    body
+  });
+  assert.equal(bad.status, 401, '凭据无效必须 401（不能静默降级成无身份会话）');
+  const detail = (await bad.json().catch(() => null)) as { message?: string } | null;
+  assert.match(detail?.message ?? '', /凭据无效/, '401 要说清是凭据的问题，而不是一句没头没脑的拒绝');
+
+  // 对照组：同一个请求**不带** Authorization 必须被接受 —— 少了它，上面那条 401 也可能只是
+  // 「这台服务器根本不收匿名请求」，于是证明不了「两种情况确实分开了」。
+  const anon = await fetch(`${BASE}/api/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body
+  });
+  assert.equal(anon.status, 200, '不带凭据必须被接受为无身份会话');
+  await anon.body?.cancel().catch(() => undefined);
+
+  // 真客户端那条路也走一遍：它必须**连不上**（而不是连上之后处处报错）
+  const client = new Client({ name: 'mcp-check-bad-cred', version: '0.1.0' });
+  let clientError: string | null = null;
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${BASE}/api/mcp`), {
+        requestInit: { headers: { authorization: badHeader } }
+      })
+    );
+  } catch (error) {
+    clientError = error instanceof Error ? error.message : String(error);
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+  assert.ok(clientError !== null, '凭据无效时真客户端也必须被拒绝');
+  assert.match(clientError, /凭据无效/, `真客户端应当拿到那句人话，实际：${clientError}`);
+
+  console.log('  坏凭据被 401 拒绝（真客户端也连不上），而「没带凭据」照常连上');
+}
+
+// ---------------------------------------------------------------- 座位双向（leave_seat / take_seat）
+
+/**
+ * 在一张干净桌上把座位工具走一遍，钉住三件事：
+ *   1. `take_seat` 在**本副进行中**入座要报「接下了这个座位的手牌」（补位者不该拿着陌生牌发愣）；
+ *   2. `leave_seat` 之后 `join_table` **不会**把你塞回座位 —— 这是 ADR-0007 的到达语义，
+ *      也正是「只加离座不加补位会变成单向门」那条结论的守卫；
+ *   3. `take_seat` 能坐回去，且拿回同一手牌。
+ */
+async function assertSeatTools(kind: 'stdio' | 'http', label: string): Promise<void> {
+  const [host, other, sitter] = await Promise.all([
+    claim(`座位甲${RUN}${kind[0]}`),
+    claim(`座位乙${RUN}${kind[0]}`),
+    claim(`座位丙${RUN}${kind[0]}`)
+  ]);
+  assert.ok(host !== undefined && other !== undefined && sitter !== undefined);
+
+  const created = (await http('/api/tables', { method: 'POST' }, host.credential)) as { code: string };
+  const code = created.code;
+  await http(`/api/tables/${code}/join`, { method: 'POST' }, other.credential);
+
+  const client = await connect(kind, sitter.credential);
+  try {
+    // 有空座，join_table 会直接坐进 2 号座位（这一张桌只有这一个人是用工具面进来的）
+    const joined = await tool<StatePayload>(client, 'join_table', { code });
+    assert.equal(joined.role, 'player', `${label}：有空座时 join_table 应当入座`);
+    assert.equal(joined.you?.seat, 2, `${label}：应当坐进空着的 2 号座位`);
+
+    // 发一副，让座位上有真手牌 —— 补位才有东西可继承
+    await http(
+      `/api/tables/${code}/action`,
+      { method: 'POST', body: JSON.stringify({ action: { type: 'deal' } }) },
+      host.credential
+    );
+    const opened = await tool<StatePayload>(client, 'get_state', { code });
+    assert.equal(opened.you?.hand.length, 17, `${label}：发完牌该有 17 张`);
+
+    const left = await tool<{ ok: boolean; role: string; note: string }>(client, 'leave_seat', { code });
+    assert.equal(left.ok, true);
+    assert.equal(left.role, 'spectator');
+
+    const watching = await tool<StatePayload>(client, 'get_state', { code });
+    assert.equal(watching.role, 'spectator', `${label}：离座后应当转为观战者`);
+    assert.equal(watching.you, null, `${label}：观战者不该还拿着手牌`);
+
+    const seats = ((await http(`/api/tables/${code}/view`, {}, host.credential)) as { table: TableView }).table.seats;
+    assert.equal(
+      seats.filter((seat) => seat.name !== null).length,
+      2,
+      `${label}：离座后那张座位必须空出来（本副停在空座上等人补位）`
+    );
+
+    // 单向门：观战记录在案，join_table 不再入座（要回座只能用 take_seat）
+    await tool(client, 'join_table', { code });
+    const still = await tool<StatePayload>(client, 'get_state', { code });
+    assert.equal(still.role, 'spectator', `${label}：join_table 不应当把观战者塞回座位（ADR-0007）`);
+
+    const back = await tool<StatePayload & { note?: string }>(client, 'take_seat', { code });
+    assert.equal(back.role, 'player', `${label}：take_seat 应当把座位坐回来`);
+    assert.equal(back.you?.seat, 2, `${label}：应当坐回原来那个座位`);
+    assert.equal(back.you?.hand.length, 17, `${label}：补位者必须拿回这个座位的手牌`);
+    assert.match(back.note ?? '', /补进/, `${label}：补位必须显式说明，免得拿着陌生手牌发愣`);
+
+    console.log(`  ${label}：座位双向可用（离座 → join_table 不入座 → take_seat 拿回原手牌）`);
+  } finally {
+    await client.close();
+  }
+}
+
 // ---------------------------------------------------------------- 两条传输各跑一遍
 
 async function listTools(client: Client): Promise<number> {
@@ -801,7 +1004,7 @@ async function runTransport(
     const session: Session = { client, code: session0.code, others };
 
     const count = await listTools(client);
-    assert.equal(count, 13, `工具数应为 13，实际 ${count}`);
+    assert.equal(count, TOOLS.length, `工具数应为 ${TOOLS.length}，实际 ${count}`);
 
     const rules = await tool<{ entries: { key: string }[] }>(client, 'read_rules', {});
     assert.deepEqual(
@@ -842,6 +1045,9 @@ async function runTransport(
   await assertJoinPushesEvenWhenJoinerIsActive(kind, title);
   // 离线守卫：真断了就要立刻变灰，不能靠 60 秒窗口慢慢忘
   await assertDisconnectGoesOffline(kind, title);
+  // 无身份守卫与座位守卫：本次新增的两块能力（见 ADR-0014）
+  await assertAnonymous(kind, title);
+  await assertSeatTools(kind, title);
 
   console.log(`${title} 通过`);
 }
@@ -884,6 +1090,9 @@ async function main(): Promise<void> {
 
   await runTransport('stdio', { code, credential: mcpSeat.credential }, others);
   await runTransport('http', { code, credential: mcpSeat.credential }, others);
+
+  // 与传输无关的那条：坏凭据必须 401，而「没带凭据」照常连上（两种情况分开）
+  await assertBadCredentialRejected();
 
   console.log(
     `\n全部通过：HTTP 请求 ${requests}（其中被服务端拒绝 ${rejects} 次，属于故意的试错）· ` +

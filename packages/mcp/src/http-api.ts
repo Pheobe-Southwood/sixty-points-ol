@@ -1,10 +1,15 @@
-import { ApiError, type GameApi, type SeatlessAction, type TablePayload } from './api.ts';
+import { ApiError, type ClaimedIdentity, type GameApi, type SeatlessAction, type TablePayload } from './api.ts';
 import type { TableSummary } from './wire.ts';
 
 export interface HttpApiOptions {
   /** 服务器地址，如 https://game.example.com（stdio 侧来自 SIXTY_BASE_URL） */
   readonly baseUrl: string;
-  /** 凭据串（base64url(名字:令牌)），与浏览器 localStorage 里那份同物 */
+  /**
+   * 凭据串（base64url(名字:令牌)），与浏览器 localStorage 里那份同物。
+   *
+   * **可以为空**：那时是**无身份会话** —— 只有 `read_rules` 与 `claim` 能用（ADR-0014），
+   * 请求也不带 `Authorization` 头。
+   */
   readonly credential: string;
   readonly timeoutMs?: number | undefined;
   /** 注入点：测试与复用（Node 24 自带 fetch） */
@@ -35,36 +40,46 @@ function normalizeBase(baseUrl: string): string {
 interface RequestOptions {
   /** 没拿到响应时最多重发几次。只有 `GET` 这类幂等读可以大于 0 */
   readonly retries?: number | undefined;
+  /**
+   * 覆盖「没拿到响应」时的那句话。
+   *
+   * 默认那句让调用方去 `get_state` / `list_my_tables` 核对现状，但 `claim` **没有局面可核对** ——
+   * 对它说「先去看局面」是错的指路，所以那个工具自带一句。
+   */
+  readonly failureText?: ((detail: string) => string) | undefined;
 }
 
 /**
  * stdio 侧的实现：工具面 → 现有公开 HTTP 接口。
  *
- * 它只会读 `/view` 与写 `/action`（另有建桌/入座/查桌三个管理动作），
+ * 它只会读 `/view` 与写 `/action`（另有建桌/入座/离座/补位/建身份这几个管理动作），
  * 所以「工具面看不到别人的手牌」不是纪律问题，而是它根本没有别的路。
  */
 export function httpApi(options: HttpApiOptions): GameApi {
   const base = normalizeBase(options.baseUrl);
   const timeoutMs = options.timeoutMs ?? 10_000;
   const doFetch = options.fetchImpl ?? fetch;
+  /** 没有凭据就是无身份会话：不发 Authorization，也不假装自己是谁 */
+  const credential = options.credential.trim();
 
   async function request(path: string, init: RequestInit = {}, behavior: RequestOptions = {}): Promise<unknown> {
     const headers: Record<string, string> = {
-      ...(init.headers as Record<string, string> | undefined),
-      authorization: `Bearer ${options.credential}`
+      ...(init.headers as Record<string, string> | undefined)
     };
+    if (credential.length > 0) headers['authorization'] = `Bearer ${credential}`;
     if (init.body !== undefined) headers['content-type'] = 'application/json';
 
-    // 写路径（`POST /action`、`POST /api/tables`、`POST /join`）在服务端没有幂等键：
+    // 写路径（`POST /action`、`POST /api/tables`、`POST /join`、`DELETE /seat`）在服务端没有幂等键：
     // 「读不到响应」不等于「没生效」—— 连接可能在服务端提交之后才断，响应体也可能读到一半失败。
     // 这时候重发会做出两件更糟的事：**把一次已经生效的动作报成失败**，或者凭空多出一张孤儿桌。
     // 所以重试只对幂等读开放（`retries` 由调用方给），写路径一次都不重发，改为如实说「无法确认」。
     const write = (init.method ?? 'GET').toUpperCase() !== 'GET';
     const attempts = write ? 1 : 1 + Math.max(0, behavior.retries ?? 0);
     const failureText = (detail: string): string =>
-      write
+      behavior.failureText?.(detail) ??
+      (write
         ? `无法确认这次请求是否已经生效（${detail}）：先用 get_state / list_my_tables 核对现状，再决定是否重发`
-        : `连不上服务器（${base}）：${detail}`;
+        : `连不上服务器（${base}）：${detail}`);
 
     let lastError: unknown = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -91,6 +106,8 @@ export function httpApi(options: HttpApiOptions): GameApi {
   }
 
   return {
+    authenticated: credential.length > 0,
+
     async table(code: string): Promise<TablePayload> {
       // `/view` 返回的就是浏览器同款负载（role / view / you / table）；读是幂等的，可以重试一次
       return (await request(
@@ -120,6 +137,64 @@ export function httpApi(options: HttpApiOptions): GameApi {
 
     async enterTable(code: string): Promise<void> {
       await request(`/api/tables/${encodeURIComponent(code)}/join`, { method: 'POST' });
+    },
+
+    async leaveSeat(code: string): Promise<void> {
+      await request(`/api/tables/${encodeURIComponent(code)}/seat`, { method: 'DELETE' });
+    },
+
+    async takeSeat(code: string): Promise<{ seat: number; inherited: boolean }> {
+      const payload = (await request(`/api/tables/${encodeURIComponent(code)}/seat`, {
+        method: 'POST'
+      })) as { seat?: unknown; inherited?: unknown };
+      if (typeof payload.seat !== 'number') throw new ApiError('服务器没有返回座位号', 0);
+      return { seat: payload.seat, inherited: payload.inherited === true };
+    },
+
+    async claim(name: string): Promise<ClaimedIdentity> {
+      // 这一步**不带凭据**（公开端点，与浏览器大厅那个「创建身份」同一个），所以走这条路可以是
+      // 一个完全没有身份的连接 —— 这正是「AI 帮人类把身份配起来」的入口（见 ADR-0014）。
+      const payload = (await request(
+        '/api/auth/claim',
+        { method: 'POST', body: JSON.stringify({ name }) },
+        {
+          // claim 没有局面可核对，所以不能套用那句「先用 get_state 核对」
+          failureText: (detail) =>
+            `无法确认这个身份是否已经建好（${detail}）：同名再 claim 一次会告诉你「这个名字已被使用」，` +
+            '那说明上一次已经生效；否则换个名字重试'
+        }
+      )) as { name?: unknown; credential?: unknown };
+      if (typeof payload.name !== 'string' || typeof payload.credential !== 'string') {
+        throw new ApiError('服务器没有返回凭据串', 0);
+      }
+      return { name: payload.name, credential: payload.credential };
     }
   };
+}
+
+/**
+ * 无凭据启动时的**可达性自检**：只证明「这个地址上有六十点在跑」，不涉及任何身份。
+ *
+ * 有凭据那条路仍然用 `listTables()`（它顺带验证凭据）；没有凭据时也得当场分辨「地址写错/服务没起」
+ * 与「只是没配身份」—— 后者是合法状态，前者必须立刻以非 0 退出。
+ */
+export async function probeServer(
+  baseUrl: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 10_000
+): Promise<void> {
+  const base = normalizeBase(baseUrl);
+  try {
+    const response = await fetchImpl(`${base}/`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) throw new Error(`服务器返回 ${response.status}`);
+    // 探针不要响应体（首页是整页 HTML），但也不能不读就丢：能取消就取消
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* 响应体读不动不影响「它在跑」这个结论 */
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ApiError(`连不上服务器（${base}）：${detail}`, 0);
+  }
 }

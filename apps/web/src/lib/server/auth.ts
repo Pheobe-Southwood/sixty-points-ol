@@ -124,3 +124,19 @@ export function requireIdentity(event: Pick<RequestEvent, 'cookies' | 'request'>
   if (identity === null) error(401, '需要身份：请先创建或导入凭据');
   return identity;
 }
+
+/**
+ * 这个请求有没有**尝试**带凭据（cookie 或 `Authorization: Bearer`，非空）。
+ *
+ * 用途只有一个：把「**没带**凭据」与「带了但**无效**」分开。
+ * `/api/mcp` 允许前者（无身份会话：只有 read_rules 与 claim，见 ADR-0014），
+ * 但后者必须 401 —— 静默降级成匿名会让「凭据串粘错/已失效」看起来像「权限突然全没了」。
+ * 有效性判定仍然只在 `identityFrom` 里（此处只看有没有带）。
+ */
+export function credentialPresent(event: Pick<RequestEvent, 'cookies' | 'request'>): boolean {
+  const cookie = event.cookies.get(CREDENTIAL_COOKIE);
+  if (cookie !== undefined && cookie.trim().length > 0) return true;
+  const header = event.request.headers.get('authorization');
+  if (header === null || !header.toLowerCase().startsWith('bearer ')) return false;
+  return header.slice(7).trim().length > 0;
+}

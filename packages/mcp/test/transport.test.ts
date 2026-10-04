@@ -73,6 +73,33 @@ test('共用的说明只写一遍：initialize 的 instructions 确实下发', a
   }
 });
 
+/**
+ * 无身份会话（ADR-0014）：工具表**照旧全列** —— 模型要能看见配好凭据之后会拿到什么，
+ * 而「需要身份」这道门在调用时把守（`callTool`），所以列出来的工具里只有两个调得动。
+ */
+test('无身份会话：tools/list 仍是全集，但只有 read_rules 与 claim 调得动', async () => {
+  const { client, close } = await connect(new FakeApi({ authenticated: false }));
+  try {
+    const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assert.deepEqual(
+      listed,
+      TOOLS.map((tool) => tool.name).sort(),
+      '无身份会话也必须 list 到全集（否则模型看不见配好凭据后能拿到什么）'
+    );
+    assert.match(client.getInstructions() ?? '', /没有身份/, '开场就要说清当前没有身份');
+
+    const rules = await client.callTool({ name: 'read_rules', arguments: {} });
+    assert.notEqual(rules.isError, true, 'read_rules 是纯本地读，没有身份也该能用');
+
+    const denied = await client.callTool({ name: 'get_state', arguments: {} });
+    assert.equal(denied.isError, true, '无身份会话不该读到局面');
+    assert.match(textOf(denied), /还没有身份/);
+    assert.match(textOf(denied), /claim/, '指路错误必须告诉模型怎么拿到身份');
+  } finally {
+    await close();
+  }
+});
+
 test('走真实 MCP 协议：read_rules 覆盖全部阶段、get_state 有 17 张手牌', async () => {
   const { client, close } = await connect(new FakeApi());
   try {

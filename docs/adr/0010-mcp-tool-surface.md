@@ -10,9 +10,13 @@
   钉死：那两个文件不许出现 `getGameState` / `db` / `dispatch` / `personalView` 等名字，import 也被白名单限制。
 
 身份就是已有的 **身份**：人在浏览器里建好身份、点「复制凭据」，把凭据串填进 MCP 客户端配置
-（stdio 用环境变量 `SIXTY_CREDENTIAL`，HTTP 用 `Authorization: Bearer <凭据串>`）。MCP 侧**不提供自注册**：
-那会平白多出一个"免费造身份/抢名字"的入口，而现有 `register(name)` 在名字已存在时会返回那条已有 user 行
-（含令牌）—— 这是个独立缺陷，不该由新功能顺手放大。
+（stdio 用环境变量 `SIXTY_CREDENTIAL`，HTTP 用 `Authorization: Bearer <凭据串>`）。这里当初写的是
+「MCP 侧**不提供自注册**：那会平白多出一个『免费造身份/抢名字』的入口，而现有 `register(name)` 在名字已存在时
+会返回那条已有 user 行（含令牌）—— 这是个独立缺陷，不该由新功能顺手放大」。**那个缺陷已经由 ADR-0009 修掉**
+（`createIdentity` 撞名一律返回 `null`，撞名不可能拿到任何凭据），所以这条结论在 ADR-0014 里被**重新决定**：
+凭据变成可选，没带凭据的连接是 **无身份会话**，只放行 `read_rules`（纯本地）与 `claim`
+（建身份并把凭据串交给人类，会话自己不接管）。工具表仍然**不按凭据筛**：未鉴权会话也 list 到全集，
+「需要身份」这道门在调用时按 `requiresIdentity` 把守（默认拒绝）。
 
 **不用长连接。** 客户端拿状态靠 `get_state` 快照，等轮次靠 `wait_for_turn` 有界轮询（默认 1.5s × 30s，上限 60s）。
 理由有两条硬事实：Node 24.19 没有全局 `EventSource`（只有 `--experimental-eventsource` 才有），而标准
