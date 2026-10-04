@@ -9,17 +9,19 @@
     "preview": "vite preview",
     "start": "node build/index.js",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
-    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "test": "node --import ./test/loader.mjs --test --test-isolation=none \"test/*.test.ts\"",
     "deal": "node scripts/build-deal-stories.ts",
     "deal:check": "node scripts/build-deal-stories.ts --check",
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",
     "ui": "node scripts/ui-check.ts",
     "lobby": "node scripts/lobby-check.ts",
-    "spectate": "node scripts/spectate-check.ts"
+    "spectate": "node scripts/spectate-check.ts",
+    "bot": "node scripts/bot-check.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "@sixty/bot": "workspace:*",
     "@sixty/engine": "workspace:*",
     "@sixty/mcp": "workspace:*",
     "zod": "^4.0.0"

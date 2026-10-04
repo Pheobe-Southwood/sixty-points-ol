@@ -1,0 +1,23 @@
+{
+  "name": "@sixty/bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sixty/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.3"
+  }
+}
