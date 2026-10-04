@@ -5,7 +5,7 @@ SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并�
 
 [![CI](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml/badge.svg)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/github/license/cup113/sixty-points-ol?label=license)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-317-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-351-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![Last commit](https://img.shields.io/github/last-commit/cup113/sixty-points-ol)](https://github.com/cup113/sixty-points-ol/commits/main)
 [![Node](https://img.shields.io/badge/node-24-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-11.22-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
@@ -23,20 +23,25 @@ SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并�
 packages/engine     纯 TS 规则引擎（零依赖，可被服务端与客户端共用）
   src/              cards / order / validate / trick / auction / state / view / help
   test/             node:test 表驱动 + 属性测试（默认 60 个随机整局，GAME_SEEDS 可放大）
+packages/bot        机器人策略（零依赖，只 import 引擎；纯函数「个人视图 → 动作」，见 ADR-0014）
+  src/              policy（叫牌/埋底/出牌）/ sight（记牌与拆链）
+  test/             表驱动单测 + 整局属性测试（三个机器人直驱引擎打完整场）+ 纯净守卫
 packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定义，两条传输共用）
   src/              tools（工具表）/ server（挂到 SDK）/ http-api（stdio 取数）/ bootstrap（启动判定）/ wire / stdio
   test/             node:test：工具层单测 + 内存链对上的协议单测 + stdio 启动契约
   scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
-  src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub、MCP 进程内适配层
+  src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub、MCP 进程内适配层、机器人调度
   src/routes/       大厅、同桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、
-                    REST 动作接口（含入座/离座）、SSE 流、MCP（/api/mcp）
+                    REST 动作接口（含入座/离座/加机器人）、SSE 流、MCP（/api/mcp）
+  src/hooks.server.ts  启动时补扫机器人回合（重启自愈，见 ADR-0014）
   src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
   src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
   src/lib/story/    牌局编排台的内核：种子↔牌局、回放、说明标签、导出/导入、草稿存储
   scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
+                    bot-check.ts（1 人 + 2 机器人打两副 + 中途踢/补的端到端）
                     build-deal-stories.ts（牌局 JSON → 演示页数据 + 复核清单）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
@@ -60,11 +65,15 @@ docs/deals/         牌局故事：<slug>.json（牌手导出，原话不改）+
 ```bash
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
+pnpm test:bot         # 机器人策略测试：叫牌/埋底/出牌表驱动单测 + 整局属性测试（3 个机器人打完一场）
+                      #                 + 纯净守卫（策略只许依赖引擎、无 IO/随机）
 pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 /
                       #                   牌局编排台（回放·导出·草稿）/ 说明标签 / 牌局故事完整性 / 演示页结构 /
                       #                   角色与观战投影 + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
+                      #                 + 机器人座位的进程内集成（延迟调零：打完一副、补位、权限与上限、
+                      #                   踢出语义、身份认不出、重启自愈）+ 机器人作弊面守卫
 pnpm test:mcp         # MCP 工具层单测：工具语义、参数校验、等待超时、协议注册一致性、stdio 启动契约
-pnpm check            # 引擎 tsc + MCP 包 tsc + 应用 svelte-check
+pnpm check            # 引擎 tsc + 机器人包 tsc + MCP 包 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
 pnpm start            # 跑构建产物（默认端口 3000，见下）
@@ -104,6 +113,9 @@ BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换
                                                        # 在座不能改名或换身份、改名后旧凭据失效
 BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条传输各打一整副（stdio 真 spawn + /api/mcp）
                                                        # 顺带核对 wire 形状、MCP 座位的在线态、以及非法出牌必被服务端拒绝
+BASE=http://127.0.0.1:5178 pnpm bot-check              # 机器人端到端：1 人 + 2 机器人打两副；人类座位也由**同一份策略**出手，
+                                                       # 所以顺带证明策略给出的动作真的被服务器接受；另含
+                                                       # 未入座者加不了 / 第 3 个被上限挡住 / 踢出后本副停在空座 / 补位接着打完
 ```
 
 冒烟脚本用 `data/smoke-run.json` 保存凭据供续局校验使用。
@@ -111,6 +123,9 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
 > 受限沙箱（piped stdio 一律 EPERM，见 AGENTS 规则 5）里 `mcp-check` 要加 `SPAWN=0`：
 > 它改用 SDK 的内存链对驱动同一套工具表，只是不起 stdio 子进程；
 > stdio 那条进程级契约由 `pnpm test:mcp` 里的启动契约测试覆盖（同样需要能 spawn 子进程）。
+
+`bot-check` 想跑快就给服务端把拟人延迟调零：`SIXTY_BOT_DELAY_MIN_MS=0 SIXTY_BOT_DELAY_MAX_MS=0`
+（CI 就是这么跑的；默认 0.5–1.5 秒是给人看的节奏）。
 
 ## 界面约定
 
@@ -139,6 +154,12 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
   陌生手牌发愣）。观战人数（实时连接数）与座位状态都在右侧活页签抽屉的「我」页里。
   不在座位上时才能改名字或换身份 —— 改名会让凭据串重签，大厅与观战页都会把新串写回本机。
   观战记录不会自动清除（只有入座才清），所以大厅「我的同桌」会一直列出你在观战的那张桌（上限 20 条）。
+- **机器人（凑桌陪练）**：在座的任何人类都能在**空座位**上点「+ 机器人」凑桌，一桌至多 2 个
+  （至少留一个人类座位去按「开下一副」—— 机器人从不发起发牌）。进行中加入就是**补位**：它接手这个座位
+  现有的手牌与级别，这一副接着打完。机器人座位卡照旧显示名字与在线点，只多一枚「机器人」徽标和一个
+  「请离」入口（离座语义：本副停在空座等补位，界面会先说清）。它**没有凭据串**，所以没人能冒充或接管它；
+  它的动作走与人类完全同一条服务器权威路径，也只看得见**个人视图**（见 ADR-0014）。
+  屏幕上它出手有点慢（0.5–1.5 秒拟人延迟），那是给人看清局面用的。
 - **手机端页头与右侧活页签抽屉**：页头只留 `← 大厅`、邀请码（不在座且有空座时另留一个「入座」，
   补位有时限，不藏起来）。**连接状态不是常驻指示器**：绿点已下线 —— 手机上没有 hover 能解释一枚圆点，
   而它平时显示的恰恰是「什么都没发生」；只有 SSE 断开时才在页头下方出一条
@@ -163,11 +184,16 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
 
 ## 让 LLM 也来玩（MCP）
 
-LLM 在这套系统里**就是一个普通身份**：服务器不区分人类与 LLM，座位上也没有「机器人席位」这种东西。
+LLM 在这套系统里**就是一个普通身份**：服务器不区分人类与 LLM，座位上也没有「LLM 席位」这种东西。
 仓库提供的是 **MCP 工具面**（工具定义只有一份，理由与取舍见 ADR-0010；投喂量怎么省见 ADR-0011）；
-"会不会打牌"由接上来的宿主决定，仓库不自带任何打牌策略。
+"会不会打牌"由接上来的宿主决定 —— LLM 宿主自带策略。
 **凭据是可选的**：没配也能连上（**无身份会话**：只能读规则、或替人类建一个身份，见 ADR-0014）——
 所以「AI 一步步教人类把身份配起来」这条路上的第一步不需要先有一个身份。
+
+> **别把它和「机器人」搞混。** 机器人是服务器自己代打的那种身份（无凭据串、由「+机器人」加进空座，
+> 见 ADR-0015 与上面「机器人（凑桌陪练）」一节），跟 MCP 席位是两回事：MCP 对面是人还是 LLM，
+> 服务器依旧分不出来。至于**打得好不好**：机器人那套基线启发式策略是独立小包
+> `packages/bot`（纯函数：个人视图 → 动作），接上来的宿主想拿它当参考策略或对照基准都可以直接复用。
 
 ### 1. 先给 agent 一个身份
 
@@ -361,10 +387,11 @@ Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker C
 
 ## 暂未实现（v1 范围外）
 
-聊天/表情、计时器、机器人补位、观战者的全知/延迟视图、多实例水平扩展。
+聊天/表情、计时器、观战者的全知/延迟视图、多实例水平扩展。
 
-其中「机器人补位」的边界：仓库提供 **MCP 工具面**（见 ADR-0010），让 LLM 能以普通身份坐上空座，
-但仓库里**没有**会自己思考的 agent —— 是否会打牌取决于接上来的宿主。
+「机器人补位」**已从这张单子移出** —— 机器人座位与基线启发式策略已落地（见 ADR-0014）。
+仍未做的是**更强的**机器人与难度梯度：现在只有一档规则式启发，不搜索、不学牌谱，
+`packages/bot` 的纯函数形状留了加档位的口子，但第一版刻意不做。
 
 ## 许可
 
