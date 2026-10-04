@@ -3,17 +3,19 @@
   import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
+  import type { DrawerTabKey } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
-  import HistoryList from '$lib/components/HistoryList.svelte';
-  import IdentityQuickEdit from '$lib/components/IdentityQuickEdit.svelte';
   import InviteCode from '$lib/components/InviteCode.svelte';
+  import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
   import SeatActions from '$lib/components/SeatActions.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
+  import TabRail from '$lib/components/TabRail.svelte';
+  import TableDrawer from '$lib/components/TableDrawer.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
   import { kittyHandDelta } from '$lib/labels';
@@ -31,8 +33,15 @@
       )
   );
 
-  let historyOpen = $state(false);
+  /**
+   * 右侧活页签抽屉：`null` = 关着。
+   *
+   * 纯手动状态 —— 不自动打开、不自动换页，SSE 每帧都不碰它（见 CONTEXT.md 的 Flagged ambiguities）。
+   * 每副结束自动弹出的结算（`summaryOpen`）与它无关，仍然是整页的模态。
+   */
+  let active = $state<DrawerTabKey | null>(null);
   let summaryOpen = $state(false);
+  let leaveOpen = $state(false);
   let openedFor = -1; // 非响应式：仅用于「每副只自动弹出一次结算」
 
   onMount(() => {
@@ -106,16 +115,15 @@
     return false;
   }
 
-  const dotClass = $derived(
-    client.connection === 'live'
-      ? 'bg-emerald-400'
-      : client.connection === 'offline'
-        ? 'bg-rose-500'
-        : 'bg-amber-300'
-  );
+  function selectTab(key: DrawerTabKey): void {
+    active = active === key ? null : key;
+  }
 </script>
 
 <main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
+  <!-- 页头只留必要信息：大厅、邀请码，以及观战者补位用的「入座」——
+       连接正常时页头一个像素都不占（断线才由下面那条提示出声）。
+       战报/叫牌/底牌/我 全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。 -->
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
@@ -126,30 +134,22 @@
       />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
-      <!-- 观战人数是「正在看」的实时口径，只在有人看时出现，不列名单 -->
-      {#if (client.table?.spectatorCount ?? 0) > 0}
-        <span class="rounded-md border border-white/10 px-2 py-0.5 text-white/45">
-          {client.table?.spectatorCount} 人观战
-        </span>
-      {/if}
-      {#if client.role === 'spectator'}
-        <span class="rounded-md bg-white/10 px-2 py-0.5 text-white/70">观战中</span>
-      {/if}
-      <a class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10" href="/rules">教程</a>
-      <button
-        type="button"
-        class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10"
-        onclick={() => (historyOpen = true)}
-      >
-        战报
-      </button>
-      <SeatActions {client} />
-      {#if !seated}
-        <IdentityQuickEdit {client} />
-      {/if}
-      <span class={['h-2 w-2 rounded-full', dotClass]} title="连接状态"></span>
+      <SeatActions {client} variant="sit-only" />
     </div>
   </header>
+
+  <!-- 连接异常只在坏的时候出声：`live`（常态）与首帧的 `connecting` 都不占像素 ——
+       手机上没有 hover，旧的那枚绿点既解释不了、也没有动作可做；EventSource 自己会重连，
+       所以这里只需说明「画面可能停在上一帧」。role="status" 让读屏也能听到重连。
+       被否的替代（常驻圆点 / 挪进「我」页 / connecting 也提示）见 CONTEXT.md。 -->
+  {#if client.connection === 'offline'}
+    <p
+      role="status"
+      class="mb-2 rounded-lg bg-amber-400/15 px-3 py-1.5 text-xs text-amber-200 ring-1 ring-amber-400/30"
+    >
+      连接中断，正在重连…画面可能停在上一帧。
+    </p>
+  {/if}
 
   {#if client.error}
     <p class="mb-2 rounded-lg bg-red-500/20 px-3 py-2 text-xs text-red-200">{client.error}</p>
@@ -217,7 +217,13 @@
   {/if}
 </main>
 
+<!-- 右边缘活页签条：常驻，点一个拉起对应的抽屉页；点当前页签即收起。
+     抽屉**不套 {#if view}**：「我」页（改名/换身份、座位/观战）在没发牌时也要能用，
+     而且它常驻 DOM 正是那两条观战守卫仍然有效的原因。 -->
+<TabRail {active} onSelect={selectTab} />
+<TableDrawer {client} {active} onClose={() => (active = null)} onLeave={() => (leaveOpen = true)} />
+
 {#if view !== null}
   <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
-  <HistoryList {view} mySeat={label} {names} open={historyOpen} onClose={() => (historyOpen = false)} />
 {/if}
+<LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />

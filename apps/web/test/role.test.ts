@@ -136,7 +136,13 @@ test('未开局：视图为空，但在不在座位上仍然看得出来（you �
   const player = projectionFor(null, 1);
   assert.equal(player.role, 'player');
   assert.equal(player.view, null);
-  assert.deepEqual(player.you, { seat: 1, hand: [], isDeclarer: false, originalKitty: null });
+  assert.deepEqual(player.you, {
+    seat: 1,
+    hand: [],
+    isDeclarer: false,
+    originalKitty: null,
+    buriedKitty: null
+  });
 
   const fresh = createGame(0);
   const spectator = projectionFor(fresh, null);
@@ -149,6 +155,7 @@ test('未开局：视图为空，但在不在座位上仍然看得出来（you �
   assert.equal(seated.you?.seat, 1, '未开局时在座的人也必须拿到 you，否则界面会以为自己在观战');
   assert.equal(seated.you?.hand.length, 0);
   assert.equal(seated.you?.originalKitty, null, '还没发牌时谈不上「拿上来的底牌」');
+  assert.equal(seated.you?.buriedKitty, null, '还没发牌时也谈不上「埋下的底牌」');
   assert.equal(seated.view?.deal, null);
 });
 

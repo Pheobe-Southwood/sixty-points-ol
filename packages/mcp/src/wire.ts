@@ -71,4 +71,18 @@ export const VIEW_FIELDS: readonly (keyof PublicView)[] = [
   'history',
   'deal'
 ];
-export const YOU_FIELDS: readonly (keyof PlayerSeat)[] = ['seat', 'hand', 'isDeclarer', 'originalKitty'];
+/**
+ * `PlayerSeat` 是**服务器发过来的原始个人视图**（`/view` 与 SSE 同源），所以引擎给它长字段时，
+ * 这张表必须显式跟着长 —— 忘了就会让 `mcp-check` 的形状守卫红，那正是它存在的意义。
+ * `buriedKitty`（庄家埋下去的那 3 张，埋底完成后才有值）就是这么来的。
+ *
+ * 它不是工具面的出参清单：工具面走 `project.ts` 的 `COMPACT_*`（更瘦、另外声明），
+ * 两张表不同是有意的，别合并。
+ */
+export const YOU_FIELDS: readonly (keyof PlayerSeat)[] = [
+  'seat',
+  'hand',
+  'isDeclarer',
+  'originalKitty',
+  'buriedKitty'
+];

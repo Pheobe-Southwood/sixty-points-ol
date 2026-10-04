@@ -33,10 +33,15 @@
   const leftSeat = $derived((seat + 1) % 3);
   const rightSeat = $derived((seat + 2) % 3);
 
-  /** 三家方位：左（下家）左上、右（上家）右上、我正中下；窄屏上下错开避免两墩重叠 */
+  /**
+   * 三家方位：左（下家）左上、右（上家）右上、我正中下；窄屏上下错开避免两墩重叠。
+   *
+   * 窄屏右侧墩用 `right-[20%]` 而不是 `right-[6%]`：右边缘常驻着活页签条（宽约 28px），
+   * `6%` 时宽一点的顺子会被页签盖住几张，`20%` 就把这一墩让开了（`sm+` 本来就取 24%）。
+   */
   function spotOf(target: number): string {
     if (target === leftSeat) return 'absolute left-[6%] top-36 sm:left-[24%] sm:top-[36%]';
-    if (target === rightSeat) return 'absolute right-[6%] top-56 sm:right-[24%] sm:top-[36%]';
+    if (target === rightSeat) return 'absolute right-[20%] top-56 sm:right-[24%] sm:top-[36%]';
     return 'absolute inset-x-0 bottom-[20%]';
   }
 </script>

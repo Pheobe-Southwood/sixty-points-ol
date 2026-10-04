@@ -46,8 +46,12 @@ export function projectionFor(
     return { role: 'spectator', view: state === null ? null : publicView(state), you: null };
   }
   if (state === null) {
-    // 还没发牌：手牌为空，但「我在座位上」这件事必须表达出来；底牌此时也不存在
-    return { role: 'player', view: null, you: { seat, hand: [], isDeclarer: false, originalKitty: null } };
+    // 还没发牌：手牌为空，但「我在座位上」这件事必须表达出来；两批底牌此时都还不存在
+    return {
+      role: 'player',
+      view: null,
+      you: { seat, hand: [], isDeclarer: false, originalKitty: null, buriedKitty: null }
+    };
   }
   // 手牌只发一份：从个人视图里摘掉 you，视图本身保持公共形态
   const { you, ...view } = personalView(state, seat);

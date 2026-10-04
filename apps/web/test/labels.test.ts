@@ -50,8 +50,8 @@ function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
       declarerSeat: null,
       summary: null
     },
-    // 拿上来的底牌属于玩家私有，挂在 you 上（`deal` 是观战者也拿得到的公共投影）
-    you: { seat: 0, hand: [], isDeclarer: false, originalKitty: null }
+    // 两批底牌都属于玩家私有，挂在 you 上（`deal` 是观战者也拿得到的公共投影）
+    you: { seat: 0, hand: [], isDeclarer: false, originalKitty: null, buriedKitty: null }
   };
 }
 

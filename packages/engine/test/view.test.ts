@@ -4,12 +4,14 @@
  * 1. **观战者只看公共视图**（ADR-0007）：用结构 walker 把 payload 里所有像牌的对象抓出来，
  *    断言它与「此刻应当隐藏的牌集合」不相交。跑随机整局（`GAME_SEEDS` 可放大），每一步都查一次。
  *    不做字符串子串匹配：`S1` 会命中 `S14`，那种守卫会自己制造假绿。
- * 2. **底牌只对庄家提前可见**（见 CONTEXT.md 的 **底牌**）：发牌留下的 3 张在成交后就并进庄家手牌，
- *    所以对庄家不是新信息 —— 个人视图把它们一并交出（`you.originalKitty`），好让界面点明
- *    「哪三张是拿上来的」；闲家到结算（`summary.originalKitty`）才看得到。
+ * 2. **底牌只对庄家提前可见**（见 CONTEXT.md 的 **底牌** / **拿上来的底牌** / **埋下的底牌**）：
+ *    发牌留下的 3 张在成交后就并进庄家手牌，所以对庄家不是新信息 —— 个人视图把它们一并交出
+ *    （`you.originalKitty`），好让界面点明「哪三张是拿上来的」；他**埋下去的那 3 张**同样是他自己
+ *    选的，埋底完成后由 `you.buriedKitty` 交出（回看，见 `PersonalView` 的注释）。
+ *    闲家到结算（`summary.originalKitty` / `summary.kitty`）才看得到两批牌。
  *
  * 两件事的边界是同一条：**公共投影里不许出现任何私有字段**，
- * 所以 `originalKitty` 放在 `you`（庄家私有）而不是 `deal`（观战者也拿得到）里。
+ * 所以 `originalKitty` / `buriedKitty` 都放在 `you`（庄家私有）而不是 `deal`（观战者也拿得到）里。
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -195,6 +197,7 @@ describe('公共视图 / 个人视图的信息边界', () => {
         hand: readonly Card[];
         isDeclarer: boolean;
         originalKitty: readonly Card[] | null;
+        buriedKitty: readonly Card[] | null;
       };
       assert.equal(you.seat, 1, 'you.seat 应当就是请求的座位');
       assert.equal(
@@ -202,8 +205,9 @@ describe('公共视图 / 个人视图的信息边界', () => {
         state.deal === null ? 0 : state.deal.hands[1]!.length,
         'you.hand 张数应当与引擎里该座位的手牌一致'
       );
-      // 私有字段一律挂在 you 上：庄家的底牌不该出现在公共投影里
+      // 私有字段一律挂在 you 上：庄家的两批底牌都不该出现在公共投影里
       assert.equal('originalKitty' in (pub['deal'] as object ?? {}), false, '公共投影里出现了 originalKitty');
+      assert.equal('buriedKitty' in (pub['deal'] as object ?? {}), false, '公共投影里出现了 buriedKitty');
       for (const key of Object.keys(pub)) {
         assert.deepEqual(mine[key], pub[key], `字段 ${key} 在两个视图里应当一致`);
       }
@@ -371,6 +375,7 @@ describe('个人视图：底牌可见性', () => {
         const defender = ((declarer + 1) % 3) as Seat;
         const view = personalView(state, defender);
         assert.equal(view.you.originalKitty, null, '闲家不该看到底牌');
+        assert.equal(view.you.buriedKitty, null, '闲家不该看到庄家埋下去的那 3 张');
         assert.equal(view.you.isDeclarer, false);
         checkedDefender = true;
       }
@@ -412,6 +417,53 @@ describe('个人视图：底牌可见性', () => {
       steps += 1;
     }
     throw new Error('没能在 20000 步内走完一副');
+  });
+
+  it('庄家的 buriedKitty 埋底完成后才出现，且与结算里的 kitty 是同一组牌', () => {
+    const rng = mulberry32(41);
+    let state = createGame(0);
+    let steps = 0;
+    let sawBury = false;
+    let sawPlay = false;
+    let buriedAtPlay: string[] | null = null;
+
+    while (steps < 20000) {
+      const deal = state.deal;
+      if (deal !== null && deal.contract !== null && deal.phase === 'bury') {
+        // 埋底阶段 `deal.kitty` 还是发牌留下的占位（见 state.ts 的 newDeal）：
+        // 庄家这时还没埋牌，把它当「埋下去的 3 张」交出去会指着一手还没做的决定。
+        const view = personalView(state, deal.contract.declarerSeat);
+        assert.equal(view.you.buriedKitty, null, '埋底阶段不该给出 buriedKitty');
+        sawBury = true;
+      }
+      if (deal !== null && deal.phase === 'play' && deal.contract !== null) {
+        const view = personalView(state, deal.contract.declarerSeat);
+        assert.ok(view.you.buriedKitty !== null, '打牌阶段庄家应当能回看自己埋下去的 3 张');
+        assert.deepEqual(
+          [...view.you.buriedKitty].map(cardKey).sort(),
+          deal.kitty.map(cardKey).sort(),
+          'buriedKitty 与引擎里埋下的底牌对不上'
+        );
+        buriedAtPlay = [...view.you.buriedKitty].map(cardKey).sort();
+        sawPlay = true;
+      }
+      if (deal !== null && deal.phase === 'scored' && deal.contract !== null && deal.summary !== null) {
+        const view = personalView(state, deal.contract.declarerSeat);
+        assert.ok(view.you.buriedKitty !== null, '结算阶段庄家仍能回看自己埋下去的 3 张');
+        assert.deepEqual(
+          [...view.you.buriedKitty].map(cardKey).sort(),
+          deal.summary.kitty.map(cardKey).sort(),
+          '结算公开的 kitty 应与庄家回看的 buriedKitty 一致'
+        );
+        assert.deepEqual(buriedAtPlay, [...view.you.buriedKitty].map(cardKey).sort(), '打牌阶段与结算阶段应是同一组牌');
+        return;
+      }
+      const result = dispatch(state, randomLegalAction(state, rng), rng);
+      if (!result.ok) break;
+      state = result.state;
+      steps += 1;
+    }
+    throw new Error(`没能在 20000 步内走完一副（sawBury=${sawBury} sawPlay=${sawPlay}）`);
   });
 
   it('出牌阶段的轮次提示仍然只在座位上（视图不因私有字段而改变轮次语义）', () => {
