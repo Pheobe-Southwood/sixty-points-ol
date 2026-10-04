@@ -12,7 +12,13 @@
   const missing = $derived(3 - seats.filter((seat) => seat.userId !== null).length);
 </script>
 
-<section class="absolute inset-0 grid place-items-center px-4">
+<!--
+  这层铺满整张毡面（`inset-0`），而它在 DOM 里**排在座位卡之后** —— 所以它默认会把座位卡上的
+  动作按钮（「+ 机器人」）盖住：看得见、点不到（点下去命中这一层）。实测就是这个原因。
+  因此根节点让开点击（`pointer-events-none`），只把自己那几个控件重新接回来
+  （邀请码 / 开始第一副 / 规则演示链接）。纯文本不需要接管点击。
+-->
+<section class="pointer-events-none absolute inset-0 grid place-items-center px-4">
   <div class="text-center">
     <p class="text-[10px] tracking-[.4em] text-gold/70 sm:text-[11px]">SIXTY POINTS</p>
     <h1
@@ -23,7 +29,7 @@
 
     <!-- 点邀请码即复制邀请链接；不写阶段说明（那在左下的「?」里） -->
     <p class="mt-4 text-xs text-white/60">点邀请码即可复制邀请链接，发给朋友：</p>
-    <div class="mt-1.5 flex justify-center">
+    <div class="pointer-events-auto mt-1.5 flex justify-center">
       <InviteCode {code} class="font-mono text-lg font-bold tracking-[.3em] text-gold" />
     </div>
 
@@ -44,7 +50,7 @@
     {#if seated}
       <button
         type="button"
-        class="mt-5 rounded-xl bg-gold px-8 py-2.5 text-sm font-bold text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.7)] transition hover:brightness-110 active:scale-95 disabled:opacity-40"
+        class="pointer-events-auto mt-5 rounded-xl bg-gold px-8 py-2.5 text-sm font-bold text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.7)] transition hover:brightness-110 active:scale-95 disabled:opacity-40"
         disabled={!ready || client.busy}
         onclick={() => void client.deal()}
       >
@@ -57,7 +63,9 @@
     {/if}
 
     <p class="mt-3">
-      <a class="text-[11px] text-white/45 hover:text-white" href="/learn">第一次玩？看规则演示 →</a>
+      <a class="pointer-events-auto text-[11px] text-white/45 hover:text-white" href="/learn"
+        >第一次玩？看规则演示 →</a
+      >
     </p>
 
     {#if client.error}

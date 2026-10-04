@@ -16,8 +16,11 @@
 </script>
 
 <!-- 这里不再放第二个「?」：埋底阶段的说明统一由操作条的「?」给出（与 /rules 同源），
-     同一个阶段出现两个问号只是重复。 -->
-<section class="absolute inset-x-0 top-[12%] mx-auto w-[21rem] max-w-[92%]">
+     同一个阶段出现两个问号只是重复。
+     根节点让开点击（`pointer-events-none`）：这层横跨整幅毡面，会把**座位卡上的动作按钮**
+     （「+ 机器人」/「请离」）盖住 —— 窄屏上尤其明显（`top-[12%]` 就在上排座位卡的按钮带上）。
+     只有里面那张「拿上来的底牌」是可点的，单独把它接回来。 -->
+<section class="pointer-events-none absolute inset-x-0 top-[12%] mx-auto w-[21rem] max-w-[92%]">
   <h2 class="text-sm font-bold">
     埋底
     {#if mine}
@@ -30,7 +33,7 @@
   {#if mine}
     <!-- 拿上来的底牌单独摆一行，并且**可以点**：底牌并进 20 张手牌后按花色排序，
          再想从手牌里认出是哪三张几乎不可能。点这里等于在手牌里选中它（同一个选中集合）。 -->
-    <div class="mt-2 rounded-xl bg-black/35 p-2 ring-1 ring-sky-300/25">
+    <div class="pointer-events-auto mt-2 rounded-xl bg-black/35 p-2 ring-1 ring-sky-300/25">
       <p class="text-[11px] text-white/60">你拿上来的底牌（点一下 = 在手牌里选中它）</p>
       <div class="mt-1.5 flex justify-center gap-2">
         {#each taken as card, index (cardKey(card) + index)}

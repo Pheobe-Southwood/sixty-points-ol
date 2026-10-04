@@ -20,7 +20,8 @@
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const read = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -32,6 +33,11 @@ const drawer = read('../src/lib/components/TableDrawer.svelte');
 const bidPanel = read('../src/lib/components/BidPanel.svelte');
 const kittyPanel = read('../src/lib/components/KittyPanel.svelte');
 const mePanel = read('../src/lib/components/MePanel.svelte');
+const seatCard = read('../src/lib/components/SeatCard.svelte');
+const seatActions = read('../src/lib/components/SeatActions.svelte');
+const lobbyPanel = read('../src/lib/components/LobbyPanel.svelte');
+const tableStatus = read('../src/lib/components/TableStatus.svelte');
+const buryPanel = read('../src/lib/components/BuryPanel.svelte');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -143,5 +149,90 @@ test('查阅面进抽屉，动作面留桌面', () => {
     code(kittyPanel).includes('originalKitty'),
     false,
     '「底牌」页引用了 originalKitty：拿上来的那 3 张只活在毡面的埋底面板里，两处不许混同'
+  );
+});
+
+test('横跨毡面的覆盖层必须让开点击（否则座位卡上的动作按钮看得见、点不到）', () => {
+  // 起因是一个实测 bug：`LobbyPanel` 的 `absolute inset-0` 铺满毡面、在 DOM 里又排在座位卡**之后**，
+  // 于是刚开桌（还没发牌、两个空座）时「+ 机器人」按钮被它整层盖住 —— 看得见、点下去命中大厅层。
+  // 规则：毡面级的覆盖层根节点一律 `pointer-events-none`，需要点的控件自己 `pointer-events-auto`；
+  // 例外必须写进 EXEMPT 并说明理由（挡住座位卡动作的层不许例外）。
+  const EXEMPT: Record<string, string> = {
+    'BidPanel.svelte':
+      '它自己就是滚动容器（max-h + overflow-y-auto）：让开点击会把滚轮一起让掉，反而点不到「不叫」',
+    'TrickArea.svelte':
+      '只在各家的出牌点上画牌（不是整面覆盖）；那条 bottom 横带只压到「我」的座位卡与观战锚点，两者都没有动作按钮'
+  };
+
+  /** 取根元素的 class（剥注释后第一个 section/div 的 class 属性） */
+  function rootClass(source: string): string {
+    const stripped = code(source);
+    const match = /<(?:section|div|aside|figure)[^>]*\sclass=(?:"([^"]*)"|\{(\[[\s\S]*?\])\})/.exec(stripped);
+    assert.ok(match !== null, '取不到根元素的 class');
+    return match[1] ?? match[2]!;
+  }
+
+  const dir = new URL('../src/lib/components/', import.meta.url);
+  const files = readdirSync(fileURLToPath(dir)).filter((name) => name.endsWith('.svelte'));
+  const wide: string[] = [];
+  for (const file of files) {
+    const source = code(read(`../src/lib/components/${file}`));
+    // 毡面级 = absolute 定位且横跨整幅（inset-0 / inset-x-0 / inset-x-3 都算）
+    if (!/class="[^"]*\babsolute\b[^"]*\binset-(?:x-)?[03]\b/.test(source) && !/absolute inset-0/.test(source)) continue;
+    wide.push(file);
+    if (EXEMPT[file] !== undefined) continue;
+    assert.ok(
+      rootClass(read(`../src/lib/components/${file}`)).includes('pointer-events-none'),
+      `${file} 横跨整幅毡面却没让开点击：它会在座位卡的「+ 机器人」/「请离」按钮上吃掉点击`
+    );
+  }
+  // 断言不能空转：这三个（实测踩过的大厅层 + 两条信息条）必须真的被扫进来
+  for (const name of ['LobbyPanel.svelte', 'TableStatus.svelte', 'BuryPanel.svelte']) {
+    assert.ok(wide.includes(name), `${name} 没被这条守卫扫到 —— 扫描规则可能失效了`);
+  }
+
+  // 让开之后，可点的控件必须自己接回来，否则连邀请码 / 开始第一副 / 规则演示都点不动了
+  for (const [name, source, minimum] of [
+    ['LobbyPanel.svelte', lobbyPanel, 3], // 邀请码、开始第一副、规则演示链接
+    ['BuryPanel.svelte', buryPanel, 1] // 「拿上来的底牌」那块
+  ] as const) {
+    const auto = code(source).split('pointer-events-auto').length - 1;
+    assert.ok(auto >= minimum, `${name} 只接了 ${auto} 处 pointer-events-auto（至少要 ${minimum} 处）`);
+  }
+  // 三层里必须一个可点元素都不少（别用「删掉控件」来让守卫变绿）
+  for (const [name, source, needle] of [
+    ['LobbyPanel.svelte', lobbyPanel, 'InviteCode'],
+    ['LobbyPanel.svelte', lobbyPanel, '开始第一副'],
+    ['TableStatus.svelte', tableStatus, '定约'],
+    ['BuryPanel.svelte', buryPanel, '你拿上来的底牌']
+  ] as const) {
+    assert.ok(source.includes(needle), `${name} 里少了「${needle}」`);
+  }
+});
+
+test('动作按钮都要在有请求在飞时禁用（慢网下防双击），机器人按钮也不例外', () => {
+  // 参照物：入座/离座一直是对的；加机器人这些后加的按钮当初漏了 busy 判断
+  assert.ok(
+    code(seatActions).includes('disabled={client.busy}'),
+    '「入座」按钮不再禁用 busy —— 参照物变了，请检查这条守卫是不是在空转'
+  );
+  // 不用正则拼标签（标签里有 `+`，正则里是量词）——按 <button 切块找，读起来也直白
+  const buttons = code(seatCard).split('<button').slice(1);
+  for (const label of ['+ 机器人', '请离']) {
+    const block = buttons.find((piece) => piece.includes(label));
+    assert.ok(block !== undefined, `座位卡里找不到「${label}」按钮`);
+    assert.ok(
+      block.includes('disabled={busy}'),
+      `「${label}」按钮没有 disabled={busy}：慢网下会被人连点两次`
+    );
+  }
+  assert.ok(
+    pageCode.includes('busy={client.busy}'),
+    '同桌页没有把 client.busy 传给座位卡 —— 上面那条 disabled={busy} 就会永远是 false'
+  );
+  // 按钮位置必须带语义：点哪张空座卡就加进哪张（曾经过：无论点哪个都加进第一个空座）
+  assert.ok(
+    pageCode.includes('onAddBot={() => void addBot(seat)}'),
+    '空座卡的「+ 机器人」没有把自己的座位传出去 —— 又会变成「点第二个、坐到第一个」'
   );
 });

@@ -19,6 +19,8 @@ export interface SeatInfo {
   readonly userId: number | null;
   readonly name: string | null;
   readonly online: boolean;
+  /** 机器人座位（服务器代打的无凭据身份，见 ADR-0015）；`mcp-check` 的形状守卫会逐字段核对 */
+  readonly bot: boolean;
 }
 
 export interface TableView {
@@ -52,7 +54,7 @@ export interface TableSummary {
 }
 
 /** 形状守卫的字段清单：声明与服务器漂移时，mcp-check 按这几张表逐个核对 */
-export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = ['seat', 'userId', 'name', 'online'];
+export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = ['seat', 'userId', 'name', 'online', 'bot'];
 export const TABLE_FIELDS: readonly (keyof TableView)[] = [
   'code',
   'seats',

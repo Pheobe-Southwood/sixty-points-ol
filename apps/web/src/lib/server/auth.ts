@@ -49,10 +49,21 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+/**
+ * 按名字查身份：**含机器人**（名字全局唯一，注册/改名的撞名检查必须把它们算进去）。
+ */
 export function findByName(name: string): Identity | null {
   const row = db.prepare('SELECT id, name, token FROM users WHERE name = ?').get(name) as
     | UserRow
     | undefined;
+  return row ?? null;
+}
+
+/** 按名字查**可登录**的身份：机器人行被排除（ADR-0015 —— 机器人没有凭据串，也不许有） */
+function findAuthByName(name: string): Identity | null {
+  const row = db.prepare('SELECT id, name, token FROM users WHERE name = ? AND is_bot = 0').get(
+    name
+  ) as UserRow | undefined;
   return row ?? null;
 }
 
@@ -74,13 +85,14 @@ export function createIdentity(name: string): Identity | null {
 export function findByCredential(credential: string): Identity | null {
   const parsed = parseCredential(credential);
   if (parsed === null) return null;
-  const row = findByName(parsed.name);
+  // 机器人行在此被排除：就算拿到了它的令牌也登不进来（防御纵深，令牌本就不外发）
+  const row = findAuthByName(parsed.name);
   if (!row) return null;
   return safeEqual(row.token, parsed.token) ? row : null;
 }
 
 export function findByToken(token: string): Identity | null {
-  const row = db.prepare('SELECT id, name, token FROM users WHERE token = ?').get(token) as
+  const row = db.prepare('SELECT id, name, token FROM users WHERE token = ? AND is_bot = 0').get(token) as
     | UserRow
     | undefined;
   return row ?? null;

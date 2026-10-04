@@ -7,9 +7,11 @@
     "build": "pnpm --filter web build",
     "start": "pnpm --filter web start",
     "test": "pnpm --filter @sixty/engine test",
+    "test:bot": "pnpm --filter @sixty/bot test",
     "test:web": "pnpm --filter web test",
     "test:mcp": "pnpm --filter @sixty/mcp test",
     "mcp-check": "pnpm --filter @sixty/mcp mcp-check",
+    "bot-check": "pnpm --filter web bot",
     "check": "pnpm -r check",
     "deal": "pnpm --filter web deal",
     "deal:check": "pnpm --filter web deal:check"

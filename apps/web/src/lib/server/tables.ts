@@ -8,11 +8,12 @@ import {
   type GameState,
   type Seat
 } from '@sixty/engine';
-import type { Role, SeatInfo, StreamPayload, TableView } from '$lib/shared';
-import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '$lib/invite';
-import { projectionFor, resolveArrivalRole } from '$lib/role';
+import type { Role, SeatInfo, StreamPayload, TableView } from '../shared';
+import { INVITE_CODE_ALPHABET, INVITE_CODE_LENGTH } from '../invite';
+import { projectionFor, resolveArrivalRole } from '../role';
 import { db, now, transaction } from './db';
 import { broadcast, connectionUserIds, forget, hasAnyConnection, isRecentlyActive, isUserOnline, touch } from './hub';
+import { scheduleBots } from './bots';
 
 export interface TableInfo {
   readonly id: number;
@@ -82,6 +83,14 @@ export function getTableByCode(code: string): TableInfo | null {
   const row = db
     .prepare('SELECT id, code, host_user_id FROM tables WHERE code = ?')
     .get(code.toUpperCase()) as TableRow | undefined;
+  return row ? tableFrom(row) : null;
+}
+
+/** 按内部 id 取桌（机器人调度器手里只有 tableId，见 bots.ts） */
+export function getTableById(id: number): TableInfo | null {
+  const row = db
+    .prepare('SELECT id, code, host_user_id FROM tables WHERE id = ?')
+    .get(id) as TableRow | undefined;
   return row ? tableFrom(row) : null;
 }
 
@@ -299,12 +308,12 @@ export function takeSeat(
 export function tableView(table: TableInfo): TableView {
   const rows = db
     .prepare(
-      `SELECT s.seat AS seat, s.user_id AS user_id, u.name AS name
+      `SELECT s.seat AS seat, s.user_id AS user_id, u.name AS name, u.is_bot AS is_bot
        FROM seats s JOIN users u ON u.id = s.user_id
        WHERE s.table_id = ? ORDER BY s.seat`
     )
-    .all(table.id) as unknown as SeatRow[];
-  const bySeat = new Map<number, SeatRow>();
+    .all(table.id) as unknown as (SeatRow & { is_bot: number })[];
+  const bySeat = new Map<number, SeatRow & { is_bot: number }>();
   for (const row of rows) bySeat.set(row.seat, row);
   const seats: SeatInfo[] = [0, 1, 2].map((seat) => {
     const row = bySeat.get(seat);
@@ -312,8 +321,10 @@ export function tableView(table: TableInfo): TableView {
       seat,
       userId: row?.user_id ?? null,
       name: row?.name ?? null,
-      // 「在线」= 有 SSE 订阅，或最近有请求（MCP 侧没有 SSE，只能靠请求说话，见 hub.ts）
-      online: row ? isUserOnline(table.id, row.user_id) || isRecentlyActive(row.user_id) : false
+      // 「在线」= 有 SSE 订阅，或最近有请求（MCP 侧没有 SSE，只能靠请求说话，见 hub.ts）；
+      // 机器人的请求就是它出的每一手牌 —— 打牌时亮、停手一个窗口后转灰，如实
+      online: row ? isUserOnline(table.id, row.user_id) || isRecentlyActive(row.user_id) : false,
+      bot: row ? row.is_bot === 1 : false
     };
   });
   const seatedCount = seats.filter((s) => s.userId !== null).length;
@@ -361,16 +372,24 @@ function appendEvents(tableId: number, events: readonly { type: string }[]): voi
 /**
  * 该用户此刻该收到的完整负载：角色、公共/个人视图、自己那份手牌、桌面信息。
  * 角色每次按数据库现算，绝不接受客户端传入（观战者无法自称玩家）。
+ *
+ * **纯读**：不记「最近活跃」、不广播 —— 机器人调度器用它判断轮次（它没发请求，
+ * 不该因为被调度看了一眼就亮在线灯），人来的请求才走 `payloadFor` 记一笔。
  */
-export function payloadFor(table: TableInfo, userId: number): StreamPayload {
-  // 读到自己的负载就算「最近活跃」：MCP 侧没有 SSE，靠这个让座位卡不显示假离线（见 ADR-0010）。
-  // 翻转时顺手广播：别人的屏幕上那颗点该变绿了 —— 不然它要等到下一次动作才更新（见 ADR-0012）。
-  touched(userId);
+export function viewFor(table: TableInfo, userId: number): StreamPayload {
   const seat = seatOf(table, userId);
   return {
     ...projectionFor(getGameState(table.id), seat === null ? null : (seat as Seat)),
     table: tableView(table)
   };
+}
+
+/** 人来的读取（view 路由 / SSE 首帧）：记一笔「最近活跃」再给负载（见 ADR-0010） */
+export function payloadFor(table: TableInfo, userId: number): StreamPayload {
+  // 读到自己的负载就算「最近活跃」：MCP 侧没有 SSE，靠这个让座位卡不显示假离线（见 ADR-0010）。
+  // 翻转时顺手广播：别人的屏幕上那颗点该变绿了 —— 不然它要等到下一次动作才更新（见 ADR-0012）。
+  touched(userId);
+  return viewFor(table, userId);
 }
 
 /** 服务器权威地执行一个动作：座位号一律由服务端根据身份推导（见 ADR-0002） */
@@ -408,6 +427,9 @@ export function applyTableAction(code: string, userId: number, action: Action): 
     appendEvents(table.id, result.events);
   });
   broadcast(table.id);
+  // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0015）。
+  // 放在 broadcast 之后：机器人动作会再次广播，链式推进到人类回合为止。
+  scheduleBots(table.id);
   return { ok: true };
 }
 
