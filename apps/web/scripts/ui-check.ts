@@ -20,6 +20,12 @@
  * 7. 底牌可见性：庄家埋底页要能看见「你拿上来的底牌」；闲家的同一页不能出现它。
  *    这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家，观战者更没有）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
+ * 9. **页头只留必要信息**：`← 大厅`、邀请码、连接点（外加观战者补位用的「入座」）—— 战报/教程/改名/
+ *    离座/观战人数一律不许再出现在页头，它们属于右侧的活页签抽屉。这条守的是「页头又爆满」这个
+ *    已经发生过两次的回归。
+ * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 我` 四项、顺序固定；抽屉默认是关闭态
+ *    （`inert` + 滑出屏幕）；而「我」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
+ *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
@@ -130,6 +136,52 @@ function assertNoCompassLabels(html: string, where: string): void {
   assert(!/[东南西]家/.test(html), `${where}：仍出现方位称谓（应改用玩家名/「你」）`);
 }
 
+/** 页头切片：第一个 `<header>` 就是页头（抽屉自己那个 header 在 DOM 里排得更后） */
+function headerOf(html: string): string {
+  const match = /<header[\s\S]*?<\/header>/.exec(html);
+  if (match === null) throw new Error('页面里找不到 <header>，无法校验页头内容');
+  return match[0];
+}
+
+/**
+ * 页头只留必要信息：大厅、邀请码、连接点（+ 观战者的「入座」）。
+ * 其余一律在右侧活页签抽屉里 —— 这条守的是「手机端页头又爆满」这个已经发生过两次的回归。
+ */
+function assertLeanHeader(html: string, where: string): void {
+  const header = headerOf(html);
+  for (const stray of ['战报', '教程', '改名', '离座', '观战']) {
+    assert(!header.includes(stray), `${where}：页头里仍出现「${stray}」（它应当只在右侧活页签抽屉里）`);
+  }
+  assert(header.includes('大厅'), `${where}：页头没有回大厅的入口`);
+  assert(
+    /<button[^>]*aria-label="复制邀请链接"/.test(header),
+    `${where}：页头的邀请码不再是可点复制的按钮`
+  );
+}
+
+/** 右边缘活页签条：四项、顺序固定（`lib/drawer-tabs.ts` 是唯一真相） */
+function assertTabRail(html: string, where: string): void {
+  const rail = /<div[^>]*role="tablist"[\s\S]*?<\/div>/.exec(html)?.[0];
+  assert(rail !== undefined, `${where}：找不到右侧活页签条（role="tablist"）`);
+  const labels = [...rail.matchAll(/<span class="\[writing-mode:vertical-rl\]">([^<]+)<\/span>/g)].map(
+    (m) => m[1]
+  );
+  assert(
+    JSON.stringify(labels) === JSON.stringify(['战报', '叫牌', '底牌', '我']),
+    `${where}：页签应为 战报/叫牌/底牌/我 且顺序固定，实际 [${labels.join(', ')}]`
+  );
+}
+
+/** 抽屉默认关闭：外壳仍在 DOM 里，但滑出屏幕且 inert（不可聚焦、不读屏） */
+function assertDrawerClosed(html: string, where: string): void {
+  // 只看 aside **自己的开标签**：整段子树里本来就含 inert（常驻的「我」页带自己的 inert），
+  // 对着子树断言会变成空转 —— 注入实验里 `inert={false}` 也能通过，就是这么被抓出来的。
+  const tag = /<aside[^>]*>/.exec(html)?.[0];
+  assert(tag !== undefined, `${where}：找不到抽屉外壳（aside）`);
+  assert(tag.includes('translate-x-full'), `${where}：抽屉默认没有滑出屏幕（缺 translate-x-full）`);
+  assert(/\binert\b/.test(tag), `${where}：抽屉关闭时没有 inert（关着的表单仍会被 Tab 聚焦到）`);
+}
+
 /** 叫品文本里的裸花色字母：`40 C` / `45 H` 这类（花色必须出字形 ♣♦♥♠） */
 function bareStrainLetters(html: string): string[] {
   const text = html.replace(/<[^>]*>/g, ' ');
@@ -180,6 +232,13 @@ async function main(): Promise<void> {
   assertNoRemovedHints(lobby, '未开局页面');
   assertNoCompassLabels(lobby, '未开局页面');
   assertHelpTrigger(lobby, '准备阶段', '未开局页面');
+  assertLeanHeader(lobby, '未开局页面');
+  assertTabRail(lobby, '未开局页面');
+  assertDrawerClosed(lobby, '未开局页面');
+  assert(
+    lobby.includes('改名 / 换身份'),
+    '未开局页面：常驻的「我」页不见了（改名入口应当始终在页面上）'
+  );
 
   // 4) 座位卡必须钉在毡面四角（absolute），不能被自身 relative 覆盖
   const seatCards = classAttrs(lobby).filter(
@@ -207,18 +266,29 @@ async function main(): Promise<void> {
   const auction = await page(`/table/${code}`, players[0]!.credential);
   assert(auction.includes('叫牌'), '发牌后页面没有进入叫牌界面');
   assertHelpTrigger(auction, '叫牌：定庄、定主', '叫牌页面');
+  assertLeanHeader(auction, '叫牌页面');
+  assertTabRail(auction, '叫牌页面');
+  assertDrawerClosed(auction, '叫牌页面');
   assertNoRemovedHints(auction, '叫牌页面');
   assertNoCompassLabels(auction, '叫牌页面');
   assert(!auction.includes('等待'), '叫牌页面仍有「等待」式常驻提示');
   assertNoPositionMix(auction, '叫牌页面');
   // 5b) 叫牌面板：还没人叫时有顶部大字位，并且谁先叫由发牌人决定（不能假设是座位 0）
   assert(auction.includes('还没人叫'), '叫牌面板顶部没有「还没人叫」大字位');
+  // 发牌人从**视图**里取，不是从文案里反查名字：首副发牌人是随机的，当它正好是 0 号座
+  // （也就是看这个页面的 players[0]）时，界面按设计写「你」，靠名字反查会得到 -1 —— 那正是
+  // 这条守卫曾经偶发失败（约 1/3 概率）的原因，而它要守的恰恰是「不许假设发牌人是座位 0」。
+  const seatView = (await fetch(`${BASE}/api/tables/${code}/view`, {
+    headers: { authorization: `Bearer ${players[0]!.credential}` }
+  }).then((response) => response.json())) as { view: { deal: { dealerSeat: number } } };
+  const dealerIndex = seatView.view.deal.dealerSeat;
   const dealerLabel = /第 1 副 · (.+?) 发牌/.exec(auction)?.[1];
   assert(dealerLabel !== undefined, '叫牌面板没有写出谁发牌');
-  // 界面用「你」指代浏览者本人，而这一页正是 players[0] 拿自己的凭据取的：发牌人恰是
-  // players[0] 时页面写的是「你 发牌」，拿名字去 findIndex 会得到 -1（1/3 概率假红）。
-  const dealerIndex = dealerLabel === '你' ? 0 : players.findIndex((p) => p.name === dealerLabel);
-  assert(dealerIndex >= 0, `找不到发牌人「${dealerLabel}」对应的座位`);
+  const expectedDealer = dealerIndex === 0 ? '你' : players[dealerIndex]!.name;
+  assert(
+    dealerLabel === expectedDealer,
+    `叫牌面板的发牌人文案对不上：页面「${dealerLabel}」，${dealerIndex} 号座应为「${expectedDealer}」`
+  );
   assert(
     auction.includes('叫牌中') || auction.includes('轮到你'),
     '叫牌面板没有标出当前轮到谁'
@@ -285,6 +355,10 @@ async function main(): Promise<void> {
   assert(watching.includes('改名 / 换身份'), '观战页面没有身份快捷编辑入口');
   assert(!watching.includes('补进了空座'), '观战页面出现了「接下手牌」提示（那是补位玩家的）');
   assertHelpTrigger(watching, '观战', '观战页面');
+  assertLeanHeader(watching, '观战页面');
+  assertTabRail(watching, '观战页面');
+  assertDrawerClosed(watching, '观战页面');
+  assert(watching.includes('座位已满'), '观战页面没有说清座位已满（常驻的「我」页里应当有）');
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');
   assertNoPositionMix(watching, '观战页面');
@@ -369,6 +443,17 @@ async function main(): Promise<void> {
     !/(^|})\s*\.card\{[^}]*transition/.test(css),
     '卡片位移过渡没有限定在鼠标设备（手指设备上点选会有残留位移）'
   );
+  // 9d) 活页签抽屉的样式必须真的出货：抽屉靠 translate-x-full 滑出屏幕、页签靠 writing-mode 竖排。
+  //     HTML 里带着这个类名**不等于**产物里有这条规则 —— 少了前者抽屉会一直盖在牌桌上，
+  //     少了后者四个页签会横排、把右边缘撑破。这一条守的是「产物没重建 / 规则没生成」。
+  assert(
+    /\.translate-x-full\{[^}]*translate:/.test(css),
+    '出货样式表里 .translate-x-full 没有位移规则（抽屉关不上，会一直盖着牌桌）'
+  );
+  assert(
+    /\.\\\[writing-mode\\:vertical-rl\\\]\{[^}]*writing-mode:vertical-rl/.test(css),
+    '出货样式表里没有 writing-mode:vertical-rl（页签会横排，撑破右边缘）'
+  );
 
   console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
@@ -377,6 +462,8 @@ async function main(): Promise<void> {
   console.log('叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、面板自己滚且「不叫」是它的 sticky 底部');
   console.log('底牌：庄家埋底页有「你拿上来的底牌」+ 6 处标记；闲家页面 0 处标记');
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
+  console.log('页头：只剩 大厅 / 邀请码 / 连接点（+ 观战者的入座）；战报/叫牌/底牌/我 四项页签常驻右边缘，抽屉默认 inert');
+  console.log('抽屉：查阅面进抽屉、动作面留桌面；「我」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
   console.log('UI OK');
 }
 

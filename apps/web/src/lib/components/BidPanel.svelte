@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import { BID_GLYPH, bidCandidates, bidText, highestCall, isRedStrain, whoLabel } from '$lib/labels';
+  import { BID_GLYPH, bidCandidates, isRedStrain } from '$lib/labels';
+  import AuctionRecord from './AuctionRecord.svelte';
 
   let { client }: { client: TableClient } = $props();
 
@@ -12,9 +13,6 @@
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const myTurn = $derived(deal !== null && deal.phase === 'auction' && deal.auctionTurn === mySeat);
   const rows = $derived(view === null ? [] : bidCandidates(view));
-  /** 顶部大字显示的是**最高叫品**（将要成为定约的那个）；「不叫」只进历史 */
-  const top = $derived(view === null ? null : highestCall(view));
-  const turnName = $derived(deal === null ? '' : whoLabel(names, mySeat, deal.auctionTurn));
 </script>
 
 <!-- 面板自己就是**唯一**的滚动区，「不叫」是它内部的 sticky 页脚。
@@ -27,48 +25,17 @@
      scrollport 底边 —— 任何视口高度、任何轮数都点得到；sticky 的距离与面板内边距一致，
      所以不滚动时它就在原位，观感与普通底栏一样。
      外层几何（top-[22%] / max-h-[56%]）不动：手机上面板底边已经正好贴着左下「我」座位卡
-     的上沿，再抬高就会盖住座位卡。 -->
+     的上沿，再抬高就会盖住座位卡。
+     判据落在 `src/lib/panel-guard.ts`（`test/bid-panel.test.ts` 与 ui-check 共用同一份）：
+     所以这个 section 里**不许**再出现第二处 overflow-* —— 叫牌记录交给 `AuctionRecord` 渲染，
+     它本身是普通文档流（内部不再自己滚），跟着面板一起滚。 -->
 <section
   data-bid-panel="true"
   class="absolute inset-x-3 top-[22%] max-h-[56%] overflow-y-auto overscroll-contain rounded-2xl bg-black/55 p-4 ring-1 ring-white/10 backdrop-blur-sm sm:inset-x-0 sm:top-1/2 sm:mx-auto sm:max-h-[74%] sm:w-[22rem] sm:-translate-y-1/2 sm:p-5"
 >
-  <div class="flex items-baseline justify-between">
-    <h2 class="text-sm font-bold">叫牌</h2>
-    <span class="text-[11px] text-white/45">
-      第 {deal?.dealNo ?? 1} 副 · {whoLabel(names, mySeat, deal?.dealerSeat ?? 0)} 发牌
-    </span>
-  </div>
-
-  <!-- 大字：最高叫品（将成为定约的那个） -->
-  <div class="mt-2 flex items-baseline justify-between gap-2">
-    {#if top === null}
-      <span class="text-2xl font-black tracking-wide text-white/35">还没人叫</span>
-    {:else}
-      <span class="text-3xl font-black leading-none tracking-wide tabular-nums text-gold">
-        {top.points}<span class={isRedStrain(top.strain) ? 'text-rose-300' : ''}>{BID_GLYPH[top.strain]}</span>
-      </span>
-    {/if}
-    {#if deal !== null}
-      <span
-        class={[
-          'shrink-0 rounded-md px-2 py-1 text-[11px]',
-          myTurn ? 'bg-gold/25 ring-1 ring-gold/40' : 'bg-white/10 text-white/55'
-        ]}
-      >
-        {myTurn ? '轮到你' : `${turnName} 叫牌中`}
-      </span>
-    {/if}
-  </div>
-
-  <!-- 历史：普通文档流，跟着面板一起滚（不再自己设 max-h，也就不会把下面的按钮顶出去） -->
-  <div class="mt-3 flex flex-wrap gap-1.5 text-[11px]">
-    {#each deal?.auction ?? [] as entry, index (index)}
-      <span class="rounded-md bg-white/10 px-2 py-1">
-        <span class="text-white/50">{whoLabel(names, mySeat, entry.seat)}</span>
-        {bidText(entry.call)}
-      </span>
-    {/each}
-  </div>
+  {#if view !== null}
+    <AuctionRecord {view} {mySeat} {names} />
+  {/if}
 
   {#if myTurn}
     <!-- 候选行同样在面板的滚动流里：抬高叫品时整块往下长，滚过去就能点到 -->

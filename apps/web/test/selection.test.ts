@@ -27,9 +27,9 @@ function view(version: number): PublicView {
   };
 }
 
-/** 一个「坐在座位上」的最小 you（`originalKitty` 只有庄家非 null，这里不关心） */
+/** 一个「坐在座位上」的最小 you（两批底牌都只有庄家非 null，这里不关心） */
 function hand(seat: number): SelectionContext['you'] {
-  return { seat: seat as 0 | 1 | 2, hand: [], isDeclarer: false, originalKitty: null };
+  return { seat: seat as 0 | 1 | 2, hand: [], isDeclarer: false, originalKitty: null, buriedKitty: null };
 }
 
 function player(seat: number, version: number): SelectionContext {

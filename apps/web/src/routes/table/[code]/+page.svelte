@@ -3,17 +3,19 @@
   import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
+  import type { DrawerTabKey } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
-  import HistoryList from '$lib/components/HistoryList.svelte';
-  import IdentityQuickEdit from '$lib/components/IdentityQuickEdit.svelte';
   import InviteCode from '$lib/components/InviteCode.svelte';
+  import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
   import SeatActions from '$lib/components/SeatActions.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
+  import TabRail from '$lib/components/TabRail.svelte';
+  import TableDrawer from '$lib/components/TableDrawer.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
   import { kittyHandDelta } from '$lib/labels';
@@ -31,8 +33,15 @@
       )
   );
 
-  let historyOpen = $state(false);
+  /**
+   * 右侧活页签抽屉：`null` = 关着。
+   *
+   * 纯手动状态 —— 不自动打开、不自动换页，SSE 每帧都不碰它（见 CONTEXT.md 的 Flagged ambiguities）。
+   * 每副结束自动弹出的结算（`summaryOpen`）与它无关，仍然是整页的模态。
+   */
+  let active = $state<DrawerTabKey | null>(null);
   let summaryOpen = $state(false);
+  let leaveOpen = $state(false);
   let openedFor = -1; // 非响应式：仅用于「每副只自动弹出一次结算」
 
   onMount(() => {
@@ -106,6 +115,10 @@
     return false;
   }
 
+  function selectTab(key: DrawerTabKey): void {
+    active = active === key ? null : key;
+  }
+
   const dotClass = $derived(
     client.connection === 'live'
       ? 'bg-emerald-400'
@@ -116,6 +129,8 @@
 </script>
 
 <main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
+  <!-- 页头只留必要信息：大厅、邀请码、连接点，以及观战者补位用的「入座」。
+       战报/叫牌/底牌/我 全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。 -->
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
@@ -126,27 +141,7 @@
       />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
-      <!-- 观战人数是「正在看」的实时口径，只在有人看时出现，不列名单 -->
-      {#if (client.table?.spectatorCount ?? 0) > 0}
-        <span class="rounded-md border border-white/10 px-2 py-0.5 text-white/45">
-          {client.table?.spectatorCount} 人观战
-        </span>
-      {/if}
-      {#if client.role === 'spectator'}
-        <span class="rounded-md bg-white/10 px-2 py-0.5 text-white/70">观战中</span>
-      {/if}
-      <a class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10" href="/rules">教程</a>
-      <button
-        type="button"
-        class="rounded-md border border-white/15 px-2 py-0.5 text-white/70 hover:bg-white/10"
-        onclick={() => (historyOpen = true)}
-      >
-        战报
-      </button>
-      <SeatActions {client} />
-      {#if !seated}
-        <IdentityQuickEdit {client} />
-      {/if}
+      <SeatActions {client} variant="sit-only" />
       <span class={['h-2 w-2 rounded-full', dotClass]} title="连接状态"></span>
     </div>
   </header>
@@ -217,7 +212,13 @@
   {/if}
 </main>
 
+<!-- 右边缘活页签条：常驻，点一个拉起对应的抽屉页；点当前页签即收起。
+     抽屉**不套 {#if view}**：「我」页（改名/换身份、座位/观战）在没发牌时也要能用，
+     而且它常驻 DOM 正是那两条观战守卫仍然有效的原因。 -->
+<TabRail {active} onSelect={selectTab} />
+<TableDrawer {client} {active} onClose={() => (active = null)} onLeave={() => (leaveOpen = true)} />
+
 {#if view !== null}
   <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
-  <HistoryList {view} mySeat={label} {names} open={historyOpen} onClose={() => (historyOpen = false)} />
 {/if}
+<LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />

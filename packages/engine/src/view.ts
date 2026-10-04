@@ -64,17 +64,24 @@ export interface PublicView {
 /**
  * 玩家私有的一份信息：观战者没有 `you`（见 `role.ts` 的 `projectionFor`）。
  *
- * `originalKitty` = 发牌留下的 3 张暗牌，**只有庄家**非 null。
- * 底牌本来就要并进庄家手牌（`state.ts` 的 bid 分支），所以这对庄家不是新信息 ——
- * 只是把「哪三张是拿上来的」显式说出来，否则 20 张排序后玩家再也认不出它们。
- * 闲家仍要等到结算（`summary.originalKitty`）才可见；放在 `you` 里而不是公共投影里，
- * 是为了让「庄家私有」这件事在类型上就成立：观战者连字段都没有。
+ * 两个字段都是**庄家自己的两批底牌**，即 `you` 里唯一的私有内容：
+ *
+ * - `originalKitty` = 发牌留下的 3 张暗牌（**拿上来的底牌**），只有庄家非 null。
+ *   底牌本来就要并进庄家手牌（`state.ts` 的 bid 分支），所以这对庄家不是新信息 ——
+ *   只是把「哪三张是拿上来的」显式说出来，否则 20 张排序后玩家再也认不出它们。
+ * - `buriedKitty` = 他**埋下去的那 3 张**，埋底完成（play / scored）后才有值。
+ *   那 3 张是他自己选的，所以同样不是新信息，而是「20 张里埋了哪 3 张」的回看；
+ *   结算前公共视图与 `summary` 都没有它，闲家要到结算（`summary.kitty`）才看得到。
+ *
+ * 闲家两个字段恒为 null。放在 `you` 里而不是公共投影里，是为了让「庄家私有」这件事
+ * 在类型上就成立：观战者连字段都没有。
  */
 export interface PlayerSeat {
   readonly seat: Seat;
   readonly hand: readonly Card[];
   readonly isDeclarer: boolean;
   readonly originalKitty: readonly Card[] | null;
+  readonly buriedKitty: readonly Card[] | null;
 }
 
 export interface PersonalView extends PublicView {
@@ -101,7 +108,7 @@ export function publicView(state: GameState): PublicView {
 /**
  * 服务器权威的个人视图：公共视图 + 自己那一份隐藏信息。
  *
- * 唯一的私有例外是**庄家的底牌**（见 `PlayerSeat.originalKitty`）。
+ * 唯一的私有例外是**庄家自己的两批底牌**（见 `PlayerSeat`）：拿上来的与埋下去的。
  */
 export function personalView(state: GameState, seat: Seat): PersonalView {
   const deal = state.deal;
@@ -112,7 +119,12 @@ export function personalView(state: GameState, seat: Seat): PersonalView {
       seat,
       hand: deal === null ? [] : sortHand(deal.hands[seat]!, deal.trump),
       isDeclarer,
-      originalKitty: isDeclarer ? [...deal.originalKitty] : null
+      originalKitty: isDeclarer ? [...deal.originalKitty] : null,
+      // 埋底阶段还不能给：那时 `deal.kitty` 仍是发牌留下的占位（`state.ts` 的 newDeal），
+      // 庄家尚未埋牌，把它当成「埋下去的 3 张」会指着一手还没做的决定。
+      // 结算阶段继续给：与 `summary.kitty` 同源，庄家本来就全程知道。
+      buriedKitty:
+        isDeclarer && (deal.phase === 'play' || deal.phase === 'scored') ? [...deal.kitty] : null
     }
   };
 }
