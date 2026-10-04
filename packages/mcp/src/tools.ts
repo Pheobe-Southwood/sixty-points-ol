@@ -519,7 +519,11 @@ export async function callTool(spec: ToolSpec, rt: ToolRuntime, rawArgs: unknown
     return await spec.run(rt, parsed.data as Record<string, unknown>);
   } catch (error) {
     if (error instanceof ToolError) throw error;
-    if (error instanceof ApiError) throw new ToolError(`服务器拒绝：${error.message}`);
+    if (error instanceof ApiError) {
+      // `status === 0` = 压根没拿到响应（连不上/超时/响应读到一半断了），那不是服务端的判定，
+      // 不能说成「服务器拒绝」——写路径还可能已经生效了，得让调用方先去核对（见 ADR-0012）。
+      throw new ToolError(error.status === 0 ? error.message : `服务器拒绝：${error.message}`);
+    }
     throw new ToolError(error instanceof Error ? error.message : String(error));
   }
 }

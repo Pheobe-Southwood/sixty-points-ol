@@ -440,6 +440,20 @@ test('服务端拒绝原样转成人话，且拒绝时不等待（形状由传�
   );
 });
 
+test('没拿到响应（status 0）不算「服务器拒绝」：写路径可能已经生效，得先核对', async () => {
+  // 连不上/超时/响应读到一半断了都没有服务端的判定，套上「服务器拒绝」会把人引向错误的下一步
+  const api = new FakeApi({
+    failWith: new ApiError('无法确认这次请求是否已经生效（terminated）：先用 get_state / list_my_tables 核对现状', 0)
+  });
+  await assert.rejects(
+    () => call('play', api, { cards: ['C5'] }),
+    (error: unknown) =>
+      error instanceof ToolError &&
+      error.message.startsWith('无法确认这次请求是否已经生效') &&
+      !error.message.includes('服务器拒绝')
+  );
+});
+
 test('参数格式不正确时点名是哪个字段（含认不出的牌码）', async () => {
   const api = new FakeApi();
   await assert.rejects(() => call('play', api, { cards: [] }), /参数格式不正确：cards/);

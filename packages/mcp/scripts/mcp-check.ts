@@ -506,6 +506,8 @@ async function playOneDeal(session: Session): Promise<CompactView> {
     throw new Error(`一副牌走了 40 步还没结算（副数 ${budgetDeals}）`);
   } finally {
     await others.stop();
+    // 预算只在「打这一副」期间生效：守卫与查桌那些调用不该算进每副的账
+    budgetDeals = 0;
   }
 }
 
@@ -525,6 +527,171 @@ async function assertSpectatorSeesNoHand(code: string, credential: string): Prom
   if (payload.view !== null) {
     const raw = JSON.stringify(payload.view);
     assert.equal(raw.includes('"hand"'), false, '公共视图里出现了手牌');
+  }
+}
+
+// ---------------------------------------------------------------- 推送守卫（人类屏幕要跟着动）
+
+interface SeatLine {
+  readonly seat: number;
+  readonly name: string | null;
+  readonly online: boolean;
+}
+
+/** 打开一条 SSE 读人类**实际会收到**的帧（每帧就是屏幕上的一次重绘） */
+function openStream(code: string, credential: string): { frames: () => unknown[][]; close: () => void } {
+  const received: unknown[][] = [];
+  const controller = new AbortController();
+  void (async () => {
+    const response = await fetch(`${BASE}/api/tables/${code}/stream`, {
+      headers: { authorization: `Bearer ${credential}`, accept: 'text/event-stream' },
+      signal: controller.signal
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index = buffer.indexOf('\n\n');
+      while (index !== -1) {
+        const frame = buffer.slice(0, index);
+        buffer = buffer.slice(index + 2);
+        const line = frame.split('\n').find((item) => item.startsWith('data: '));
+        if (line !== undefined) received.push([JSON.parse(line.slice(6))]);
+        index = buffer.indexOf('\n\n');
+      }
+    }
+  })().catch(() => {
+    /* 读流在 abort 时抛错是正常的 */
+  });
+  return { frames: () => received, close: () => controller.abort() };
+}
+
+const seatsOfFrame = (frame: unknown[]): SeatLine[] =>
+  ((frame[0] as { table: { seats: SeatLine[] } }).table.seats as SeatLine[]) ?? [];
+
+async function waitForFrame(
+  stream: { frames: () => unknown[][] },
+  label: string,
+  predicate: (frame: unknown[]) => boolean,
+  timeoutMs = 6_000
+): Promise<unknown[]> {
+  const startedAt = Date.now();
+  for (;;) {
+    const match = stream.frames().find(predicate);
+    if (match !== undefined) return match;
+    if (Date.now() - startedAt >= timeoutMs) {
+      const seen = stream.frames().length;
+      throw new Error(`${label}：${timeoutMs}ms 内没等到期望的 SSE 帧（共收到 ${seen} 帧）`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** 一张只给推送守卫用的桌：房主 + 一个看着牌的观战者，2 号座位空着 */
+async function guardTable(kind: 'stdio' | 'http', tag: string): Promise<{ code: string; watcher: Credential }> {
+  const [host, watcher] = await Promise.all([
+    claim(`${tag}甲${RUN}${kind[0]}`),
+    claim(`${tag}乙${RUN}${kind[0]}`)
+  ]);
+  assert.ok(host !== undefined && watcher !== undefined);
+  const created = (await http('/api/tables', { method: 'POST' }, host.credential)) as { code: string };
+  await http(`/api/tables/${created.code}/join`, { method: 'POST' }, watcher.credential);
+  return { code: created.code, watcher };
+}
+
+/**
+ * **推送守卫之一**：MCP 座位入座与轮询，必须让人类的屏幕自己动起来。
+ *
+ * 这条守卫来自一次真实缺陷（见 ADR-0012）：`enterTable` 过去不广播，而浏览器玩家入座后
+ * 必然连上 SSE（连接时会广播一次），所以「入座总能把别人的屏幕刷新」这个隐含前提一直成立 ——
+ * 直到 MCP 座位出现（它是第一个没有 SSE 连接的客户端）。人类屏幕上会一直显示「还差 1 人」、
+ * 按钮一直是灰的，直到某个人先出一次牌。
+ *
+ * 用真服务器、真 SSE 流、真工具调用钉住它，而不是读 `/view` 的服务端值：
+ * 服务端的值一直是对的，错的是**有没有送出去**。
+ */
+async function assertJoinPushesToHumans(kind: 'stdio' | 'http', label: string): Promise<void> {
+  const { code, watcher } = await guardTable(kind, '推送');
+  const joiner = await claim(`推送丙${RUN}${kind[0]}`);
+  assert.ok(joiner !== undefined);
+
+  const stream = openStream(code, watcher.credential);
+  try {
+    await waitForFrame(
+      stream,
+      '入座前基线',
+      (frame) => seatsOfFrame(frame).some((seat) => seat.seat === 2 && seat.name === null)
+    );
+    const before = stream.frames().length;
+
+    // MCP 座位用**该传输**的 join_table 入座 —— 浏览器与 MCP 走的是同一条到达路径
+    const client = await connect(kind, joiner.credential);
+    try {
+      await tool(client, 'join_table', { code });
+    } finally {
+      await client.close();
+    }
+
+    await waitForFrame(
+      stream,
+      '入座推送',
+      (frame) => seatsOfFrame(frame).some((seat) => seat.seat === 2 && seat.name !== null)
+    );
+    // 第二半：轮询带来的「最近活跃」也要推出去 —— 那颗点不能一直是灰的
+    const online = await waitForFrame(
+      stream,
+      '在线推送',
+      (frame) => seatsOfFrame(frame).some((item) => item.seat === 2 && item.online)
+    );
+    const seat = seatsOfFrame(online).find((item) => item.seat === 2)!;
+    console.log(`  ${label}：人类屏幕自己动了（+${stream.frames().length - before} 帧），座位 2 = ${seat.name}（在线）`);
+  } finally {
+    stream.close();
+  }
+}
+
+/**
+ * **推送守卫之二**：座位出现这件事不能依赖「入座者随后还会再读一次局面」。
+ *
+ * 这条是分开的、而且必须分开：`payloadFor` 里的「离线→在线」翻转也会广播，所以一个**第一次**
+ * 入座的客户端会顺带把座位推出去 —— 于是只测上面那一条时，就算 `enterTable` 自己不广播，
+ * 守卫照样是绿的。这里把入座者先变成一个**最近活跃过**的身份（在别处读一次局面），
+ * 于是入座那一次读取不再翻转、不会再广播；此时还能收到帧，就只可能来自 `enterTable` 自己。
+ *
+ * 这不是人造情形：一个刚在别桌看过牌的人打开新桌链接（或 agent 在 A 桌轮询中途加入 B 桌），
+ * 正是「窗口内已经活跃」的入座者。
+ */
+async function assertJoinPushesEvenWhenJoinerIsActive(kind: 'stdio' | 'http', label: string): Promise<void> {
+  const { code, watcher } = await guardTable(kind, '推送热');
+  const joiner = await claim(`推送丁${RUN}${kind[0]}`);
+  assert.ok(joiner !== undefined);
+
+  const client = await connect(kind, joiner.credential);
+  const stream = openStream(code, watcher.credential);
+  try {
+    await waitForFrame(
+      stream,
+      '入座前基线',
+      (frame) => seatsOfFrame(frame).some((seat) => seat.seat === 2 && seat.name === null)
+    );
+
+    // 先读一次局面（还是观战者）：身份变成「最近活跃」，于是下一次读取不会再翻转
+    await tool(client, 'get_state', { code });
+    const before = stream.frames().length;
+    await tool(client, 'join_table', { code });
+
+    await waitForFrame(
+      stream,
+      '入座推送（入座者已活跃）',
+      (frame) => seatsOfFrame(frame).some((seat) => seat.seat === 2 && seat.name !== null)
+    );
+    console.log(`  ${label}：入座者已活跃过，座位帧仍然送到（+${stream.frames().length - before} 帧）`);
+  } finally {
+    stream.close();
+    await client.close();
   }
 }
 
@@ -588,6 +755,11 @@ async function runTransport(
   } finally {
     await client.close();
   }
+
+  // 推送守卫：人类屏幕要跟着动 —— 这是「工具面不只自己能用，还得让别人看见」的那一半
+  await assertJoinPushesToHumans(kind, title);
+  await assertJoinPushesEvenWhenJoinerIsActive(kind, title);
+
   console.log(`${title} 通过`);
 }
 
