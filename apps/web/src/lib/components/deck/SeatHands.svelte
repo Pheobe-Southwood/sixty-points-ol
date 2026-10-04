@@ -77,7 +77,7 @@
       data-seat-total={row.total}
     >
       <span class="w-12 shrink-0 truncate text-[11px] font-semibold text-white/70">{row.name}</span>
-      <span class="shrink-0 text-[10px] tabular-nums text-white/45">{row.total} 张 · 主 {row.trumps}</span>
+      <span class="shrink-0 text-[10px] tabular-nums text-white/45">{row.total} 张 · 主 {row.trumps} 张</span>
       {#if row.total === 0}
         <span class="text-[10px] text-white/30">—</span>
       {:else}

@@ -525,7 +525,8 @@ async function main(): Promise<void> {
     `最后一墩打完三家应当空了：${seatTotals(trickSlide).join(', ')}`
   );
   assert(trickSlide.includes('牌就出完了'), '最后一墩没有说明这副牌的牌已经出完');
-  assert(/主 \d+/.test(bidSlide), '手牌横条没有写主牌张数');
+  // 单位不能丢：写成「主 3」也能过 `主 \d+`，读者却不知道那是「3 张」
+  assert(/主 \d+ 张/.test(bidSlide), `手牌横条没有写清主牌张数（要带「张」）：${bidSlide.match(/主\s*\d+\s*张?/)?.[0]}`);
   assert(bidSlide.includes('叫牌阶段'), '叫牌屏没有说明这是叫牌阶段的手牌');
 
   // 11) 入口：大厅指向演示页，教程页指向演示页（互链不能单边）

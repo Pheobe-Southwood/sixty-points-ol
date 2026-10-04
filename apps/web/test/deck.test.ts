@@ -203,7 +203,7 @@ test('牌局章：叫牌屏与出牌屏都显示三家当前的牌，且出牌�
   );
 
   assert.ok(strips.includes('data-seat-total'), '手牌横条没有输出张数（讲解里说的张数要能就地核对）');
-  assert.ok(strips.includes('主 {row.trumps}'), '手牌横条没有输出主牌张数');
+  assert.ok(strips.includes('主 {row.trumps} 张'), '手牌横条的主牌张数没有带单位「张」');
   assert.ok(strips.includes('sendCard'), '手牌横条没有接出牌过渡（打出去的牌要看得见地少掉）');
   assert.ok(drop.includes('receiveCard'), '出牌区没有接配对过渡');
   assert.ok(motion.includes('crossfade') && motion.includes('prefers-reduced-motion'), '动画没有配对机制或没有尊重「减少动态效果」');
