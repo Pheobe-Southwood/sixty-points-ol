@@ -5,7 +5,7 @@ SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并�
 
 [![CI](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml/badge.svg)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/github/license/cup113/sixty-points-ol?label=license)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-351-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-385-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
 [![Last commit](https://img.shields.io/github/last-commit/cup113/sixty-points-ol)](https://github.com/cup113/sixty-points-ol/commits/main)
 [![Node](https://img.shields.io/badge/node-24-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-11.22-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
@@ -160,9 +160,10 @@ BASE=http://127.0.0.1:5178 pnpm bot-check              # 机器人端到端：1 
   「请离」入口（离座语义：本副停在空座等补位，界面会先说清）。它**没有凭据串**，所以没人能冒充或接管它；
   它的动作走与人类完全同一条服务器权威路径，也只看得见**个人视图**（见 ADR-0015）。
   屏幕上它出手有点慢（0.5–1.5 秒拟人延迟），那是给人看清局面用的。
-  牌风上是「稳」而不是「怂」：叫牌恒开 40、不跳叫，但门槛不高（实测开叫率约六成、竞叫约两成，
-  全 pass 重发只剩 6%），所以别指望它每次都把庄家位让给你；埋底默认不埋分，
-  只有主牌控制到「几乎必然保住末轮」时才埋不超过 10 分 —— 于是「机器人做庄必然 0 分底」并不成立。
+  牌风上是「稳」而不是「怂」：叫牌恒开 40、不跳叫，但门槛不高 —— 实测开叫率约五成、竞叫约三成，
+  全 pass 重发只剩 5%（初版是 36%），所以别指望它每次都把庄家位让给你；埋底默认不埋分，
+  只有主牌控制到「几乎必然保住末轮」时才埋不超过 10 分（约四分之一的副数），
+  于是「机器人做庄必然 0 分底」并不成立。
 - **手机端页头与右侧活页签抽屉**：页头只留 `← 大厅`、邀请码（不在座且有空座时另留一个「入座」，
   补位有时限，不藏起来）。**连接状态不是常驻指示器**：绿点已下线 —— 手机上没有 hover 能解释一枚圆点，
   而它平时显示的恰恰是「什么都没发生」；只有 SSE 断开时才在页头下方出一条
