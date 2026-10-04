@@ -175,3 +175,52 @@ test('幻灯机：自动播放、深链、键盘都接上了（源码级守卫�
   const load = readFileSync(new URL('../src/routes/learn/+page.ts', import.meta.url), 'utf8');
   assert.ok(load.includes("searchParams.get('s')"), '?s= 深链没有实现');
 });
+
+/**
+ * 牌局章「三家当前的牌」这条横条（叫牌与出牌都能看到三家的牌）的源码守卫。
+ *
+ * 内容正确性由 `position.test.ts` 盯着（54 张不重不漏、手牌只减不增）；
+ * 这里只守住**接上了没有**：屏型有没有接到对应口径、动画有没有配对、动效有没有上限。
+ */
+test('牌局章：叫牌屏与出牌屏都显示三家当前的牌，且出牌有配对动画（源码级守卫）', () => {
+  const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+  const slide = read('src/lib/components/deck/DeckSlide.svelte');
+  const strips = read('src/lib/components/deck/SeatHands.svelte');
+  const drop = read('src/lib/components/deck/TrickDrop.svelte');
+  const motion = read('src/lib/components/deck/motion.ts');
+  const css = read('src/app.css');
+
+  assert.ok(/<SeatHandsPanel/.test(slide), '演示页没有渲染三家的手牌横条');
+  assert.ok(
+    slide.includes('dealtHands') && slide.includes('playHands') && slide.includes('handsAfterTrick'),
+    '手牌横条没有分别接到「发牌 / 埋底 / 每墩打完」三种口径'
+  );
+  // 横条只渲染一次、位置固定，翻页时它不重建：这是「打出去的牌从手里飞走」的前提
+  assert.equal(
+    (slide.match(/<SeatHands/g) ?? []).length,
+    1,
+    '手牌横条必须在演示页里只渲染一份（渲染成两份，牌就没法从手里飞进出牌区）'
+  );
+
+  assert.ok(strips.includes('data-seat-total'), '手牌横条没有输出张数（讲解里说的张数要能就地核对）');
+  assert.ok(strips.includes('主 {row.trumps}'), '手牌横条没有输出主牌张数');
+  assert.ok(strips.includes('sendCard'), '手牌横条没有接出牌过渡（打出去的牌要看得见地少掉）');
+  assert.ok(drop.includes('receiveCard'), '出牌区没有接配对过渡');
+  assert.ok(motion.includes('crossfade') && motion.includes('prefers-reduced-motion'), '动画没有配对机制或没有尊重「减少动态效果」');
+  assert.ok(
+    /@media \(prefers-reduced-motion: reduce\)/.test(css) && css.includes('.pts-pop'),
+    '纯 CSS 动画（徽标弹入）在「减少动态效果」下没有被关掉'
+  );
+  // 动画是「克制版」：单次不超过 300ms。时长只有两种写法（`motionMs(220)` 与
+  // `CARD_FLIGHT_MS = 260` 这类常量），四个文件一起扫；下限那一条是防这个正则自己空转 ——
+  // 注入证明里发现过：`CARD_FLIGHT_MS = 400` 曾因为「= 后面有个空格」而完全没被扫到。
+  const durations: number[] = [];
+  for (const source of [motion, slide, strips, drop]) {
+    for (const match of source.matchAll(/CARD_FLIGHT_MS\s*=\s*(\d+)|motionMs\(\s*(\d+)\s*\)/g)) {
+      durations.push(Number(match[1] ?? match[2]));
+    }
+  }
+  assert.ok(durations.length >= 3, `没有解析到足够的动画时长（实际 ${durations.length} 个），守卫可能是空转的`);
+  for (const ms of durations) assert.ok(ms <= 300, `有一处动画时长 ${ms}ms 超过了 300ms`);
+});
+

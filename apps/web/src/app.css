@@ -245,6 +245,69 @@ button:disabled {
   }
 }
 
+/* ---------- 演示页：三家的手牌横条 ---------- */
+/* 一屏里要并排放下三家的牌、出牌区与讲解，所以横条里的牌比牌桌小一号。
+   牌外面那层 `<span class="hand-card">` 是动画节点（crossfade 的 send 挂在它上面）。 */
+.hand-card,
+.drop-card {
+  display: flex;
+}
+
+.hand-strip .card {
+  --cw: 26px;
+}
+
+/* 出牌区的牌多了一层 wrapper，歪斜偏移就得按 wrapper 的序号写；
+   牌桌 / /rules 用的 `.cluster` 那三条规则不动，两边互不影响。 */
+.trick-drop > :nth-child(2) .card {
+  transform: rotate(4deg) translateY(-2px);
+}
+
+.trick-drop > :nth-child(3) .card {
+  transform: rotate(-3deg);
+}
+
+@media (max-width: 640px) {
+  .hand-strip .card {
+    --cw: 22px;
+  }
+}
+
+/* 徽标弹一下（赢家、墩分、成交）：元素被 `{#key}` 重建一次就重播一次 */
+@keyframes pts-pop {
+  from {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+
+  60% {
+    transform: scale(1.08);
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.pts-pop {
+  animation: pts-pop 0.24s ease both;
+}
+
+/* 系统要求减少动态效果时，纯 CSS 动画一律关掉；
+   Svelte 那几处过渡由 deck/motion.ts 的 motionMs() 归零，两条路都要盖上。 */
+@media (prefers-reduced-motion: reduce) {
+  .drop-in,
+  .shake,
+  .pts-pop {
+    animation: none;
+  }
+
+  .card {
+    transition: none;
+  }
+}
+
 @keyframes drop-in {
   from {
     transform: translateY(-26px) scale(1.06);

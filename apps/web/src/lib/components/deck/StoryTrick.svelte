@@ -2,7 +2,7 @@
   import { handFromKeys } from '$lib/story/replay';
   import type { StoryDealData, StoryTrick } from '$lib/story/story-data';
   import CardRow from '$lib/components/CardRow.svelte';
-  import TrickCluster from '$lib/components/TrickCluster.svelte';
+  import TrickDrop from './TrickDrop.svelte';
 
   let { story, trick }: { story: StoryDealData; trick: StoryTrick } = $props();
 
@@ -35,9 +35,12 @@
   <div class="rounded-xl bg-black/30 p-3">
     <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <p class="text-sm font-bold text-ivory">第 {trick.ordinal + 1} 墩 · {story.names[trick.leaderSeat]} 领出</p>
-      <span class="rounded-full bg-gold px-2 py-0.5 text-[10px] font-bold text-ink">
-        {story.names[trick.winnerSeat]} 赢墩{trick.points > 0 ? ` +${trick.points} 分` : '（0 分）'}
-      </span>
+      <!-- {#key} 让徽标每墩重建一次，`.pts-pop` 那段 CSS 动画才会重新跑（纯 CSS，不占 Svelte 过渡的 transform） -->
+      {#key trick.ordinal}
+        <span class="pts-pop inline-block rounded-full bg-gold px-2 py-0.5 text-[10px] font-bold text-ink">
+          {story.names[trick.winnerSeat]} 赢墩{trick.points > 0 ? ` +${trick.points} 分` : ' · 0 分'}
+        </span>
+      {/key}
       {#if isLast}
         <span class="rounded-full bg-black/50 px-2 py-0.5 text-[10px] text-gold ring-1 ring-gold/40">最后一轮</span>
       {/if}
@@ -51,11 +54,13 @@
     {@const line = trick.lines.find((item) => item.seat === play.seat)}
     <div class="grid gap-2 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)] sm:items-start">
       <div class="rounded-xl bg-black/25 p-2">
-        <TrickCluster
+        <TrickDrop
           cards={handFromKeys(play.cards)}
+          seat={play.seat}
           {trump}
           caption={story.names[play.seat]}
           badge={trick.winnerSeat === play.seat ? '赢墩' : null}
+          popKey={trick.ordinal}
         />
       </div>
       <div class="rounded-xl bg-black/30 p-2.5">

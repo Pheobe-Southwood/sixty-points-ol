@@ -1,12 +1,17 @@
 <script lang="ts">
+  import type { Seat } from '@sixty/engine';
   import CardRow from '$lib/components/CardRow.svelte';
   import LevelBadge from '$lib/components/LevelBadge.svelte';
   import { bidText, strainGlyph, trumpText } from '$lib/labels';
   import { handFromKeys } from '$lib/story/replay';
   import { SOURCE_LABEL, type StoryDealData, type StoryLine } from '$lib/story/story-data';
   import type { Slide } from '$lib/tutorial/deck';
+  import { dealtHands, handsAfterTrick, playHands, type SeatHands } from '$lib/tutorial/position';
+  import { fly } from 'svelte/transition';
   import DeckWidget from './DeckWidget.svelte';
+  import SeatHandsPanel from './SeatHands.svelte';
   import StoryTrick from './StoryTrick.svelte';
+  import { motionMs } from './motion';
 
   let { slide, story }: { slide: Slide; story: StoryDealData | null } = $props();
 
@@ -20,6 +25,58 @@
   const lines = $derived(
     story === null ? [] : (slide.lineIndexes ?? []).map((index) => story.lines[index]).filter((line): line is StoryLine => line !== undefined)
   );
+
+  /**
+   * 三家当前的牌。这块面板**只在这里渲染一份**、位置固定在标题下方，
+   * 所以翻页时它不重建、只是里面的牌增删 —— 「打出去的牌从手里飞走」才成立
+   * （同一个 `{#each}` 里少了的那张牌，正好和出牌区新增的那张配对）。
+   */
+  const hands = $derived(handsForSlide());
+  const handsCaption = $derived(handsCaptionForSlide());
+  const activeSeat = $derived(activeSeatForSlide());
+
+  function handsForSlide(): SeatHands | null {
+    if (story === null) return null;
+    switch (slide.kind) {
+      case 'story-intro':
+      case 'story-deal':
+      case 'story-bid':
+        return dealtHands(story);
+      case 'story-bury':
+        return playHands(story);
+      case 'story-trick':
+        return handsAfterTrick(story, slide.trickOrdinal ?? 0);
+      default:
+        return null;
+    }
+  }
+
+  function handsCaptionForSlide(): string | null {
+    if (story === null) return null;
+    switch (slide.kind) {
+      case 'story-intro':
+      case 'story-deal':
+        return '发牌：三家各 17 张（另有 3 张扣着的暗底）';
+      case 'story-bid':
+        return '叫牌阶段：三家各 17 张，一张牌都还没出';
+      case 'story-bury':
+        return '埋底之后：庄家换掉 3 张，三家各 17 张';
+      case 'story-trick': {
+        const last = (slide.trickOrdinal ?? 0) === story.tricks.length - 1;
+        return last ? '最后一墩打完，这副牌的牌就出完了' : '打完这一墩，三家剩下这些';
+      }
+      default:
+        return null;
+    }
+  }
+
+  /** 金环标出「这一屏正在动的人」：叫牌是最后开口的那家，出牌是这一墩的赢家 */
+  function activeSeatForSlide(): Seat | null {
+    if (story === null) return null;
+    if (slide.kind === 'story-bid') return lines.at(-1)?.seat ?? null;
+    if (slide.kind === 'story-trick') return story.tricks[slide.trickOrdinal ?? 0]?.winnerSeat ?? null;
+    return null;
+  }
 </script>
 
 <article class="grid gap-4">
@@ -35,6 +92,10 @@
   </header>
 
   <h2 class="text-xl font-black tracking-wide text-ivory sm:text-2xl">{slide.title}</h2>
+
+  {#if hands !== null && story !== null}
+    <SeatHandsPanel {story} {hands} caption={handsCaption} {activeSeat} />
+  {/if}
 
   {#if slide.kind === 'cover'}
     <div class="grid gap-3">
@@ -100,26 +161,20 @@
       {#each lines as line (line.index)}
         {#if line.text}<p class="text-[13px] leading-relaxed text-white/75">{line.text}</p>{/if}
       {/each}
-      <div class="grid gap-2 rounded-xl bg-black/30 p-3">
-        {#each story.deal.hands as hand, seat (seat)}
-          <div>
-            <p class="mb-1 text-[11px] text-white/55">
-              {story.names[seat]}（{hand.length} 张）{#if seat === story.spec.dealerSeat}<span class="text-white/35">· 发牌人</span>{/if}
-            </p>
-            <CardRow cards={handFromKeys(hand)} {trump} size="sm" />
-          </div>
-        {/each}
-        <div class="rounded-lg bg-black/30 p-2">
-          <p class="mb-1 text-[11px] text-white/45">暗底 3 张（发牌后扣着，谁都看不到）</p>
-          <CardRow cards={handFromKeys(story.deal.originalKitty)} {trump} size="sm" />
-        </div>
+      <!-- 三家的手牌在标题下面那条横条里（与叫牌屏、出牌屏同一份 DOM），这里只留暗底 -->
+      <div class="rounded-xl bg-black/30 p-3">
+        <p class="mb-1 text-[11px] text-white/45">
+          暗底 3 张（发牌后扣着，谁都看不到）· 发牌人是 {story.names[story.spec.dealerSeat]}
+        </p>
+        <CardRow cards={handFromKeys(story.deal.originalKitty)} {trump} size="sm" />
       </div>
     </div>
 
   {:else if slide.kind === 'story-bid' && story !== null}
     <div class="grid gap-2">
       {#each lines as line (line.index)}
-        <div class="rounded-xl bg-black/30 p-2.5">
+        <!-- 每一手叫品各自从下方轻轻飞入：一屏四手时能看出是一手一手加上去的 -->
+        <div class="rounded-xl bg-black/30 p-2.5" in:fly={{ y: 8, duration: motionMs(200) }}>
           <p class="text-[12px] font-semibold text-ivory">{line.headline}</p>
           {#if line.tags.length > 0}
             <p class="mt-1 flex flex-wrap gap-1">
@@ -236,7 +291,7 @@
   {/if}
 
   {#if story !== null && slide.kind === 'story-bid' && story.deal.contract !== null && slide.id.endsWith('bid-' + Math.ceil(story.lines.filter((l) => l.kind === 'bid').length / 4))}
-    <p class="text-[11px] text-white/50">
+    <p class="text-[11px] text-gold/80" in:fly={{ y: 6, duration: motionMs(220) }}>
       成交：{story.names[story.deal.contract.declarerSeat]} {story.deal.contract.points}{strainGlyph(story.deal.contract.strain)} 坐庄
     </p>
   {/if}

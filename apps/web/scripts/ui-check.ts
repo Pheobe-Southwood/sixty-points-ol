@@ -29,7 +29,8 @@
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
  * /learn 还额外守住幻灯机骨架（幻灯片语义、自动播放、每屏 aria-label、无裸花色字母）
- * 与深链（`?s=245-trick-8` 必须直接服务端渲染出那一墩的牌面，而不是先给封面再靠 JS 跳）。
+ * 与深链（`?s=245-trick-8` 必须直接服务端渲染出那一墩的牌面，而不是先给封面再靠 JS 跳），
+ * 以及牌局章「三家当前的牌」那条横条：叫牌 17/17/17 → 第 1 墩打完 13/13/13 → 末墩 0/0/0。
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
@@ -454,8 +455,10 @@ async function main(): Promise<void> {
     /@media\(hover:hover\)and \(pointer:fine\)[^{]*\{\.fan\.selectable \.card:hover/.test(css),
     '悬停上浮没有包在 @media (hover:hover) and (pointer:fine) 里'
   );
+  // `transition: none` 不算位移过渡 —— 「减少动态效果」那一块正是要把它关掉；
+  // 会动的值（transform / box-shadow…）才必须待在鼠标设备的媒体查询里。
   assert(
-    !/(^|})\s*\.card\{[^}]*transition/.test(css),
+    !/(^|})\s*\.card\{[^}]*transition\s*:\s*(?!none)/.test(css),
     '卡片位移过渡没有限定在鼠标设备（手指设备上点选会有残留位移）'
   );
   // 9d) 活页签抽屉的样式必须真的出货：抽屉靠 translate-x-full 滑出屏幕、页签靠 writing-mode 竖排。
@@ -491,6 +494,10 @@ async function main(): Promise<void> {
   );
   assert(bareStrainLetters(learn).length === 0, `演示页出现裸花色字母：${bareStrainLetters(learn).join(', ')}`);
 
+  /** 三家手牌横条上报的张数（服务端渲染出来的 `data-seat-total`） */
+  const seatTotals = (html: string): number[] =>
+    [...html.matchAll(/data-seat-total="(\d+)"/g)].map((match) => Number(match[1]));
+
   // 10b) 深链直接落在牌局某一墩：必须带着真实牌面服务端渲染出来（不是先给封面再靠 JS 跳）
   const trickSlide = await page('/learn?s=245-trick-8');
   assert(trickSlide.includes('第 8 墩'), '深链没有直接渲染出指定的那一屏');
@@ -502,6 +509,24 @@ async function main(): Promise<void> {
   const settleSlide = await page('/learn?s=245-settle');
   assert(settleSlide.includes('打成') || settleSlide.includes('打输'), '结算屏没有写打成/打输');
   assert(/升 \d+ 级/.test(settleSlide), '结算屏没有写升级级数');
+
+  // 10c) 三家当前的牌：叫牌屏与出牌屏都要能看到，且张数随出牌递减到 0
+  const same = (values: readonly number[], expected: readonly number[]): boolean =>
+    values.length === expected.length && values.every((value, index) => value === expected[index]);
+  const bidSlide = await page('/learn?s=245-bid-1');
+  assert(same(seatTotals(bidSlide), [17, 17, 17]), `叫牌屏三家应当各 17 张：${seatTotals(bidSlide).join(', ')}`);
+  const earlySlide = await page('/learn?s=245-trick-1');
+  assert(
+    same(seatTotals(earlySlide), [13, 13, 13]),
+    `第 1 墩打完三家应当各剩 13 张：${seatTotals(earlySlide).join(', ')}`
+  );
+  assert(
+    same(seatTotals(trickSlide), [0, 0, 0]),
+    `最后一墩打完三家应当空了：${seatTotals(trickSlide).join(', ')}`
+  );
+  assert(trickSlide.includes('牌就出完了'), '最后一墩没有说明这副牌的牌已经出完');
+  assert(/主 \d+/.test(bidSlide), '手牌横条没有写主牌张数');
+  assert(bidSlide.includes('叫牌阶段'), '叫牌屏没有说明这是叫牌阶段的手牌');
 
   // 11) 入口：大厅指向演示页，教程页指向演示页（互链不能单边）
   const home = await page('/', players[0]!.credential);
@@ -518,6 +543,7 @@ async function main(): Promise<void> {
   console.log('页头：只剩 大厅 / 邀请码（+ 观战者的入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/我 四项页签常驻右边缘，抽屉默认 inert');
   console.log('抽屉：查阅面进抽屉、动作面留桌面；「我」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
   console.log(`演示：/learn 有幻灯片语义与自动播放；深链 ?s=245-trick-8 直接渲染出 ${trickCards} 张真实牌面；大厅与文字教程都指向它`);
+  console.log(`牌局章：三家当前的牌随出牌递减（叫牌 17/17/17 → 第 1 墩 13/13/13 → 末墩 0/0/0），出牌与手牌之间有配对过渡`);
   console.log('UI OK');
 }
 
