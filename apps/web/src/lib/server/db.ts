@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
   token TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  is_bot INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tables (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +60,15 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_table ON events (table_id, seq);
 `);
+
+// 机器人座位（ADR-0014）：老库补列。上面的 CREATE TABLE 只对新建库生效，
+// 已有的 users 表要靠探测 + ALTER，否则一升级就崩。
+{
+  const columns = db.prepare('PRAGMA table_info(users)').all() as unknown as { name: string }[];
+  if (!columns.some((col) => col.name === 'is_bot')) {
+    db.exec('ALTER TABLE users ADD COLUMN is_bot INTEGER NOT NULL DEFAULT 0');
+  }
+}
 
 export function now(): string {
   return new Date().toISOString();

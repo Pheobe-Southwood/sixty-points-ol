@@ -2,10 +2,12 @@
   import { onMount, untrack } from 'svelte';
   import { cardKey, START_LEVEL, type Level } from '@sixty/engine';
   import { TableClient } from '$lib/client/table.svelte';
+  import { BOT_LIMIT } from '$lib/shared';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
   import type { DrawerTabKey } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
+  import BotRemoveConfirm from '$lib/components/BotRemoveConfirm.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
   import DealSummary from '$lib/components/DealSummary.svelte';
   import HandFan from '$lib/components/HandFan.svelte';
@@ -42,6 +44,8 @@
   let active = $state<DrawerTabKey | null>(null);
   let summaryOpen = $state(false);
   let leaveOpen = $state(false);
+  /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
+  let botRemoveSeat = $state<number | null>(null);
   let openedFor = -1; // 非响应式：仅用于「每副只自动弹出一次结算」
 
   onMount(() => {
@@ -101,6 +105,18 @@
 
   function seatAt(index: number) {
     return client.table?.seats[index] ?? null;
+  }
+
+  /**
+   * 机器人动作只在**自己坐在这一桌**时出现（观战者不改变桌面构成，服务端也会拒）。
+   * 上限 2：至少留一个人类座位去按「开下一副」（机器人从不发起桌面级动作，见 ADR-0014）。
+   */
+  const botCount = $derived((client.table?.seats ?? []).filter((seat) => seat.bot).length);
+  const canAddBot = $derived(seated && botCount < BOT_LIMIT);
+
+  /** 加机器人：占第一个空座（进行中加入即补位）；结果随 SSE 广播回来 */
+  async function addBot(): Promise<void> {
+    await client.addBot();
   }
 
   function levelAt(index: number): Level {
@@ -178,6 +194,11 @@
         name={seatAt(seat)?.name ?? null}
         level={levelAt(seat)}
         online={seatAt(seat)?.online ?? false}
+        bot={seatAt(seat)?.bot ?? false}
+        canAddBot={canAddBot && (seatAt(seat)?.name ?? null) === null}
+        onAddBot={() => void addBot()}
+        canRemoveBot={seated}
+        onRemoveBot={() => (botRemoveSeat = seat)}
         isMe={seated && seat === (you?.seat ?? -1)}
         isTurn={isTurnAt(seat)}
         isDeclarer={deal?.declarerSeat === seat}
@@ -227,3 +248,9 @@
   <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
 {/if}
 <LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />
+<BotRemoveConfirm
+  {client}
+  seat={botRemoveSeat}
+  name={botRemoveSeat === null ? null : (seatAt(botRemoveSeat)?.name ?? null)}
+  onClose={() => (botRemoveSeat = null)}
+/>

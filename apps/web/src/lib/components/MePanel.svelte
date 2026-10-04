@@ -72,6 +72,7 @@
       name={seat.name}
       level={view?.levels[seat.seat] ?? null}
       online={seat.online}
+      bot={seat.bot}
       isMe={mySeat === seat.seat}
       isDeclarer={deal?.declarerSeat === seat.seat}
     />

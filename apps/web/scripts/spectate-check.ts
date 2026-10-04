@@ -27,6 +27,7 @@ interface SeatInfo {
   userId: number | null;
   name: string | null;
   online: boolean;
+  bot: boolean;
 }
 
 interface TableView {
