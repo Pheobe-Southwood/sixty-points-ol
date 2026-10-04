@@ -28,6 +28,25 @@ test('叫牌面板自己滚、「不叫」是 sticky 底部页脚', () => {
 });
 
 /**
+ * 面板里唯一的外部内容块是叫牌记录（`AuctionRecord`，毡面与抽屉共用一份）。
+ * `checkBidPanelReachability` 只审 `BidPanel.svelte` 这一个文件的 `<section>` ——
+ * 记录里一旦又长出滚动区，上面的守卫照样绿，而 CI 只跑 `pnpm test:web`（不跑 ui-check，
+ * 那条要起服务端）。所以那条「面板里不许有第二处 overflow」的不变式，得在记录这一侧也钉一下。
+ */
+const record = readFileSync(new URL('../src/lib/components/AuctionRecord.svelte', import.meta.url), 'utf8');
+
+test('叫牌记录本身不自带滚动区（面板里不许有第二个 overflow）', () => {
+  const code = record.replace(/<!--[\s\S]*?-->/g, '');
+  const found = code.match(/overflow-(?:y-auto|hidden)/g) ?? [];
+  assert.equal(
+    found.length,
+    0,
+    `AuctionRecord 里出现了 ${found.join('、')}：面板「唯一滚动区」这条不变式断在这里，` +
+      '而源码守卫只看 BidPanel.svelte 的 section，看不见这个文件'
+  );
+});
+
+/**
  * f40bad9（= 修复前 HEAD）的 `<section>` 逐字抄本。两处必要改动：
  * 1. 补上 `data-bid-panel="true"` —— 这次新引入的定位钩子，不补守卫连面板都找不到；
  *    除此之外每个 class 都与那个 commit 一模一样。
