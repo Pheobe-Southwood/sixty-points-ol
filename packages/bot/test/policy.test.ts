@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  cardClass,
   cardKey,
   cardPoints,
   checkPlay,
@@ -77,12 +78,15 @@ interface PlayRig {
   readonly trick?: Trick | null;
   readonly history?: readonly CompletedTrick[];
   readonly points?: number;
+  /** 底牌（庄家的 `buriedKitty` 就是它）：测「庄家知道自己埋了什么」时要能指定 */
+  readonly kitty?: readonly Card[];
 }
 
 function makePlay(rig: PlayRig): PersonalView {
   const seat = rig.seat ?? 0;
   const declarer = rig.declarer ?? 0;
-  const others = fillers(rig.hand, 34);
+  const others = fillers([...rig.hand, ...(rig.kitty ?? [])], 34);
+  const kitty = rig.kitty !== undefined ? [...rig.kitty] : others.slice(34, 37);
   const contract: Contract = { points: rig.points ?? 40, strain: rig.trump.strain, declarerSeat: declarer };
   const hands: Card[][] = [others.slice(0, 17), others.slice(17, 34), []];
   hands[seat] = [...rig.hand];
@@ -94,8 +98,8 @@ function makePlay(rig: PlayRig): PersonalView {
     dealNo: 1,
     dealerSeat: 0,
     hands,
-    originalKitty: others.slice(34, 37),
-    kitty: others.slice(34, 37),
+    originalKitty: [...kitty],
+    kitty: [...kitty],
     auction: [],
     contract,
     trump: rig.trump,
@@ -175,11 +179,12 @@ test('最高叫品已是自己的 → pass（不抬自己）', () => {
   assert.equal(bidFor(view, view.you), 'pass');
 });
 
-test('willingPoints 是阶梯映射且封顶 85', () => {
-  assert.equal(willingPoints(14), 0);
-  assert.equal(willingPoints(15), 40);
-  assert.equal(willingPoints(18), 45);
-  assert.equal(willingPoints(30), 65);
+test('willingPoints 是阶梯映射且封顶 85（门槛 12）', () => {
+  assert.equal(willingPoints(11), 0);
+  assert.equal(willingPoints(12), 40);
+  assert.equal(willingPoints(15), 45);
+  assert.equal(willingPoints(18), 50);
+  assert.equal(willingPoints(30), 70);
   assert.equal(willingPoints(100), 85);
 });
 
@@ -215,11 +220,71 @@ test('埋底不埋分、不埋主，埋副牌最低张', () => {
   }
 });
 
+test('strengthOf：无主没有杀牌，缺门不加分；长套才是赢墩来源', () => {
+  const rank = 7;
+  // 只有一门的大牌，另外三门全空
+  const hand = [c('C', 14), c('C', 13)];
+  assert.equal(strengthOf(hand, rank, 'NT').value, 2, '无主：只算 ♣A 的 +2，缺门不计分');
+  // 同一手牌打有主（♦）：♣ 是副门（+2），♥♠ 两门缺门各 +1 —— 有主才吃缺门分
+  assert.equal(strengthOf(hand, rank, 'D').value, 4, '有主时缺门才算垫牌/杀牌的空间');
+  // 无主的长套算赢墩来源：把 ♣ 补到 4 张 → A(+2) + 长套(+1)
+  const longer = [c('C', 14), c('C', 13), c('C', 5), c('C', 4)];
+  assert.equal(strengthOf(longer, rank, 'NT').value, 3, '无主：4 张长套另有 +1');
+});
+
+test('叫牌：四门大牌铺开、无级牌无王时，最佳花色应当是无主', () => {
+  // 级牌 7（我一张 7 都没有 ⇒ 有主的花色只拿到自己那一门），A/K 均匀铺在四门
+  const hand = [
+    c('C', 14), c('C', 13), c('C', 12), c('C', 3),
+    c('D', 14), c('D', 13), c('D', 5), c('D', 6),
+    c('H', 14), c('H', 13), c('H', 8), c('H', 9),
+    c('S', 14), c('S', 13), c('S', 10), c('S', 11),
+    c('C', 4)
+  ];
+  const view = makeAuction(hand, [], [7, 7, 7]);
+  const call = bidFor(view, view.you);
+  assert.notEqual(call, 'pass');
+  assert.equal(typeof call === 'object' ? call.strain : null, 'NT', `实际叫了 ${JSON.stringify(call)}`);
+});
+
 test('埋底恰 3 张且都来自手牌', () => {
   const hand = [...fillers([c('H', 14), c('S', 2), c('C', 2)], 17), c('H', 14), c('S', 2), c('C', 2)];
   const bury = buryFor(hand, BURY_TRUMP);
   assert.equal(bury.length, 3);
   assert.ok(removeCards(hand, bury) !== null);
+});
+
+test('埋分博弈：主牌绝对控制（≥10 张）时，把不超过 10 分埋进底', () => {
+  // ♥ 将、级牌 7：主牌 10 张（含双王 + 主级 ♥7 + 三张副级 7）⇒ 控制达标
+  const hand = [
+    BJ, SJ, c('H', 7), c('H', 14), c('H', 13), c('H', 12), c('H', 11), c('H', 9),
+    c('S', 7), c('D', 7), c('C', 7),
+    // 副牌：分牌 + 够多的零分牌（埋完还要留 ≥3 张非分副牌）
+    c('S', 5), c('S', 10), c('S', 2), c('S', 3), c('S', 4),
+    c('D', 2), c('D', 3), c('D', 9), c('C', 4)
+  ];
+  const bury = buryFor(hand, BURY_TRUMP);
+  assert.equal(bury.length, KITTY_SIZE);
+  const points = bury.reduce((sum, card) => sum + cardPoints(card), 0);
+  assert.ok(points > 0, `控制达标时应当埋分，实际埋了 0 分：${keys(bury).join(',')}`);
+  assert.ok(points <= 10, `埋分不得超过 10 分，实际 ${points}`);
+  // 埋完仍要留得住垫牌
+  const rest = hand.filter((card) => !bury.includes(card));
+  const nonPointSide = rest.filter((card) => cardClass(card, BURY_TRUMP) !== 'T' && cardPoints(card) === 0);
+  assert.ok(nonPointSide.length >= 3, `埋完应留 ≥3 张非分副牌，实际 ${nonPointSide.length}`);
+});
+
+test('埋分博弈：控制不达标时仍然一分不埋（默认基线）', () => {
+  // 9 张主牌，但顶级主牌只有两张（小王 + 主级 ♥7）⇒ 未达「≥10 张或三张顶级全在」
+  const hand = [
+    SJ, c('H', 7), c('H', 14), c('H', 13), c('H', 12), c('H', 9),
+    c('S', 7), c('D', 7), c('C', 7),
+    c('S', 5), c('S', 10), c('S', 2), c('S', 3), c('S', 4),
+    c('D', 2), c('D', 3), c('D', 9), c('C', 4), c('C', 6), c('C', 5)
+  ];
+  const bury = buryFor(hand, BURY_TRUMP);
+  const points = bury.reduce((sum, card) => sum + cardPoints(card), 0);
+  assert.equal(points, 0, `控制不达标不该埋分，实际埋了 ${points} 分：${keys(bury).join(',')}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -252,12 +317,6 @@ test('领出：计牌顶级主 → 吊主', () => {
   assert.deepEqual(playFor(view, view.you, T), [BJ]);
 });
 
-test('领出：整手单段顺子且计牌必赢 → 末轮全押（保底/抠底倍数）', () => {
-  const hand = [c('S', 14), c('S', 13), c('S', 12), c('S', 11)];
-  const view = makePlay({ hand, trump: T });
-  assert.deepEqual(keys(playFor(view, view.you, T)), ['S11', 'S12', 'S13', 'S14']);
-});
-
 test('领出：混门但层号相连的牌不许当成一顺全押（isRun 不看门类）', () => {
   // ♠ 将、级牌 7：♥Q(层 10) ♠J(层 9) ♠10(层 8) 层号相连，但门类不同 —— 甩牌会被服务端拒绝
   const trump: TrumpModel = { strain: 'S', rank: 7 };
@@ -266,6 +325,58 @@ test('领出：混门但层号相连的牌不许当成一顺全押（isRun 不�
   const lead = playFor(view, view.you, trump);
   assert.equal(lead.length, 1, `混门不能全押：${keys(lead).join(',')}`);
   assert.equal(checkPlay(hand, lead, trump, null), null, '领出必须合法');
+});
+
+test('领出：副牌顺子即使同门无敌也不整手全押（会被缺门杀）', () => {
+  const hand = [c('S', 14), c('S', 13), c('S', 12), c('S', 11)];
+  const view = makePlay({ hand, trump: T, kitty: [c('H', 10), c('H', 13), c('C', 5)] });
+  const lead = playFor(view, view.you, T);
+  assert.ok(
+    lead.length < hand.length,
+    `副牌门不许整手全押（会被同长度主牌顺子杀掉），实际出了 ${keys(lead).join(',')}`
+  );
+  assert.equal(checkPlay(hand, lead, T, null), null, '领出必须合法');
+});
+
+test('领出：主牌顺子整手全押（主牌门无可杀，只有更高的同长度主牌顺子能压，已被排除）', () => {
+  // ♥ 将、级牌 2：主级 ♥2(层 14) + 小王(15) + 大王(16) 构成 3 顺，且顶张就是全副牌最大 —— 押得
+  const trump: TrumpModel = { strain: 'H', rank: 2 };
+  const hand = [BJ, SJ, c('H', 2)];
+  const view = makePlay({ hand, trump });
+  assert.deepEqual(keys(playFor(view, view.you, trump)), ['H2', 'j0', 'j1']);
+});
+
+test('领出：对手已证缺门时，不再把那门顺子当安全领出（改走别的门）', () => {
+  // 墩史：座位 0 领 ♠5、座位 1 跟了 ♦3 —— 座位 1 在 ♠ 上**一张都没出** ⇒ 已证 ♠ 缺门
+  const history: CompletedTrick[] = [
+    {
+      leaderSeat: 0,
+      plays: [
+        { seat: 0, cards: [c('S', 5)] },
+        { seat: 1, cards: [c('D', 3)] }
+      ],
+      winnerSeat: 0,
+      points: 0
+    }
+  ];
+  const hand = [c('S', 14), c('S', 13), c('S', 12), c('D', 5), c('D', 9), c('H', 14), c('H', 7)];
+  const view = makePlay({ hand, trump: T, history });
+  const lead = playFor(view, view.you, T);
+  assert.equal(lead.length, 1, `♠ 已知会被杀，不该多张领出：${keys(lead).join(',')}`);
+  assert.ok(
+    cardClass(lead[0]!, T) !== 'S',
+    `已知 ♠ 缺门的对手在场，不该再领 ♠：${keys(lead).join(',')}`
+  );
+});
+
+test('领出：庄家自己埋掉的牌不算威胁（闲家看不到底牌，庄家知道自己埋了什么）', () => {
+  const hand = [c('S', 13), c('S', 9), c('H', 14), c('H', 7), c('H', 3)];
+  // 庄家把 ♠A 埋了 ⇒ ♠K 已是这门最大 ⇒ 出它
+  const declarerView = makePlay({ hand, trump: T, kitty: [c('S', 14), c('D', 2), c('D', 3)] });
+  assert.deepEqual(playFor(declarerView, declarerView.you, T), [c('S', 13)]);
+  // 闲家：底牌不可见，♠A 仍可能在外面 ⇒ 不敢当安全领出，退到最低张
+  const defenderView = makePlay({ hand, trump: T, declarer: 1 });
+  assert.deepEqual(playFor(defenderView, defenderView.you, T), [c('S', 9)]);
 });
 
 // ---------------------------------------------------------------------------

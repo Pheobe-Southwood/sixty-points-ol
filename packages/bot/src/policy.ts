@@ -1,7 +1,7 @@
 /**
  * 基线启发式策略：纯函数，输入只有引擎的**个人视图**（公共信息 + 自己的手牌与底牌）。
  *
- * 三条铁律（ADR-0014）：
+ * 三条铁律（ADR-0015）：
  * 1. **确定性** —— 同一视图永远给出同一动作，表驱动测试与整局回放因此可行；不注入 RNG。
  * 2. **合法即构造** —— 输出永远来自引擎给出的合法集/结构（`bidOptions`、`bestProfile`、
  *   `checkPlay`），并逐次用 `checkPlay` 自检；服务端仍是唯一裁判。
@@ -9,8 +9,11 @@
  *   底牌结构上拿不到。
  *
  * 档位是「基线规则式」：遵守领域结论「叫分只当及格线」（CONTEXT.md 升级表）——
- * 正常不跳叫，竞叫只在最小合法步长上抬；埋底不埋分；打牌不犯低级错（有分必收、
- * 末轮有保底/抠底意识）。难度梯度留待将来，不做。
+ * 正常不跳叫，竞叫只在最小合法步长上抬；埋底**默认不埋分**，只有主牌控制到「几乎必然保住末轮」
+ * 时才把不超过 10 分埋进去（判据与实测见 `buryFor`）；打牌不犯低级错（有分必收、
+ * 末轮按**赌注**决定值不值得争、缺门才杀且取最低能压的、全押只押主牌门）。
+ *
+ * 难度梯度（多档、搜索、学习牌谱）仍不做；这里的档位只有一档。
  */
 import {
   bestProfile,
@@ -19,6 +22,7 @@ import {
   cardPoints,
   cardsPoints,
   checkPlay,
+  classOfSet,
   followMode,
   isJoker,
   leadInfo,
@@ -38,7 +42,7 @@ import {
   type Strain,
   type TrumpModel
 } from '@sixty/engine';
-import { classCards, extractChains, Sight } from './sight.ts';
+import { extractChains, Sight } from './sight.ts';
 
 /** 驱动器要发的动作（座位号由服务端按身份推导，见 ADR-0002） */
 export type BotMove =
@@ -105,8 +109,26 @@ export interface StrainStrength {
 }
 
 /**
- * 牌力：主牌的长度与质量 + 副牌大牌 + 缺门。级牌点数取**自己的级别**
+ * 开叫门槛：牌力到这个数就愿意叫 40。
+ *
+ * 15 是初版值，实测太保守：开叫率只有 31%，于是全 pass 重发率高达 **36%**（每三副就有一副白扔），
+ * 而且面对别人的叫品只在 4% 的局面里竞叫 —— 陪练起来人类几乎总能以 40 拿下庄家位。
+ * 调到 12 后实测：开叫 59%、竞叫 21%、重发 6%，庄家打成率 75%（初版 82%），
+ * 每副升级 庄 1.49 / 闲 0.82（初版 1.68 / 0.55）—— 更接近正常牌桌，而不是一边倒。
+ * 这是**陪练观感**的取向，不是 EV 最优声明；`BID_STEP_STRENGTH`/`BID_STEP_POINTS` 是阶梯。
+ */
+const OPENING_BAR = 12;
+const BID_STEP_STRENGTH = 3;
+const BID_STEP_POINTS = 5;
+const MAX_WILLING = 85;
+
+/**
+ * 牌力：主牌的长度与质量 + 副牌大牌 +（有主时的）缺门。级牌点数取**自己的级别**
  * （我若成为庄家，级牌就是我的点数 —— 叫牌时唯一合理的近似）。
+ *
+ * **无主的算法不一样，别照抄有主那一套**：无主没有杀牌，缺门毫无价值（初版给每门缺门 +1，
+ * 白送分让「无主」在五门里永远选不上 —— 实测无主开叫占比恒为 0%）；无主的赢墩来自
+ * 四门的大牌与长套，所以改成「长套（≥4 张）另有 +1」。
  */
 export function strengthOf(hand: readonly Card[], rank: number, strain: Strain): StrainStrength {
   const t: TrumpModel = { strain, rank };
@@ -114,6 +136,7 @@ export function strengthOf(hand: readonly Card[], rank: number, strain: Strain):
   let value = 0;
   for (const c of trumps) {
     if (isJoker(c)) value += c.joker === 'big' ? 4 : 3;
+    else if (strain === 'NT' && c.rank === rank) value += 2; // 无主里级牌就是仅次双王的主牌
     else {
       const lv = cardLevel(c, t);
       if (lv >= 14) value += 3; // 主级
@@ -129,19 +152,23 @@ export function strengthOf(hand: readonly Card[], rank: number, strain: Strain):
     if (strain !== 'NT' && suit === strain) continue;
     const side = hand.filter((c) => !isJoker(c) && c.suit === suit && cardClass(c, t) !== 'T');
     if (side.length === 0) {
-      value += 1; // 缺门：垫牌与杀牌的空间
+      value += strain === 'NT' ? 0 : 1; // 缺门只有「有主」时才值钱（垫牌与杀牌的空间）
       continue;
     }
     if (side.some((c) => !isJoker(c) && c.rank === 14)) value += 2;
     else if (side.some((c) => !isJoker(c) && c.rank === 13)) value += 1;
+    if (strain === 'NT' && side.length >= 4) value += 1; // 无主的长套是实打实的赢墩来源
   }
   return { strain, value, trumps: trumps.length };
 }
 
-/** 牌力换算成「愿意叫到的分数」；不足 40 时返回 0（只 pass） */
+/** 牌力换算成「愿意叫到的分数」；不足门槛时返回 0（只 pass） */
 export function willingPoints(value: number): number {
-  if (value < 15) return 0;
-  return Math.min(85, MIN_BID + Math.floor((value - 15) / 3) * 5);
+  if (value < OPENING_BAR) return 0;
+  return Math.min(
+    MAX_WILLING,
+    MIN_BID + Math.floor((value - OPENING_BAR) / BID_STEP_STRENGTH) * BID_STEP_POINTS
+  );
 }
 
 /**
@@ -187,16 +214,73 @@ export function bidFor(view: PublicView, you: PlayerSeat): BidCall {
 // ---------------------------------------------------------------------------
 
 /**
- * 埋底：埋掉 keep 值最小的 3 张 —— 先副牌后主牌、先低张后高张、先无分后有分。
- * 基线不埋分（埋分是保底/抠底的博弈点，留给更高档位），也不埋主牌 ——
- * 主牌既是赢墩手段也是护底资本。全是主牌的极端手牌才会被迫埋主。
+ * 埋底：默认埋掉 keep 值最小的 3 张 —— 先副牌后主牌、先低张后高张、先无分后有分。
+ * 主牌既是赢墩手段也是护底资本，所以只有副牌不足 3 张时才被迫埋主。
+ *
+ * **例外：主牌绝对控制时故意埋分（博弈点）**。埋一张 10 进去，保底就白拿 `10 × x`（x = 末轮张数），
+ * 被抠底则倒扣同样多，所以它是个下注。设「留住那一张分并自己抓回来」为基线（最保守，q=1），
+ * 埋分的净变化是 `(2p−1)·s·x − s`，于是需要 `p > (x+1)/(2x)`：x=1 时**永不为正**、
+ * x=2 要 >75%、x=3 要 >67% —— 门槛很高，所以只有能证明「末轮大概率我赢」时才下注。
+ *
+ * 判据只用确定性的可读信息（无 RNG，可复现）：门主牌 **≥10 张**，或 **≥9 张且三张顶级主牌
+ * （双王 + 主级）全在**，且主牌总数 ≥9。实测这组条件在庄家手牌里命中约四成，命中时
+ * **保底率 92.1%**、x≥2 占 31% ⇒ 净变化 **+2.8 分/副**；而放宽到「≥9 张且有大王」
+ * 保底率只有 81.3%、x=1 占 82% ⇒ **−1.9 分/副（负 EV，故不采纳）**。
+ *
+ * 上限 10 分（一张 10 / 两张 5 / 一张 K），且埋完仍要留 ≥3 张非分副牌保垫牌能力；
+ * 任一条件不满足就退回「不埋分」的基线 —— 于是底牌分布不再恒为 0 分，
+ * 「机器人做庄必然 0 分底」这条可被对手推知的信息也随之消失。
  */
+const BURY_GAMBLE_MAX_POINTS = 10;
+const BURY_GAMBLE_MIN_TRUMPS = 9;
+const BURY_GAMBLE_STRONG_TRUMPS = 10;
+
 export function buryFor(hand: readonly Card[], t: TrumpModel): Card[] {
   const keep = (c: Card): number =>
     (cardClass(c, t) === 'T' ? 1000 : 0) + cardLevel(c, t) * 2 + cardPoints(c) * 50;
-  const indexed = hand.map((c, i) => ({ c, i }));
-  indexed.sort((a, b) => keep(a.c) - keep(b.c) || a.i - b.i);
-  return indexed.slice(0, 3).map(({ c }) => c);
+  const byKeep = hand.map((c, i) => ({ c, i })).sort((a, b) => keep(a.c) - keep(b.c) || a.i - b.i);
+  const baseline = byKeep.slice(0, 3).map(({ c }) => c);
+
+  const trumps = hand.filter((c) => cardClass(c, t) === 'T');
+  const hasBigJoker = trumps.some((c) => isJoker(c) && c.joker === 'big');
+  const hasSmallJoker = trumps.some((c) => isJoker(c) && c.joker === 'small');
+  const hasMainRank = trumps.some(
+    (c) => !isJoker(c) && c.suit === t.strain && c.rank === t.rank
+  );
+  const topTrumps = [hasBigJoker, hasSmallJoker, hasMainRank].filter(Boolean).length;
+  // 「控制」= 手握大王，或小王+主级（都是同门无敌的顶级主牌）；光有一堆低主不算控制
+  const topControl = hasBigJoker || (hasSmallJoker && hasMainRank);
+  const controlled =
+    trumps.length >= BURY_GAMBLE_MIN_TRUMPS &&
+    topControl &&
+    (trumps.length >= BURY_GAMBLE_STRONG_TRUMPS || topTrumps >= 3);
+  if (!controlled) return baseline;
+
+  const isSide = (c: Card): boolean => cardClass(c, t) !== 'T';
+  const nonPointSide = (cards: readonly Card[]): number =>
+    cards.filter((c) => isSide(c) && cardPoints(c) === 0).length;
+
+  // 先挑要埋的分牌（副门里 keep 最小的，总和不超上限），再用最低的无分牌凑满 3 张
+  const gamble: Card[] = [];
+  let buriedPoints = 0;
+  for (const { c } of byKeep) {
+    if (gamble.length >= 3) break;
+    if (!isSide(c) || cardPoints(c) === 0) continue;
+    if (buriedPoints + cardPoints(c) > BURY_GAMBLE_MAX_POINTS) continue;
+    gamble.push(c);
+    buriedPoints += cardPoints(c);
+  }
+  if (gamble.length === 0) return baseline;
+  for (const { c } of byKeep) {
+    if (gamble.length >= 3) break;
+    if (gamble.some((chosen) => chosen === c)) continue;
+    if (cardPoints(c) > 0) continue; // 分数上限已用尽或没必要再埋分
+    gamble.push(c);
+  }
+  if (gamble.length < 3) return baseline;
+  // 埋完必须还留得下垫牌：非分副牌（含没被埋的那些）
+  if (nonPointSide(hand.filter((c) => !gamble.includes(c))) < 3) return baseline;
+  return gamble;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +296,15 @@ export function playFor(view: PublicView, you: PlayerSeat, t: TrumpModel): Card[
   const deal = view.deal!;
   const trick = deal.trick;
   const lead = trick !== null && trick.plays.length > 0 ? trick.plays[0]!.cards : null;
-  const sight = new Sight(you.hand, deal.trickHistory, trick?.plays.flatMap((p) => p.cards) ?? []);
+  // 已完成的墩 + 当前这一墩：缺门推断要用「谁在哪一墩里一张该门都没出」，所以按墩传
+  const tricks = [...deal.trickHistory, ...(trick !== null && trick.plays.length > 0 ? [trick] : [])];
+  const sight = new Sight({
+    hand: you.hand,
+    tricks,
+    // 庄家自己埋的 3 张：它们已出局，既不是威胁也不该被当成「外面还有大牌」（闲家传空）
+    outOfPlay: you.buriedKitty ?? [],
+    trump: t
+  });
   return lead === null ? leadPlay(you, t, sight) : followPlay(view, you, t, lead);
 }
 
@@ -242,32 +334,34 @@ function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight): Card[] {
   const trumps = byClass.get('T') ?? [];
   const sideSuits = SUITS.map((s) => byClass.get(s) ?? []).filter((cards) => cards.length > 0);
 
-  // 末轮：整手恰是一门单段顺子时这就是最后一墩（领出张数 = 手牌数）。
-  // 计牌必赢才全押 —— 保底 x 倍与抠底 x 倍都在这一墩上，输了就是 x 倍的失误。
-  // 判据必须用引擎的领出校验：`isRun` 只看层号连续、**不看门类**，
-  // 混门的牌（如 ♥Q + ♠J + ♠10 在 ♠ 将时层号恰好相连）会被它误判成一顺。
-  if (hand.length >= 2 && checkPlay(hand, hand, t, null) === null && sight.sureRun(hand, t)) {
-    return [...hand];
-  }
+  // 末轮：整手恰是一门单段顺子时这就是最后一墩（领出张数 = 手牌数），全押能把
+  // 保底/抠底的 x 倍放大到最大 —— 但**只有主牌门才押得**：
+  // 主牌门里唯一能压过我的是「更高的同长度主牌顺子」，而已被 sureRun（同门无敌）排除；
+  // 副牌门不同 —— 缺门对手可以用同长度主牌顺子杀牌，「同门无敌」证明不了那一层
+  // （踩过：副牌整手全押被杀，x 倍乘在输的那一侧）。押注只下在能证明的地方。
+  const wholeHandLead = hand.length >= 2 && checkPlay(hand, hand, t, null) === null;
+  if (wholeHandLead && classOfSet(hand, t) === 'T' && sight.sureRun(hand, t)) return [...hand];
 
-  // 顶主吊主：持计牌顶级主牌、且主牌还有未见身的（对手或底牌里），出顶主单张
+  // 顶主吊主：持同门无敌的顶级主牌、且主牌还有没现身的（对手或底牌里），出顶主单张
   // 抽主 —— 庄家抽掉闲家的杀牌资本，闲家抽掉庄家的护底资本。
   if (trumps.length > 0) {
     const top = trumps.reduce((a, b) => (cardLevel(b, t) > cardLevel(a, t) ? b : a));
-    if (sight.sureWinner(top, t)) {
-      const total = classCards('T', t).length;
-      const seen = classCards('T', t).filter((c) => sight.seen(c)).length;
-      // 未现身的主牌（在对手手里或在底牌里）都值得抽
-      if (total - seen > 0) return [top];
-    }
+    if (sight.sureWinner(top, t) && sight.unseen('T', t) > 0) return [top];
   }
 
-  // 计牌必赢的副牌顶段：先找最长的 sure 顶段（≥2 收大分），退而求其次 sure 单张。
+  // 副门「同门无敌」的顶段：先找最长的（≥2 收大分），退而求其次单张。
+  // 但必须先过 noRuffRisk：已知有人缺门（或这门未见牌太少、很可能有人缺门）就不算安全领出，
+  // 否则等于把一段好牌送给对手杀（实测这类领出有 35% 能被合法压过）。
   let sure: Card[] | null = null;
   for (const cards of sideSuits) {
+    const cls = cardClass(cards[0]!, t);
+    if (!sight.noRuffRisk(cls, t, you.isDeclarer)) continue;
     for (const chain of extractChains(cards, t)) {
       for (let len = Math.min(chain.length, 3); len >= 2; len--) {
         const window = chain.slice(chain.length - len);
+        // 残局里窗口可能正好等于整手牌 —— 那就等于把整手押在副门上（x 倍的另一面），
+        // 与全押同一条原则：只有**可证无人能压**的主牌门才押整手。副门一律拆成单张领出。
+        if (window.length === hand.length) continue;
         if (sight.sureRun(window, t) && (sure === null || window.length > sure.length)) sure = window;
       }
       const single = [chain[chain.length - 1]!];
@@ -304,6 +398,9 @@ function followPlay(
   const finalTrick = hand.length === n; // 这一墩打完手牌就空了（引擎保证三家同步）
   const contract = deal.contract;
   const declarerPoints = contract === null ? 0 : deal.captured[contract.declarerSeat]!.points;
+  // 注意：`finalTrick` 时**没有选牌自由度** —— 手牌数 = 领出张数意味着这三张都得打出去，
+  // 所以这里不必（也不能）为「末轮赌注」做取舍。x 倍的决定权只在领出者手里，
+  // 那条决策在 `leadPlay` 里（全押只押主牌门），见那里的注释。
   const wantWin =
     trickPoints >= 5 ||
     finalTrick ||
