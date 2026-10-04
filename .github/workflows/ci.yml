@@ -36,16 +36,21 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      - run: pnpm test:bot
       - run: pnpm test:web
       - run: pnpm test:mcp
       - run: pnpm check
-      # MCP 端到端：跑**构建产物**，两条传输（stdio 真 spawn + /api/mcp）各打一整副。
-      # 这一步顺带守住「产物里 external 化的 MCP SDK 在运行期可解析」——
+      # 端到端：跑**构建产物**。
+      # MCP 那条：两条传输（stdio 真 spawn + /api/mcp）各打一整副，
+      # 顺带守住「产物里 external 化的 MCP SDK 在运行期可解析」——
       # 也就是 Dockerfile 运行阶段那份 node_modules 布局是否真的够用。
+      # 机器人那条：1 人 + 2 机器人打两副（中途踢/补一轮），延迟调零以免 CI 干等。
       - run: pnpm build
-      - name: MCP 端到端（两条传输各打一副）
+      - name: 端到端（MCP 两条传输 + 机器人座位）
         run: |
-          SIXTY_DB="$PWD/data/ci.db" PORT=5178 node apps/web/build/index.js > /tmp/sixty-server.log 2>&1 &
+          SIXTY_DB="$PWD/data/ci.db" PORT=5178 \
+            SIXTY_BOT_DELAY_MIN_MS=0 SIXTY_BOT_DELAY_MAX_MS=0 \
+            node apps/web/build/index.js > /tmp/sixty-server.log 2>&1 &
           for _ in $(seq 1 40); do
             curl -fsS http://127.0.0.1:5178/ >/dev/null 2>&1 && break
             sleep 0.5
@@ -56,6 +61,7 @@ jobs:
             exit 1
           fi
           BASE=http://127.0.0.1:5178 pnpm mcp-check
+          BASE=http://127.0.0.1:5178 pnpm bot-check
 
   image:
     needs: verify
