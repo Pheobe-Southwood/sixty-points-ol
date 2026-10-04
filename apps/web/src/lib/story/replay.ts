@@ -42,6 +42,19 @@ export function keysOf(cards: readonly Card[]): string[] {
   return cards.map(cardKey);
 }
 
+/**
+ * 牌键 → 牌。生成物里的牌面一律存成牌键（可 diff、可手查），渲染时用它还原。
+ *
+ * 键写错就抛错：生成物是脚本产出的，出现不存在的键说明生成物被手改了，必须立刻失败。
+ */
+export function handFromKeys(keys: readonly string[]): Card[] {
+  return keys.map((key) => {
+    const card = DECK_BY_KEY.get(key);
+    if (card === undefined) throw new Error(`牌键不存在：${key}`);
+    return card;
+  });
+}
+
 export interface ReplayedPlay {
   readonly seat: Seat;
   readonly cards: readonly Card[];

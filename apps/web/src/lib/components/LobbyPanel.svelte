@@ -57,7 +57,7 @@
     {/if}
 
     <p class="mt-3">
-      <a class="text-[11px] text-white/45 hover:text-white" href="/rules">第一次玩？看新手教程 →</a>
+      <a class="text-[11px] text-white/45 hover:text-white" href="/learn">第一次玩？看规则演示 →</a>
     </p>
 
     {#if client.error}

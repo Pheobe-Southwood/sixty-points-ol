@@ -242,19 +242,9 @@ test('说明标签：由牌局事实现算，不是手写的', () => {
   assert.ok(trickNote.tags.some((tag) => tag.startsWith('每家 ')));
 });
 
-test('cardsSummary：同一门合成一段，跨门分开；门内按引擎的层号排序', () => {
-  const deck = new Map(fullDeck().map((card) => [cardKey(card), card]));
-  const pick = (key: string) => deck.get(key)!;
-  const trump = { strain: 'H', rank: 5 } as const;
-  assert.equal(cardsSummary([pick('H3'), pick('H4'), pick('H6')], trump), '♥3-4-6');
-  assert.equal(cardsSummary([pick('C2'), pick('C3'), pick('D4')], trump), '♣2-3 ♦4');
-  assert.equal(cardsSummary([pick('j1')], trump), '大王');
-  assert.equal(cardsSummary([pick('j0'), pick('j1'), pick('C2')], trump), '小王 大王 ♣2');
-  // 主级 ♥5 在层号上高于 ♥A，所以写成 ♥A-5 而不是 ♥5-A（cardKey 用数字层号：♥A = H14）
-  assert.equal(cardsSummary([pick('H14'), pick('S5'), pick('H5')], trump), '♥A-5 ♠5');
-  assert.equal(cardsSummary([pick('H3'), pick('H4'), pick('H6')], null), '♥3-4-6');
-  assert.equal(cardsSummary([], trump), '—');
-});
+// cardsSummary 的记法规则（一个空格分隔的记号 = 恰好一条顺子）搬到了 test/annotate.test.ts：
+// 它现在要对着三副真实牌面做性质断言，放在这里会变成同一规则的两个家。
+// 早先这里的断言本身还写错了：把 ♥A 与 ♥5 用 '-' 连起来（中间隔着副级 ♠5，它们并不相邻）。
 
 test('导出 → 导入 → 再导出：内容一致（时间戳除外）', () => {
   const { actions } = playOut(SPEC);

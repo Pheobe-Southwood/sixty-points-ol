@@ -17,12 +17,18 @@ packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定�
   scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
   src/lib/server/   SQLite（node:sqlite）、身份凭据、同桌服务、SSE hub、MCP 进程内适配层
-  src/routes/       大厅、同桌页、新手教程（/rules）、REST 动作接口（含入座/离座）、SSE 流、MCP（/api/mcp）
+  src/routes/       大厅、同桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、
+                    REST 动作接口（含入座/离座）、SSE 流、MCP（/api/mcp）
+  src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
+  src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
+  src/lib/story/    牌局编排台的内核：种子↔牌局、回放、说明标签、导出/导入、草稿存储
   scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
+                    build-deal-stories.ts（牌局 JSON → 演示页数据 + 复核清单）
 CONTEXT.md          领域词汇表（术语与已敲定的规则歧义）
 docs/adr/           架构决策记录
+docs/deals/         牌局故事：<slug>.json（牌手导出，原话不改）+ notes/（润色与补写）+ <slug>.review.md（逐条复核）
 ```
 
 ## 规则实现要点
@@ -42,14 +48,21 @@ docs/adr/           架构决策记录
 ```bash
 pnpm install          # 工作区依赖（esbuild 的构建脚本已显式关闭，见 ADR-0004）
 pnpm test             # 规则引擎测试（node:test，零额外依赖）
-pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 / 角色与观战投影
-                      #                    + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
+pnpm test:web         # 前端纯函数测试：扇形布局 / 邀请码解析 / 阶段说明 / 牌面映射 / 结算门槛 / 教程示例 /
+                      #                   牌局编排台（回放·导出·草稿）/ 说明标签 / 牌局故事完整性 / 演示页结构 /
+                      #                   角色与观战投影 + 在线态判定 + MCP 作弊面守卫 + 叫牌面板可达性（唯一滚动区、「不叫」钉底）
 pnpm test:mcp         # MCP 工具层单测：工具语义、参数校验、等待超时、协议注册一致性、stdio 启动契约
 pnpm check            # 引擎 tsc + MCP 包 tsc + 应用 svelte-check
 pnpm dev              # SvelteKit 开发服务器（默认 http://localhost:5173）
 pnpm build            # 产出 apps/web/build（adapter-node）
 pnpm start            # 跑构建产物（默认端口 3000，见下）
+pnpm deal             # 把 docs/deals/*.json 重生成演示页数据 + <slug>.review.md
+pnpm deal:check       # 只校验：仓库里的生成物是否等于现场重算（不改文件）
 ```
+
+改牌局讲解的流程：在 `/studio` 里改并重新导出 `docs/deals/<slug>.json`，把润色/补写写进
+`docs/deals/notes/<slug>.json`，然后 `pnpm deal`（生成物是提交进仓库的，所以 CI 与镜像构建不需要跑脚本）。
+`pnpm deal:check` 会在「手改生成物」或「改完源文件忘了重跑」时报红。
 
 环境变量：`PORT`（默认 3000）、`HOST`、`SIXTY_DB`（默认 `<cwd>/data/sixty.db`）。
 
@@ -71,6 +84,8 @@ BASE=http://127.0.0.1:5178 pnpm --filter web ui        # 版面/文案守卫：p
                                                        # 王牌面（名字只在角落索引、正中是 ☀/☾ 图案）、
                                                        # 出货样式表里不得再有牌角装饰点（.card.pt / .card.trump::after）、
                                                        # 叫牌面板是唯一滚动区、「不叫」是它内部的 sticky 底部（不会被裁掉）
+                                                       # /learn 有幻灯片语义与自动播放、深链 ?s=245-trick-8 必须直接
+                                                       #   服务端渲染出那一墩的牌面、大厅与 /rules 都指向它
 BASE=http://127.0.0.1:5178 pnpm --filter web resume    # 重启服务端后再跑，校验 SQLite 续局
 BASE=http://127.0.0.1:5178 pnpm --filter web spectate  # 观战/离座/改名换身份：满座第 4 人只看公共信息、
                                                        # 观战负载不含在座手牌、补位继承该座位的手牌与级别、
@@ -89,6 +104,9 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
 
 - **说明只在一处**：牌桌上的阶段玩法说明全部收在左下角的「?」弹层（内容与 `/rules` 教程同源，
   见 `packages/engine/src/help.ts`）；界面上不再有常驻提示文案，玩家不需要在三个角落各读一遍。
+- **三处讲解分工**（见 CONTEXT.md）：牌桌「?」弹层是**打牌时的即时说明**（按阶段给）、`/learn` 是**演示**
+  （幻灯片，含三副真实牌局的逐步讲解）、`/rules` 是**逐段查证**的长文。三者共用术语与被引擎核对过的示例，
+  不互相复制整段文本；`/learn` 是默认入口（大厅与 `/rules` 都指它），两边互链。
 - **玩家名而不是方位**：文案里一律用玩家名或「你」（`whoLabel`），不出现「东/南/西家」——
   四角座位卡显示的就是名字，方位在屏幕上没有锚点。
 - **点邀请码即复制链接**：`<origin>/table/<邀请码>`；大厅的入座框既接受 6 位邀请码，也接受直接粘贴的完整链接
@@ -100,7 +118,7 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
   大小王按真牌的布局：**牌名只在两处角落索引里**（「大/小 + 王」），两处镜像一致；**正中是一枚图案**（大王 ☀ / 小王 ☾）。
   牌名在牌上只出现一次，不会角落与正中各写一遍（`cardFace`）。
 - **新手教程**：`/rules` 复用牌桌同一套牌渲染组件（`Card` / `HandFan` / `LevelBadge` / `TrickCluster`），
-  含三道练手题（用与服务端同源的 `checkPlay` 即时判定）。依赖级牌的每个示例都标出将牌环境（`trumpText`），
+  含两道练手题（用与服务端同源的 `checkPlay` 即时判定）。依赖级牌的每个示例都标出将牌环境（`trumpText`），
   升级表只列**真实可达**的分数（得分恒为 5 的倍数），叫牌一节讲清阻击叫的心理博弈。
   教程里每个示例都由引擎函数在 `test:web` 中核对，规则改动导致示例失效会直接测试失败。
 - **观战与离座**：满座（3 人）时用邀请链接进来即成为观战者，只看**公共视图**（手牌张数与已打出的牌，
@@ -120,6 +138,11 @@ BASE=http://127.0.0.1:5178 pnpm mcp-check              # MCP 端到端：两条�
   结算弹窗都在原来的位置，抽屉里放的是「查一下」的东西（战报、叫牌记录、庄家埋下去的 3 张底牌、
   座位与身份）。`apps/web/test/table-chrome.test.ts` 与 `scripts/ui-check.ts` 一起守着这两条
   （页头白名单 + 页签清单 + 动作面不许进抽屉 + 连接提示只许在断线时出现），免得页头再一次被堆满。
+- **规则演示**：`/learn` 是幻灯片式演示（键盘 ← → / 空格翻页、自动播放、每屏深链 `/learn?s=<屏 id>`）。
+  「基本概念」15 屏的示例全部复用 `/rules` 那份被引擎核对过的数据；三副实战牌局来自 `docs/deals/`，
+  每一手都有讲解，**讲解的来路**（原话 / 润色 / 补写）逐条记在 `docs/deals/<slug>.review.md`。
+  牌局数据是生成物（`stories/<slug>.ts`）并提交进仓库，页面渲染不跑回放、不碰随机数 —— 所以引擎或随机数
+  将来变了，已发布的讲解也不会变味；真要变是 `pnpm deal:check` 报红，由人决定重新生成（见 ADR-0010）。
 
 ## 身份与凭据
 

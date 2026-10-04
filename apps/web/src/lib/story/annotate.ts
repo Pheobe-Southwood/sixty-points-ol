@@ -24,36 +24,80 @@ import {
   type TrumpModel
 } from '@sixty/engine';
 
-import { callText, cardText } from '../labels.ts';
+import { bidText, cardText } from '../labels.ts';
 import type { ReplayResult, ReplayedStep, ReplayedTrick } from './replay.ts';
 
+/** 花色在正文里的显示序（与 sortHand 一致）；主牌由 cardClass 单独处理，不在这里 */
+const SUIT_DISPLAY_ORDER: readonly Suit[] = ['S', 'H', 'C', 'D'];
+
 /**
- * 一手牌的紧凑写法：同一门的牌合成一段（`♥3-4-6`），跨门用空格分开（`♣2 ♣3 ♦4`）。
+ * 一手牌的紧凑写法。**一个空格分隔的记号 = 恰好一条顺子**，这是唯一的读法：
  *
- * 门内排序用引擎自己的层号（有将牌信息时）：这样 `♥Q-K-A-5` 读起来就是主牌的实际大小顺序 ——
+ * - 同一门内的连牌合成一个记号：`♣3-4-6`（级牌 5 被跳过后它们是相邻的）；
+ * - 不相邻的牌**绝不**用 `-` 连起来，各自成记号：`♣2-3-5 ♣7`、`♠8-9 ♠5`；
+ * - 主牌可以跨花色成顺（主花色 → 副级 → 主级 → 王），这时逐张写出：`♠A-♥2`、`♥A-♠5-♥5-小王-大王`；
+ * - 三张副级完全相等，永远各成一个记号：`♠5 ♦5 ♣5`。
+ *
+ * 门内排序用引擎自己的层号：这样 `♥Q-K-A-5` 读起来就是主牌的实际大小顺序 ——
  * 主级 ♥5 排在 ♥A 之后，而不是被当成「5 比 A 小」。
+ *
+ * **为什么必须这样**：这套演示通篇在讲顺子怎么算（副牌跳过级牌、主牌跨边界、副级不连），
+ * 早先的实现把同门牌一律用 `-` 连起来，于是 `[♣10 ♣6]` 被印成「♣6-10」——
+ * 看着像顺子，引擎的段分解却是 `[1,1]`。方向正好错在教程最要紧的地方。
  */
 export function cardsSummary(cards: readonly Card[], trump: TrumpModel | null): string {
   if (cards.length === 0) return '—';
-  const jokers: Card[] = [];
-  const bySuit = new Map<Suit, Card[]>();
+
+  // 按「门」分组：有将牌信息时用引擎的 cardClass（主牌是一门，四张级牌与双王都归它），
+  // 否则退化成按花色分组（此时也没有跨门成顺的判定可讲）。
+  const groups = new Map<string, Card[]>();
   for (const card of cards) {
-    if (isJoker(card)) {
-      jokers.push(card);
-      continue;
+    const cls = trump === null ? (isJoker(card) ? 'joker' : card.suit) : cardClass(card, trump);
+    const list = groups.get(cls);
+    if (list === undefined) groups.set(cls, [card]);
+    else list.push(card);
+  }
+
+  const level = (card: Card): number => {
+    if (trump !== null) return cardLevel(card, trump);
+    return isJoker(card) ? (card.joker === 'big' ? 16 : 15) : card.rank;
+  };
+  const rankOfClass = (cls: string): number =>
+    cls === 'T' || cls === 'joker' ? -1 : SUIT_DISPLAY_ORDER.indexOf(cls as Suit) + 1;
+
+  const tokens: string[] = [];
+  for (const cls of [...groups.keys()].sort((a, b) => rankOfClass(a) - rankOfClass(b))) {
+    const sorted = [...groups.get(cls)!].sort((a, b) => level(a) - level(b));
+    // 切成最大连续段：层号严格 +1 才算相邻（副级三张相等 → 各自成段）
+    let run: Card[] = [];
+    const flush = (): void => {
+      if (run.length > 0) tokens.push(runToken(run));
+      run = [];
+    };
+    for (const card of sorted) {
+      if (run.length === 0 || level(card) === level(run[run.length - 1]!) + 1) run.push(card);
+      else {
+        flush();
+        run.push(card);
+      }
     }
-    const list = bySuit.get(card.suit) ?? [];
-    list.push(card);
-    bySuit.set(card.suit, list);
+    flush();
   }
-  const order = (a: Card, b: Card): number =>
-    trump === null ? (isJoker(a) ? 0 : a.rank) - (isJoker(b) ? 0 : b.rank) : cardLevel(a, trump) - cardLevel(b, trump);
-  const parts: string[] = [];
-  for (const [suit, list] of bySuit) {
-    const ranks = [...list].sort(order).map((card) => (isJoker(card) ? '?' : rankLabel(card.rank)));
-    parts.push(ranks.length === 1 ? `${SUIT_LABEL[suit]}${ranks[0]}` : `${SUIT_LABEL[suit]}${ranks.join('-')}`);
+  return tokens.join(' ');
+}
+
+/** 一条顺子的写法：同一花色写成 `♣3-4-6`，跨花色（只可能是主牌）逐张写 `♠A-♥2` */
+function runToken(run: readonly Card[]): string {
+  const suited: { suit: Suit; rank: number }[] = [];
+  for (const card of run) {
+    if (isJoker(card)) return run.map(cardText).join('-');
+    suited.push({ suit: card.suit, rank: card.rank });
   }
-  return [...jokers.map(cardText), ...parts].join(' ');
+  const first = suited[0]!;
+  const sameSuit = suited.every((card) => card.suit === first.suit);
+  if (!sameSuit) return run.map(cardText).join('-');
+  if (suited.length === 1) return `${SUIT_LABEL[first.suit]}${rankLabel(first.rank)}`;
+  return `${SUIT_LABEL[first.suit]}${suited.map((card) => rankLabel(card.rank)).join('-')}`;
 }
 
 /** 短句里的座位名；座位缺失（如发牌步）时返回空串 */
@@ -92,16 +136,23 @@ function playTags(step: ReplayedStep, context: PlayContext | null, trump: TrumpM
   if (context === null) return tags;
   const cls = classOfSet(step.cards, trump);
   const leadCls = classOfSet(context.lead, trump);
+  const segs = segments(step.cards, trump);
 
   if (context.isLead) {
     tags.push(step.cards.length === 1 ? '领出单张' : `领出 ${step.cards.length} 张顺子`);
     if (cls === 'T') tags.push('主牌');
   } else if (cls === 'T' && leadCls !== null && leadCls !== 'T') {
-    tags.push(`杀牌（${step.cards.length} 张主牌相连）`);
+    // 杀牌必须是**一条**连续主牌。只看「主牌压副牌」是不够的：
+    // 三张副级完全相等（层号 13/13/13）段分解是 1+1+1，照样杀不了，
+    // 而一句「n 张主牌相连」会把这种牌误报成已经赢下了。
+    if (segs.length === 1) {
+      tags.push(step.cards.length === 1 ? '杀牌（单张主牌）' : `杀牌（${step.cards.length} 张主牌相连）`);
+    } else {
+      tags.push(`主牌跟牌不成顺（${segs.join('+')}），不能赢`);
+    }
   } else if (leadCls !== null && cls !== leadCls) {
     tags.push('垫牌');
   } else {
-    const segs = segments(step.cards, trump);
     tags.push(segs.length === 1 ? `同门跟 ${step.cards.length} 张` : `结构性跟牌（${segs.join('+')}）`);
   }
 
@@ -134,7 +185,7 @@ export function annotateStep(
     case 'bid': {
       const call = step.step.type === 'bid' ? step.step.call : 'pass';
       return {
-        headline: `${who} ${callText(call)}`,
+        headline: `${who} ${bidText(call)}`,
         tags: step.redeal ? ['三家不叫，本副作废重发'] : [],
         points: 0
       };

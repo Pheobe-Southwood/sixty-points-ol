@@ -10,6 +10,8 @@
     "start": "node build/index.js",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "deal": "node scripts/build-deal-stories.ts",
+    "deal:check": "node scripts/build-deal-stories.ts --check",
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",
     "ui": "node scripts/ui-check.ts",

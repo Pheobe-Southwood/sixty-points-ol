@@ -108,7 +108,10 @@
 
 <main class="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6">
   <header>
-    <a class="text-xs text-white/50 hover:text-white" href="/">← 大厅</a>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <a class="text-xs text-white/50 hover:text-white" href="/">← 大厅</a>
+      <a class="text-xs font-semibold text-gold hover:underline" href="/learn">不想读长文？看规则演示（幻灯片）→</a>
+    </div>
     <h1 class="mt-2 text-2xl font-black tracking-wide text-ivory">新手教程</h1>
     <div class="mt-2 space-y-2 text-xs leading-relaxed text-white/55">
       <p>

@@ -10,7 +10,9 @@
     "test:web": "pnpm --filter web test",
     "test:mcp": "pnpm --filter @sixty/mcp test",
     "mcp-check": "pnpm --filter @sixty/mcp mcp-check",
-    "check": "pnpm -r check"
+    "check": "pnpm -r check",
+    "deal": "pnpm --filter web deal",
+    "deal:check": "pnpm --filter web deal:check"
   },
   "devDependencies": {
     "typescript": "^5.7.3"
