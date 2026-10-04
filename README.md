@@ -225,6 +225,7 @@ DOMAIN=game.example.com docker compose --profile https up -d --build   # → htt
 
 - 镜像：`node:24-bookworm-slim` 两阶段构建（装依赖+构建 → 只带产物与运行期依赖），非 root 运行。
 - 数据：命名卷 `sixty-data` 挂到容器 `/data`（`SIXTY_DB=/data/sixty.db`）。牌局状态、身份、座位与观战记录、事件日志都在这里，容器重建/升级不丢；重启续局已实测。
+  **这一行只对 `docker compose` 与 Coolify 的 Docker Compose 资源生效**：Coolify 用 **Docker Image** 资源时不会自动带上它，必须手动加 Persistent Storage，见下文「Coolify」的 A 路径。
 - 环境变量全部带默认值，可用 `${X:-默认}` 直接改：`PORT`（容器内端口，默认 3000）、`PUBLIC_PORT`（宿主映射，默认同 PORT）、`SIXTY_DB`、`DOMAIN`（仅 https profile）。
   **`ORIGIN` 例外：不要用 `${ORIGIN:-}` 这种写法**（宿主未设置时会注入空串导致容器起不来），需要时就写完整 URL 或整行留空不定义，见上文「本地运行」的警示。
 - 健康检查：容器内 `GET /` 返回 200；`docker compose ps` 里看到 `healthy` 即就绪。
@@ -260,7 +261,7 @@ docker run -d --name sixty -p 3000:3000 -v sixty-data:/data \
 
 要可回滚就固定版本：`:sha-af7ae45` 或 `:0.2.0`。
 
-Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker Compose），镜像填 `ghcr.io/cup113/sixty-points-ol:latest`，Domain 端口仍填**容器端口** `3000`，挂 `sixty-data:/data`。注意 `docker-compose.yml` 本身仍是本地 build（compose 里 `build:` 优先于 `image:`），别指望现有 compose 资源自动改用 CI 镜像。
+Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker Compose），镜像填 `ghcr.io/cup113/sixty-points-ol:latest`，Domain 端口仍填**容器端口** `3000`，并**手动加 Persistent Storage**（步骤见下文「Coolify」的 A 路径）。注意 `docker-compose.yml` 本身仍是本地 build（compose 里 `build:` 优先于 `image:`），别指望现有 compose 资源自动改用 CI 镜像。
 
 排查：
 
@@ -269,10 +270,29 @@ Coolify 用预构建镜像：新建资源 → **Docker Image**（不是 Docker C
 
 ### Coolify
 
-1. 新建资源 → **Docker Compose** → 指向本仓库（compose 文件在根目录，无需改路径）。
+先选资源类型 —— 两条路的代价完全不同。
+
+**A. Docker Image 资源（推荐：镜像来自 GHCR，服务器不构建）**
+
+1. 新建资源 → **Docker Image**，镜像填 `ghcr.io/cup113/sixty-points-ol:latest`；要可回滚就填固定 tag（`:0.2.0`、`:sha-af7ae45`）。
 2. **Domain 填 `<你的域名>:3000`** —— Coolify 里的端口是**容器端口**，不是公网端口；写错会 502。容器监听 3000（`PORT=3000`）。
-3. 保持 `sixty-data:/data` 数据卷，否则每次部署都会清空牌局。
-4. 需要 Coolify 自动注入域名变量时，在 `app.environment` 加一行 `- SERVICE_FQDN_APP_3000=<你的域名>`。
+3. **Persistent Storage 必须手动加**：Application → Persistent Storage → Add —— Name `sixty-data`、**Destination Path `/data`**（必须与 `SIXTY_DB` 的目录一致）、Source Path 留空即用 Docker 命名卷。
+   **漏了这一步就会每次部署清空牌局**：这类资源既不继承仓库 `docker-compose.yml` 里的卷，也不继承镜像里的 `VOLUME ["/data"]`，于是每次重新部署都挂一个**全新的匿名卷** —— 用户凭据、MCP 凭据、房间全部静默消失，而健康检查仍然是绿的。
+4. 验证：`docker inspect -f '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{"\n"}}{{end}}' <容器>` 应显示 `sixty-data -> /data`，而不是一串 64 位十六进制名。
+5. 备份（Coolify 的命名卷就叫 Persistent Storage 里的 Name，不带项目前缀）：
+   ```bash
+   docker run --rm -v sixty-data:/data -v "$PWD":/backup alpine \
+     tar czf /backup/sixty-backup.tgz -C /data .
+   ```
+6. 需要 Coolify 自动注入域名变量时，在该资源的 Environment Variables 里加 `SERVICE_FQDN_APP_3000=<你的域名>`。
+
+**B. Docker Compose 资源（指向本仓库，在服务器本机构建）**
+
+1. 新建资源 → **Docker Compose** → 指向本仓库（compose 文件在根目录，无需改路径）。
+2. **Domain 填 `<你的域名>:3000`**（同上：端口是容器端口）。
+3. 数据卷由 compose 里的 `- sixty-data:/data` 自动带上（见上文「Docker Compose（单机 / VPS）」），别删那一行。
+4. 代价：镜像在**服务器本机**构建（`git clone` + `docker compose build --pull`），构建期内存可能吃到几个 GB；小 VPS 会被 OOM kill 或长时间卡住 —— 服务器余量不足就选 A。
+5. 需要 Coolify 自动注入域名变量时，在 `app.environment` 加一行 `- SERVICE_FQDN_APP_3000=<你的域名>`。
 
 ### SSE（实时推送）踩坑说明
 
