@@ -4,6 +4,18 @@
 SvelteKit + SSE 单实例应用，规则引擎是零依赖纯 TypeScript 包并有完整单测/属性测试。
 
 [![CI](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml/badge.svg)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/github/license/cup113/sixty-points-ol?label=license)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-317-3fb950)](https://github.com/cup113/sixty-points-ol/actions/workflows/ci.yml)
+[![Last commit](https://img.shields.io/github/last-commit/cup113/sixty-points-ol)](https://github.com/cup113/sixty-points-ol/commits/main)
+[![Node](https://img.shields.io/badge/node-24-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![pnpm](https://img.shields.io/badge/pnpm-11.22-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
+[![SvelteKit](https://img.shields.io/badge/SvelteKit-2-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev/docs/kit)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
+[![SQLite](https://img.shields.io/badge/SQLite-node%3Asqlite-003B57?logo=sqlite&logoColor=white)](https://nodejs.org/api/sqlite.html)
+[![Docker image](https://img.shields.io/badge/ghcr.io-sixty--points--ol-2496ED?logo=docker&logoColor=white)](https://github.com/cup113/sixty-points-ol/pkgs/container/sixty-points-ol)
 
 ## 目录
 
