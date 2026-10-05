@@ -97,15 +97,17 @@ export class Sight {
    *
    * 两段判据，**性质不同，注释里必须分开写**：
    * 1. **确定**：没有任何座位已被证明缺这门 —— 缺门是永久事实，证过就不会翻案；
-   * 2. **启发式**：这门未见牌还够多（闲家 ≥5、庄家 ≥2），说明两张手牌里多半各有几张。
-   *    计数**证明不了**「没人缺门」：未见的 C 牌可以全在某一个对手手里，另一个正好缺门。
+   * 2. **启发式**：这门未见牌还够多（`minUnseen` = 策略给的余量：历史值闲家 5、庄家 2），
+   *    说明两张手牌里多半各有几张。计数**证明不了**「没人缺门」：未见的 C 牌可以全在某一个
+   *    对手手里，另一个正好缺门。
    *
    * 所以返回 true 只代表「值得当作安全领出」，不代表数学保证 —— 主牌门才可能真保证。
+   * 余量不进这里写死，而是由 `BotParams.leadCaution` 传进来（领出积极性是实验要调的东西）。
    */
-  noRuffRisk(cls: CardClass, t: TrumpModel, isDeclarer: boolean): boolean {
+  noRuffRisk(cls: CardClass, t: TrumpModel, minUnseen: number): boolean {
     if (this.voidSeats(cls).size > 0) return false;
     // 闲家：底牌 3 张未知，所以要多留出 3 张的余量才算「两张手牌都可能有」
-    return this.unseen(cls, t) >= (isDeclarer ? 2 : 5);
+    return this.unseen(cls, t) >= minUnseen;
   }
 }
 

@@ -12,6 +12,7 @@
     "test:mcp": "pnpm --filter @sixty/mcp test",
     "mcp-check": "pnpm --filter @sixty/mcp mcp-check",
     "bot-check": "pnpm --filter web bot",
+    "arena": "pnpm --filter @sixty/bot arena",
     "check": "pnpm -r check",
     "deal": "pnpm --filter web deal",
     "deal:check": "pnpm --filter web deal:check"

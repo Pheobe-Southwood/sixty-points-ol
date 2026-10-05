@@ -179,13 +179,21 @@ test('最高叫品已是自己的 → pass（不抬自己）', () => {
   assert.equal(bidFor(view, view.you), 'pass');
 });
 
-test('willingPoints 是阶梯映射且封顶 85（门槛 12）', () => {
-  assert.equal(willingPoints(11), 0);
-  assert.equal(willingPoints(12), 40);
-  assert.equal(willingPoints(15), 45);
-  assert.equal(willingPoints(18), 50);
-  assert.equal(willingPoints(30), 70);
-  assert.equal(willingPoints(100), 85);
+test('willingPoints 是阶梯映射且封顶 85（门槛 12、阶梯原点 6）', () => {
+  // 门槛（够不够格开叫）与阶梯原点（愿意叫到哪）是两个字段：ADR-0017 之后门槛仍是 12，
+  // 而阶梯原点降到 6（竞技场里收益最大的一项），于是同一手牌的愿意分数整体上了 10 分。
+  assert.equal(willingPoints(11), 0, '不到门槛一分不叫');
+  assert.equal(willingPoints(12), 50);
+  assert.equal(willingPoints(13), 50);
+  assert.equal(willingPoints(15), 55);
+  assert.equal(willingPoints(18), 60);
+  assert.equal(willingPoints(21), 65);
+  assert.equal(willingPoints(30), 80);
+  assert.equal(willingPoints(100), 85, '封顶 85');
+  // 只动门槛时阶梯不动（两者独立，这是它们分成两个字段的原因）
+  assert.equal(willingPoints(12, { bidBar: 6, bidLadderBase: 12 }), 40);
+  assert.equal(willingPoints(12, { bidBar: 12, bidLadderBase: 6 }), 50);
+  assert.equal(willingPoints(11, { bidBar: 6, bidLadderBase: 12 }), 40, '降门槛够格开叫，但叫的仍是 40');
 });
 
 test('strengthOf：级牌归主牌门，副牌 A 计分，缺门加分', () => {
@@ -445,5 +453,174 @@ test('跟牌（该门不足）：先出完该门，其余垫最低', () => {
     follow.map(cardKey).filter((key) => !key.startsWith('S')),
     ['C3'],
     '垫牌取 discardValue 最低者（♣3）'
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 参数面（ADR-0017）：**每个开关都要有一个固定局面**，而且那个开关必须真的改变动作
+// ---------------------------------------------------------------------------
+//
+// 这一组是「不许出现没测到的开关」那条规矩的落点。每条都同时钉两件事：
+// ① 缺省（= 出厂默认）在这个局面下的动作；② 拨动开关后动作**确实变了**。
+// 只写 ① 是不够的（开关可能是死的），只写 ② 也不够（可能两边都错）。
+
+/** 默认参数下与拨动之后都要**合法**：策略永远不许产出被引擎拒绝的动作 */
+function assertLegal(view: PersonalView, cards: readonly Card[], t: TrumpModel, lead: readonly Card[] | null): void {
+  assert.equal(checkPlay(view.you.hand, cards, t, lead), null, `动作必须合法：${keys(cards).join(',')}`);
+}
+
+test('开关 bidJump：开叫就不再是最小合法步长，而是愿意分数', () => {
+  const hand = [
+    c('S', 14), c('S', 13), c('S', 12), c('S', 10), c('S', 9), c('S', 8), c('S', 5),
+    BJ, SJ,
+    c('H', 14), c('H', 7),
+    c('D', 6), c('D', 4),
+    c('C', 3), c('C', 5), c('C', 8), c('C', 11)
+  ];
+  const view = makeAuction(hand);
+  assert.deepEqual(bidFor(view, view.you), { points: 40, strain: 'S' }, '默认恒开 40');
+  assert.deepEqual(
+    bidFor(view, view.you, { bidJump: true }),
+    { points: 60, strain: 'S' },
+    '牌力 19 ⇒ 愿意分数 60（阶梯原点 6）'
+  );
+});
+
+test('开关 buryGamble：关掉就一分不埋（即使主牌控制达标）', () => {
+  const hand = [
+    BJ, SJ, c('H', 7), c('H', 14), c('H', 13), c('H', 12), c('H', 11), c('H', 9),
+    c('S', 7), c('D', 7), c('C', 7),
+    c('S', 5), c('S', 10), c('S', 2), c('S', 3), c('S', 4),
+    c('D', 2), c('D', 3), c('D', 9), c('C', 4)
+  ];
+  const on = buryFor(hand, BURY_TRUMP).reduce((sum, card) => sum + cardPoints(card), 0);
+  assert.ok(on > 0, `控制达标时默认应当埋分，实际 ${on}`);
+  const off = buryFor(hand, BURY_TRUMP, { buryGamble: false });
+  assert.equal(off.reduce((sum, card) => sum + cardPoints(card), 0), 0, '关掉博弈就一分不埋');
+  assert.equal(off.length, KITTY_SIZE);
+});
+
+test('开关 winPointThreshold：跟牌门槛抬高就不再为 10 分墩动顶张', () => {
+  const hand = [c('S', 14), c('S', 12), c('S', 9), c('H', 14), c('D', 5), c('C', 3)];
+  const trick: Trick = { leaderSeat: 1, plays: [{ seat: 1, cards: [c('S', 13)] }] }; // ♠K = 10 分
+  const view = makePlay({ hand, trump: T, trick, declarer: 1 });
+  const lead = [c('S', 13)];
+  const win = playFor(view, view.you, T);
+  assert.deepEqual(win, [c('S', 14)], '默认：有分就压过');
+  assertLegal(view, win, T, lead);
+  const passive = playFor(view, view.you, T, { winPointThreshold: 20 });
+  assert.deepEqual(passive, [c('S', 9)], '门槛 20：10 分墩也不争，出底窗让利');
+  assertLegal(view, passive, T, lead);
+});
+
+test('开关 ruffPointThreshold / ruffPolicy：0 分墩杀不杀', () => {
+  const hand = [c('H', 13), c('H', 5), c('C', 3)];
+  const lead = [c('S', 3)]; // 0 分
+  const trick: Trick = { leaderSeat: 1, plays: [{ seat: 1, cards: lead }] };
+  const view = makePlay({ hand, trump: T, trick, declarer: 1 }); // 我是闲家、缺 ♠
+  const dflt = playFor(view, view.you, T);
+  assert.deepEqual(dflt, [c('C', 3)], '默认（门槛 5）：0 分墩不杀，垫最不心疼的牌');
+  assertLegal(view, dflt, T, lead);
+  assert.deepEqual(
+    playFor(view, view.you, T, { ruffPointThreshold: 0 }),
+    [c('H', 5)],
+    '门槛归零：0 分墩也杀，且取最低能压的主牌'
+  );
+  assert.deepEqual(
+    playFor(view, view.you, T, { ruffPolicy: 'always' }),
+    [c('H', 5)],
+    'always 与门槛归零同解（都是「能杀就杀」）'
+  );
+  const never = playFor(view, view.you, T, { ruffPolicy: 'never' });
+  assert.ok(cardClass(never[0]!, T) !== 'T', `never 时不该动主牌：${keys(never).join(',')}`);
+  assertLegal(view, never, T, lead);
+});
+
+test('开关 leadPriority / keepBigJoker / protectPointedKitty / drawTrumps：领出次序', () => {
+  // 同时具备「同门无敌的顶主（大王）」与「副门必得分（♦A）」—— 才谈得上次序
+  const hand = [BJ, c('H', 14), c('D', 14), c('C', 3), c('C', 6)];
+  const base = makePlay({ hand, trump: T });
+  assert.deepEqual(playFor(base, base.you, T), [BJ], '默认：先顶主吊主');
+  assert.deepEqual(
+    playFor(base, base.you, T, { leadPriority: 'side-first' }),
+    [c('D', 14)],
+    'side-first：先兑现副门必得分'
+  );
+  assert.deepEqual(playFor(base, base.you, T, { keepBigJoker: true }), [c('D', 14)], 'keepBigJoker：不拿大王吊主');
+  assert.deepEqual(playFor(base, base.you, T, { drawTrumps: 'never' }), [c('D', 14)], 'drawTrumps=never：从不吊主');
+  // protectPointedKitty 只对**庄家**生效，且只在自己埋进底里的牌有分时
+  const pointed = makePlay({ hand, trump: T, declarer: 0, kitty: [c('C', 10), c('D', 2), c('D', 3)] });
+  assert.deepEqual(
+    playFor(pointed, pointed.you, T, { protectPointedKitty: true }),
+    [c('D', 14)],
+    '庄家底牌有分 ⇒ 顶主留到末轮护底'
+  );
+  const plainKitty = makePlay({ hand, trump: T, declarer: 0, kitty: [c('C', 2), c('D', 2), c('D', 3)] });
+  assert.deepEqual(
+    playFor(plainKitty, plainKitty.you, T, { protectPointedKitty: true }),
+    [BJ],
+    '底牌无分 ⇒ 这条开关不该拦着它吊主'
+  );
+});
+
+test('开关 discardPointWeight：0 时不再为「留住 5 分」而多留一张高张', () => {
+  const hand = [c('H', 13), c('H', 5), c('D', 5), c('D', 6)];
+  const lead = [c('S', 3)];
+  const trick: Trick = { leaderSeat: 1, plays: [{ seat: 1, cards: lead }] };
+  const view = makePlay({ hand, trump: T, trick, declarer: 1 });
+  // 默认权重 30：♦5 的「心疼值」= 10 + 150，于是先把 ♦6 垫掉（保住分牌）
+  assert.deepEqual(playFor(view, view.you, T), [c('D', 6)], '默认：先垫 ♦6、把 ♦5 留手里');
+  // 权重归零：分不再加重，♦5（层号 5）反而比 ♦6（层号 6）更该先垫
+  assert.deepEqual(
+    playFor(view, view.you, T, { discardPointWeight: 0 }),
+    [c('D', 5)],
+    '权重 0：按层号垫，先出 ♦5'
+  );
+});
+
+test('开关 partnerAware / feedPartner：同伴已定赢墩时的两种行为', () => {
+  const base = { partnerAware: false, feedPartner: false } as const;
+
+  // ① 够门：同伴用 ♠K（10 分）已经赢了这一墩，而我手里有 ♠A —— 抢不抢？
+  // 注意这一墩**本来就归本侧**（同伴的 ♠K 已经是终局），所以抢它一点分都多不了，
+  // 只是白花掉 ♠A。这正是 `partnerAware` 要拦的那件事，也让这条断言真的会因开关而变。
+  const hand = [c('S', 14), c('S', 5), c('H', 13), c('C', 3)];
+  const trick: Trick = {
+    leaderSeat: 2,
+    plays: [
+      { seat: 2, cards: [c('S', 13)] }, // 同伴领 ♠K = 10 分，此刻是赢家
+      { seat: 1, cards: [c('S', 3)] } // 庄家跟小
+    ]
+  };
+  const view = makePlay({ hand, trump: T, trick, declarer: 1 });
+  const lead = [c('S', 13)];
+  const off = playFor(view, view.you, T, { ...base });
+  assert.deepEqual(off, [c('S', 14)], '关掉同伴概念：桌上有 10 分就压过 —— 连同伴的墩一起抢（白花 ♠A）');
+  const aware = playFor(view, view.you, T, { ...base, partnerAware: true });
+  assert.deepEqual(aware, [c('S', 5)], '认同伴：本墩已是本侧的，出最小的，把 ♠A 留住');
+  assertLegal(view, aware, T, lead);
+
+  // ② 缺门：同伴已定赢墩时不杀，而手里的分牌可以垫给同伴
+  const voidHand = [c('H', 13), c('C', 10), c('D', 4)];
+  const voidTrick: Trick = {
+    leaderSeat: 2,
+    plays: [
+      { seat: 2, cards: [c('S', 14)] },
+      { seat: 1, cards: [c('S', 3)] }
+    ]
+  };
+  const voidView = makePlay({ hand: voidHand, trump: T, trick: voidTrick, declarer: 1 });
+  const voidLead = [c('S', 14)];
+  const awareVoid = playFor(voidView, voidView.you, T, { ...base, partnerAware: true });
+  assert.deepEqual(awareVoid, [c('D', 4)], '不杀同伴的墩：垫最不心疼的非主牌');
+  assertLegal(voidView, awareVoid, T, voidLead);
+  const fed = playFor(voidView, voidView.you, T, { ...base, partnerAware: true, feedPartner: true });
+  assert.deepEqual(fed, [c('C', 10)], '喂分：把 10 分垫到同伴的账上，而不是留一张没用的 ♣10');
+  assertLegal(voidView, fed, T, voidLead);
+  // 只开喂分（不理会抢墩）也应当喂 —— 两个开关各自独立生效
+  assert.deepEqual(
+    playFor(voidView, voidView.you, T, { ...base, feedPartner: true }),
+    [c('C', 10)],
+    'feedPartner 不依赖 partnerAware（它自己就要求认出同伴）'
   );
 });

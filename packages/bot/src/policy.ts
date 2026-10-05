@@ -13,7 +13,12 @@
  * 时才把不超过 10 分埋进去（判据与实测见 `buryFor`）；打牌不犯低级错（有分必收、
  * 末轮按**赌注**决定值不值得争、缺门才杀且取最低能压的、全押只押主牌门）。
  *
- * 难度梯度（多档、搜索、学习牌谱）仍不做；这里的档位只有一档。
+ * **参数面（ADR-0017）**：上面那些常量不再直接写死在决策里，而是收进 `BotParams` 这一份显式输入；
+ * `BASELINE_PARAMS` 逐一取历史常量 ⇒ **不传参数 = 历史行为逐字节不变**（`test/arena.test.ts` 钉死）。
+ * 参数只是纯函数的入参：无 IO、无 RNG、无隐藏状态，同一视图 + 同一参数永远同一动作。
+ * 由此多出来的两个非标量开关是**同伴概念**（闲家才有，庄家恒 no-op，见 `partnerSeatOf`）
+ * 与**领出次序**；它们值不值得换，靠 `src/arena.ts` 的同副牌配对竞技场量，不靠观感。
+ * 搜索 / 学习牌谱仍然不做。
  */
 import {
   bestProfile,
@@ -36,6 +41,7 @@ import {
   type Bid,
   type BidCall,
   type Card,
+  type Contract,
   type PlayerSeat,
   type PublicView,
   type Seat,
@@ -51,22 +57,167 @@ export type BotMove =
   | { readonly type: 'play'; readonly cards: readonly Card[] };
 
 /**
+ * 机器人参数（ADR-0017）：策略的**唯一**外部输入。
+ *
+ * 每个字段都对应一处曾经写死的常量，注释里保留它的来处与依据，免得调参时把理由丢掉。
+ * 缺省一律是历史值 —— 「不传参数」与「传 `BASELINE_PARAMS`」走同一条路径。
+ */
+export interface BotParams {
+  // ---- 叫牌 ----
+  /** 开叫门槛：牌力到这个数就愿意叫 40（历史值 12；越小越积极） */
+  readonly bidBar: number;
+  /**
+   * 「牌力 → 愿意分数」阶梯的**原点**（历史值 12）。
+   *
+   * 与 `bidBar` 分开，是因为竞技场实测「多开叫」与「多竞叫」是两件事，而一个门槛会把它们
+   * 绑在一起动：门槛一降，阶梯整体上移，同一手牌的竞叫上限也跟着涨。
+   * `bidLadderBase` 只动竞叫上限，`bidBar` 只动「够不够格开叫」。
+   */
+  readonly bidLadderBase: number;
+  /** 牌力每涨这么多点，愿意分数上一档 */
+  readonly bidStepStrength: number;
+  /** 愿意分数每档涨这么多分 */
+  readonly bidStepPoints: number;
+  /** 愿意分数的封顶 */
+  readonly maxWilling: number;
+  /** 跳叫：开叫/竞叫直接叫到愿意分数，而不是最小合法步长（历史 false；ADR-0015 认为跳叫买不到级数） */
+  readonly bidJump: boolean;
+
+  // ---- 埋底 ----
+  /** 主牌绝对控制时故意埋分（历史 true，判据与实测见 `buryFor`） */
+  readonly buryGamble: boolean;
+  readonly buryGambleMaxPoints: number;
+  readonly buryGambleMinTrumps: number;
+  readonly buryGambleStrongTrumps: number;
+
+  // ---- 打牌：争墩与杀牌 ----
+  /** `wantWin` 的分门槛：**跟牌**时这一墩的已有分到它才值得争（历史 5 = 任何有分墩 + 末轮 + 庄家差分的局面） */
+  readonly winPointThreshold: number;
+  /**
+   * **缺门杀牌**的分数门槛（历史 5）。
+   * 与 `winPointThreshold` 分成两个字段，是因为竞技场实测这两件事的方向**相反**：
+   * 跟牌多争有利（`winPointThreshold: 0` ≈ +0.04 级/座位/副），
+   * 而 0 分墩也去杀略亏（`ruffPolicy: 'always'` ≈ −0.02）——
+   * 合成一个门槛就只能两件一起调，等于把好的那半让坏的这半吃掉。
+   */
+  readonly ruffPointThreshold: number;
+  /** 缺门杀牌：`points-only` = 历史行为（过门槛才杀）；`always` = 能杀就杀；`never` = 不杀 */
+  readonly ruffPolicy: 'points-only' | 'always' | 'never';
+  /** `noRuffRisk` 的「这门未见牌还够多」余量：庄家 / 闲家各一个（历史 2 / 5） */
+  readonly leadCaution: { readonly declarer: number; readonly defender: number };
+
+  // ---- 打牌：领出次序与大牌保留 ----
+  /** `draw-first` = 历史行为（先顶主吊主）；`side-first` = 先兑现副门同门无敌的分牌 */
+  readonly leadPriority: 'draw-first' | 'side-first';
+  /** 同门无敌的顶主恰是大王时不拿它吊主（留给末轮；闲家看不到底牌，所以这只是钝规则） */
+  readonly keepBigJoker: boolean;
+  /** 庄家专用：自己埋进底里的牌有分时，不拿同门无敌的顶主吊主（留到末轮护底） */
+  readonly protectPointedKitty: boolean;
+  /** `unseen` = 历史行为（外面还有未见主牌就吊主）；`never` = 从不吊主 */
+  readonly drawTrumps: 'unseen' | 'never';
+
+  // ---- 打牌：垫牌 ----
+  /** `discardValue` 里分牌的权重（历史 30；越大越舍不得垫分） */
+  readonly discardPointWeight: number;
+
+  // ---- 同伴（闲家才有；庄家恒 no-op）----
+  /** 认识同伴：不抢同伴已定的赢墩、不杀同伴已定的赢墩 */
+  readonly partnerAware: boolean;
+  /** 同伴已定的赢墩上把分垫给同伴（分进同伴的账 = 从庄家的账上拿掉，见引擎的结算公式） */
+  readonly feedPartner: boolean;
+}
+
+/**
+ * 出厂默认（ADR-0017）。四项已按竞技场实测与历史基线不同 —— 每一处都写明依据，
+ * 因为「为什么是这个值」比「值是多少」更容易在下一轮调参时丢掉：
+ *
+ * 1. `bidLadderBase: 6`（原 12）—— **收益最大的一项**。竞叫阶梯的原点决定了「愿意把价抬到哪」，
+ *    而升级表把主要级数给了庄家侧（拆开算：变体做庄的副 Δ=+1.59 级/座位，基线做庄的副 Δ=−1.02），
+ *    所以「愿意一路用最小步长把庄家位拿过来」是巨大的正收益。单副台 2000 种子 × 两个配比：
+ *    +0.282 / +0.271 级/座位/副；整局台：+14.3 进度/座位。
+ *    对照项说明了它不是「叫得越高越好」：跳叫到愿意分数是 **−0.044**（白抬及格线），
+ *    **只**降开叫门槛（阶梯不动）在整局台是 **−0.58 / −1.00**（拿弱牌做庄是亏的）。
+ * 2. `leadCaution {1,2}`（原 {2,5}）—— 领出更激进：+0.037 / +0.035，整局台 +1.6 / +0.9。
+ * 3. `partnerAware + feedPartner: true`（原都是 false）—— 同伴概念。被量的是**这一对**
+ *    （+0.057 / +0.058，整局台 +1.1 / +0.9）；单独开 `partnerAware` 与 0 不可区分（+0.0038，CI 跨 0），
+ *    所以收益无法单独归因到「不抢同伴」那一半，但它是喂分规则自洽的前提。
+ *
+ * **`discardPointWeight` 保持 30（不采纳竞技场里那个 0）**：它虽然五次测量全为正
+ * （+0.0183 / +0.0153 / +0.0162 / +0.0130 单副台、+0.81 整局台），但 ① 幅度只有 +0.016，
+ * 远低于事先定下的「≥ +0.1 级/座位」门槛；② 整局台的读数过不了 Holm；③ **机制没解释清楚** ——
+ * 它其实只改变「5/10 与相邻低张谁先垫」的次序，而送给庄家的分几乎没变（0.98–0.99×），
+ * 也就是说它并没有做到「少送分」这件它看起来该做的事。依据薄且说不清的一项不进默认。
+ *
+ * 被实验**否掉**的（值保持历史基线，别以为它们没试过）：跳叫、只降开叫门槛、
+ * 见墩就争 / 只把跟牌门槛归零（符号翻转，不稳健）、能杀就杀 / 从不杀、只争大分墩、
+ * **大王留到末轮（−0.096，推翻了上一轮复盘的判断）**、庄家顶主留末轮、先副门后吊主、
+ * 从不吊主、领出更保守、埋底一分不埋、叫牌门槛 16、垫牌分权重归零。
+ */
+export const BASELINE_PARAMS: BotParams = {
+  bidBar: 12,
+  bidLadderBase: 6,
+  bidStepStrength: 3,
+  bidStepPoints: 5,
+  maxWilling: 85,
+  bidJump: false,
+  buryGamble: true,
+  buryGambleMaxPoints: 10,
+  buryGambleMinTrumps: 9,
+  buryGambleStrongTrumps: 10,
+  winPointThreshold: 5,
+  ruffPointThreshold: 5,
+  ruffPolicy: 'points-only',
+  leadCaution: { declarer: 1, defender: 2 },
+  leadPriority: 'draw-first',
+  keepBigJoker: false,
+  protectPointedKitty: false,
+  drawTrumps: 'unseen',
+  discardPointWeight: 30,
+  partnerAware: true,
+  feedPartner: true
+};
+
+/**
+ * 解析参数：只覆盖调用方给的那几项，其余落到 `BASELINE_PARAMS`。
+ * 于是实验配置可以只写「我改了什么」，不必抄一遍 20 个字段（抄错一个就是一次假实验）。
+ */
+export function paramsOf(p?: Partial<BotParams>): BotParams {
+  return p === undefined ? BASELINE_PARAMS : { ...BASELINE_PARAMS, ...p };
+}
+
+/**
+ * 闲家的同伴座位（庄家没有同伴）：1v2 里两个闲家互为同伴，座位号从**公开信息**推出来
+ * （`deal.contract.declarerSeat` 与自己的座位），不碰任何隐藏信息。
+ * 参数只要「有个合同」这一件事，所以竞技场那边也能直接用它数计数。
+ */
+export function partnerSeatOf(seat: Seat, deal: { readonly contract: Contract | null }): Seat | null {
+  const declarer = deal.contract?.declarerSeat ?? null;
+  if (declarer === null || declarer === seat) return null;
+  const rest = ([0, 1, 2] as Seat[]).filter((s) => s !== seat && s !== declarer);
+  return rest.length === 1 ? rest[0]! : null;
+}
+
+/**
  * 当前这一步该做什么：轮不到机器人（或没牌局）返回 null。
  * 驱动器在**每次状态变更后**调它；机器人从不发起 `deal` / `newGame` ——
  * 桌面级动作留给人类，这也是「一桌至少留一个人类座位」的原因。
  */
-export function moveFor(view: PublicView | null, you: PlayerSeat | null): BotMove | null {
+export function moveFor(
+  view: PublicView | null,
+  you: PlayerSeat | null,
+  params?: Partial<BotParams>
+): BotMove | null {
   if (view === null || you === null || view.status === 'finished') return null;
   const deal = view.deal;
   if (deal === null) return null;
   if (deal.phase === 'auction' && deal.auctionTurn === you.seat) {
-    return { type: 'bid', call: bidFor(view, you) };
+    return { type: 'bid', call: bidFor(view, you, params) };
   }
   if (deal.phase === 'bury' && you.isDeclarer && deal.trump !== null) {
-    return { type: 'bury', cards: buryFor(you.hand, deal.trump) };
+    return { type: 'bury', cards: buryFor(you.hand, deal.trump, params) };
   }
   if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
-    return { type: 'play', cards: playFor(view, you, deal.trump) };
+    return { type: 'play', cards: playFor(view, you, deal.trump, params) };
   }
   return null;
 }
@@ -78,7 +229,11 @@ export function moveFor(view: PublicView | null, you: PlayerSeat | null): BotMov
  * 与 `moveFor` 的区别只在「不挑好的，只挑一定合法的」：叫牌 pass、埋底交出手牌前三张、
  * 出牌走 `fallbackPlay`。轮不到它时同样返回 null。
  */
-export function fallbackFor(view: PublicView | null, you: PlayerSeat | null): BotMove | null {
+export function fallbackFor(
+  view: PublicView | null,
+  you: PlayerSeat | null,
+  params?: Partial<BotParams>
+): BotMove | null {
   if (view === null || you === null || view.status === 'finished') return null;
   const deal = view.deal;
   if (deal === null) return null;
@@ -91,7 +246,7 @@ export function fallbackFor(view: PublicView | null, you: PlayerSeat | null): Bo
     const lead = trick !== null && trick.plays.length > 0 ? trick.plays[0]!.cards : null;
     return {
       type: 'play',
-      cards: fallbackPlay(you.hand, deal.trump, lead, lead?.length ?? 1)
+      cards: fallbackPlay(you.hand, deal.trump, lead, lead?.length ?? 1, paramsOf(params))
     };
   }
   return null;
@@ -109,20 +264,15 @@ export interface StrainStrength {
 }
 
 /**
- * 开叫门槛：牌力到这个数就愿意叫 40。
+ * 开叫门槛（`BotParams.bidBar`，历史值 12）与「牌力 → 愿意分数」的阶梯。
  *
- * 15 是初版值，太保守：开叫率只有 32%，于是全 pass 重发率高达 **36%**（每三副就有一副白扔），
- * 面对别人的叫品也只在 4% 的局面里竞叫 —— 陪练时人类几乎总能以 40 拿下庄家位。
- * 调到 12 后**用真策略复测**（120 局 bot 对 bot）：开叫 **52%**（其中无主 4%，初版是 0%）、
+ * 12 是从初版 15 调下来的：15 太保守 —— 开叫率只有 32%，全 pass 重发率高达 **36%**（每三副白扔一副），
+ * 面对别人的叫品也只在 4% 的局面里竞叫，陪练时人类几乎总能以 40 拿下庄家位。
+ * 调到 12 后**用真策略复测**（120 局 bot 对 bot）：开叫 **52%**（其中无主 4%，初版 0%）、
  * 竞叫 **31%**、全 pass 重发 **5%**、庄家打成率 **80%**、每副升级 庄 2.0 / 闲 0.6。
  * 这是**陪练观感 + 有据可依**的取向，不是 EV 最优声明；
- * `BID_STEP_STRENGTH`/`BID_STEP_POINTS` 是阶梯，改门槛要连测试一起改
- * （`willingPoints` 单测与 `fullgame.test.ts` 的开叫率 / 重发率断言都钉着它）。
+ * 改门槛要连测试一起改（`willingPoints` 单测与 `fullgame.test.ts` 的开叫率 / 重发率断言都钉着它）。
  */
-const OPENING_BAR = 12;
-const BID_STEP_STRENGTH = 3;
-const BID_STEP_POINTS = 5;
-const MAX_WILLING = 85;
 
 /**
  * 牌力：主牌的长度与质量 + 副牌大牌 +（有主时的）缺门。级牌点数取**自己的级别**
@@ -164,13 +314,19 @@ export function strengthOf(hand: readonly Card[], rank: number, strain: Strain):
   return { strain, value, trumps: trumps.length };
 }
 
-/** 牌力换算成「愿意叫到的分数」；不足门槛时返回 0（只 pass） */
-export function willingPoints(value: number): number {
-  if (value < OPENING_BAR) return 0;
-  return Math.min(
-    MAX_WILLING,
-    MIN_BID + Math.floor((value - OPENING_BAR) / BID_STEP_STRENGTH) * BID_STEP_POINTS
-  );
+/**
+ * 牌力换算成「愿意叫到的分数」；不足门槛时返回 0（只 pass）。
+ *
+ * 门槛用 `bidBar`、阶梯原点用 `bidLadderBase`：两者分开之后，
+ * 「只要够格就开 40、但不把竞叫上限抬上去」才写得出来（下限钳在 `MIN_BID`）。
+ * 历史基线里两者都是 12，所以这条式子与改写前逐字等价。
+ */
+export function willingPoints(value: number, params?: Partial<BotParams>): number {
+  const p = paramsOf(params);
+  if (value < p.bidBar) return 0;
+  const ladder =
+    MIN_BID + Math.floor((value - p.bidLadderBase) / p.bidStepStrength) * p.bidStepPoints;
+  return Math.min(p.maxWilling, Math.max(MIN_BID, ladder));
 }
 
 /**
@@ -179,8 +335,12 @@ export function willingPoints(value: number): number {
  * - 已有最高叫品 → 若是我自己的，pass（不抬自己）；否则只在**最小合法加叫**
  *   不超过愿意分数时竞叫（同分换更高花色，或 +5）—— 跳叫买不到任何级数
  *   （CONTEXT.md 升级表），唯一理由是把庄家位从对手手里拿走，那也只需最小步长。
+ *
+ * `bidJump` 一开就把上面两条的「最小步长」换成「愿意分数」：它是**对照项**，
+ * 用来在竞技场里检验 ADR-0015 那条「跳叫买不到级数」（合同分越高越难打成）。
  */
-export function bidFor(view: PublicView, you: PlayerSeat): BidCall {
+export function bidFor(view: PublicView, you: PlayerSeat, params?: Partial<BotParams>): BidCall {
+  const p = paramsOf(params);
   const rank = view.levels[you.seat]!.rank;
   const entries = view.deal?.auction ?? [];
   const highest = view.deal?.highestBid ?? null;
@@ -192,10 +352,11 @@ export function bidFor(view: PublicView, you: PlayerSeat): BidCall {
       best = s;
     }
   }
-  const willing = willingPoints(best!.value);
+  const willing = willingPoints(best!.value, p);
 
   if (highest === null) {
-    return willing >= MIN_BID ? { points: MIN_BID, strain: best!.strain } : 'pass';
+    if (willing < MIN_BID) return 'pass';
+    return { points: p.bidJump ? willing : MIN_BID, strain: best!.strain };
   }
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!;
@@ -206,8 +367,9 @@ export function bidFor(view: PublicView, you: PlayerSeat): BidCall {
   }
   const nextPoints =
     STRAIN_RANK[best!.strain] > STRAIN_RANK[highest.strain] ? highest.points : highest.points + 5;
-  const call: Bid = { points: nextPoints, strain: best!.strain };
-  if (willing >= nextPoints && validateCall(call, highest) === null) return call;
+  const wanted = p.bidJump ? Math.max(nextPoints, willing) : nextPoints;
+  const call: Bid = { points: wanted, strain: best!.strain };
+  if (willing >= wanted && validateCall(call, highest) === null) return call;
   return 'pass';
 }
 
@@ -235,16 +397,17 @@ export function bidFor(view: PublicView, you: PlayerSeat): BidCall {
  * 上限 10 分（一张 10 / 两张 5 / 一张 K），且埋完仍要留 ≥3 张非分副牌保垫牌能力；
  * 任一条件不满足就退回「不埋分」的基线 —— 于是底牌分布不再恒为 0 分，
  * 「机器人做庄必然 0 分底」这条可被对手推知的信息也随之消失。
+ *
+ * 三个判据与 10 分上限现在是 `BotParams.buryGamble*`（历史值就是上面这几个数）；
+ * `buryGamble: false` 直接退回「一分不埋」的基线，作为竞技场里的对照项。
  */
-const BURY_GAMBLE_MAX_POINTS = 10;
-const BURY_GAMBLE_MIN_TRUMPS = 9;
-const BURY_GAMBLE_STRONG_TRUMPS = 10;
-
-export function buryFor(hand: readonly Card[], t: TrumpModel): Card[] {
+export function buryFor(hand: readonly Card[], t: TrumpModel, params?: Partial<BotParams>): Card[] {
+  const p = paramsOf(params);
   const keep = (c: Card): number =>
     (cardClass(c, t) === 'T' ? 1000 : 0) + cardLevel(c, t) * 2 + cardPoints(c) * 50;
   const byKeep = hand.map((c, i) => ({ c, i })).sort((a, b) => keep(a.c) - keep(b.c) || a.i - b.i);
   const baseline = byKeep.slice(0, 3).map(({ c }) => c);
+  if (!p.buryGamble) return baseline;
 
   const trumps = hand.filter((c) => cardClass(c, t) === 'T');
   const hasBigJoker = trumps.some((c) => isJoker(c) && c.joker === 'big');
@@ -256,9 +419,9 @@ export function buryFor(hand: readonly Card[], t: TrumpModel): Card[] {
   // 「控制」= 手握大王，或小王+主级（都是同门无敌的顶级主牌）；光有一堆低主不算控制
   const topControl = hasBigJoker || (hasSmallJoker && hasMainRank);
   const controlled =
-    trumps.length >= BURY_GAMBLE_MIN_TRUMPS &&
+    trumps.length >= p.buryGambleMinTrumps &&
     topControl &&
-    (trumps.length >= BURY_GAMBLE_STRONG_TRUMPS || topTrumps >= 3);
+    (trumps.length >= p.buryGambleStrongTrumps || topTrumps >= 3);
   if (!controlled) return baseline;
 
   const isSide = (c: Card): boolean => cardClass(c, t) !== 'T';
@@ -271,7 +434,7 @@ export function buryFor(hand: readonly Card[], t: TrumpModel): Card[] {
   for (const { c } of byKeep) {
     if (gamble.length >= 3) break;
     if (!isSide(c) || cardPoints(c) === 0) continue;
-    if (buriedPoints + cardPoints(c) > BURY_GAMBLE_MAX_POINTS) continue;
+    if (buriedPoints + cardPoints(c) > p.buryGambleMaxPoints) continue;
     gamble.push(c);
     buriedPoints += cardPoints(c);
   }
@@ -293,11 +456,28 @@ export function buryFor(hand: readonly Card[], t: TrumpModel): Card[] {
 // ---------------------------------------------------------------------------
 
 /** 一张牌「垫出去最不心疼」的程度：越小越先垫 —— 无分 > 有分，副牌 > 主牌，低张 > 高张 */
-function discardValue(c: Card, t: TrumpModel): number {
-  return (cardClass(c, t) === 'T' ? 100 : 0) + cardLevel(c, t) * 2 + cardPoints(c) * 30;
+function discardValue(c: Card, t: TrumpModel, pointWeight: number): number {
+  return (cardClass(c, t) === 'T' ? 100 : 0) + cardLevel(c, t) * 2 + cardPoints(c) * pointWeight;
 }
 
-export function playFor(view: PublicView, you: PlayerSeat, t: TrumpModel): Card[] {
+/**
+ * 「把分送给同伴」时的给牌次序：**越大越先给** —— 分值越高越先给，其次非主牌先给，最后低张先给。
+ *
+ * 依据是引擎的结算公式（`scoreDeal`）：`finalScore` 只算**庄家**抓到的分与底牌，
+ * 闲家抓到的分永远不进这个式子，只起「不让庄家拿到」的作用。所以在本墩归属已定（我是第三家，
+ * 赢家是同伴）时，把分垫给同伴 = 把分从庄家的账上拿掉，同时省下自己的高牌。
+ */
+function feedValue(c: Card, t: TrumpModel): number {
+  return cardPoints(c) * 100 - (cardClass(c, t) === 'T' ? 40 : 0) - cardLevel(c, t);
+}
+
+export function playFor(
+  view: PublicView,
+  you: PlayerSeat,
+  t: TrumpModel,
+  params?: Partial<BotParams>
+): Card[] {
+  const p = paramsOf(params);
   const deal = view.deal!;
   const trick = deal.trick;
   const lead = trick !== null && trick.plays.length > 0 ? trick.plays[0]!.cards : null;
@@ -310,7 +490,7 @@ export function playFor(view: PublicView, you: PlayerSeat, t: TrumpModel): Card[
     outOfPlay: you.buriedKitty ?? [],
     trump: t
   });
-  return lead === null ? leadPlay(you, t, sight) : followPlay(view, you, t, lead);
+  return lead === null ? leadPlay(you, t, sight, p) : followPlay(view, you, t, lead, p);
 }
 
 /** 我若此刻出这些牌，是否赢下当前这一墩（引擎的 trickWinner 是唯一裁判） */
@@ -325,7 +505,7 @@ function wouldWin(
 
 // --- 领出 -------------------------------------------------------------------
 
-function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight): Card[] {
+function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight, p: BotParams): Card[] {
   const hand = you.hand;
   if (hand.length === 1) return [hand[0]!];
 
@@ -349,31 +529,53 @@ function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight): Card[] {
 
   // 顶主吊主：持同门无敌的顶级主牌、且主牌还有没现身的（对手或底牌里），出顶主单张
   // 抽主 —— 庄家抽掉闲家的杀牌资本，闲家抽掉庄家的护底资本。
-  if (trumps.length > 0) {
+  //
+  // 两条「留牌」开关（历史行为都是关）：
+  // - `keepBigJoker`：大王是全场唯一不可被压的牌，把它花在 0 分墩上等于把「铁定一墩」换掉。
+  // - `protectPointedKitty`：**只有庄家**读得到自己底牌的分（`you.buriedKitty`），
+  //   底牌有分时把同门无敌的顶主留到末轮护底。闲家看不到底牌，所以这条对它恒不生效 ——
+  //   「底牌有分才留大王」对闲家不是策略，是猜。
+  const drawLead = (): Card[] | null => {
+    if (p.drawTrumps === 'never' || trumps.length === 0) return null;
     const top = trumps.reduce((a, b) => (cardLevel(b, t) > cardLevel(a, t) ? b : a));
-    if (sight.sureWinner(top, t) && sight.unseen('T', t) > 0) return [top];
-  }
+    if (!sight.sureWinner(top, t) || sight.unseen('T', t) <= 0) return null;
+    if (p.keepBigJoker && isJoker(top) && top.joker === 'big') return null;
+    if (p.protectPointedKitty && you.isDeclarer && cardsPoints(you.buriedKitty ?? []) > 0) return null;
+    return [top];
+  };
 
   // 副门「同门无敌」的顶段：先找最长的（≥2 收大分），退而求其次单张。
   // 但必须先过 noRuffRisk：已知有人缺门（或这门未见牌太少、很可能有人缺门）就不算安全领出，
   // 否则等于把一段好牌送给对手杀（实测这类领出有 35% 能被合法压过）。
-  let sure: Card[] | null = null;
-  for (const cards of sideSuits) {
-    const cls = cardClass(cards[0]!, t);
-    if (!sight.noRuffRisk(cls, t, you.isDeclarer)) continue;
-    for (const chain of extractChains(cards, t)) {
-      for (let len = Math.min(chain.length, 3); len >= 2; len--) {
-        const window = chain.slice(chain.length - len);
-        // 残局里窗口可能正好等于整手牌 —— 那就等于把整手押在副门上（x 倍的另一面），
-        // 与全押同一条原则：只有**可证无人能压**的主牌门才押整手。副门一律拆成单张领出。
-        if (window.length === hand.length) continue;
-        if (sight.sureRun(window, t) && (sure === null || window.length > sure.length)) sure = window;
+  const sureLead = (): Card[] | null => {
+    let sure: Card[] | null = null;
+    for (const cards of sideSuits) {
+      const cls = cardClass(cards[0]!, t);
+      const margin = you.isDeclarer ? p.leadCaution.declarer : p.leadCaution.defender;
+      if (!sight.noRuffRisk(cls, t, margin)) continue;
+      for (const chain of extractChains(cards, t)) {
+        for (let len = Math.min(chain.length, 3); len >= 2; len--) {
+          const window = chain.slice(chain.length - len);
+          // 残局里窗口可能正好等于整手牌 —— 那就等于把整手押在副门上（x 倍的另一面），
+          // 与全押同一条原则：只有**可证无人能压**的主牌门才押整手。副门一律拆成单张领出。
+          if (window.length === hand.length) continue;
+          if (sight.sureRun(window, t) && (sure === null || window.length > sure.length)) sure = window;
+        }
+        const single = [chain[chain.length - 1]!];
+        if (sight.sureWinner(single[0]!, t) && sure === null) sure = single;
       }
-      const single = [chain[chain.length - 1]!];
-      if (sight.sureWinner(single[0]!, t) && sure === null) sure = single;
     }
+    return sure;
+  };
+
+  // 领出次序（`leadPriority`）：历史是「先吊主、后副门」，`side-first` 反过来 ——
+  // 先把副门能证明必得的分兑现掉，再去动主牌（回应「大王早花、副门分没收到」那条诊断）。
+  const order: readonly ('draw' | 'side')[] =
+    p.leadPriority === 'side-first' ? ['side', 'draw'] : ['draw', 'side'];
+  for (const which of order) {
+    const cards = which === 'draw' ? drawLead() : sureLead();
+    if (cards !== null) return cards;
   }
-  if (sure !== null) return sure;
 
   // 兜底：最短副门的最低张（省主牌、保大牌）。
   if (sideSuits.length > 0) {
@@ -390,7 +592,8 @@ function followPlay(
   view: PublicView,
   you: PlayerSeat,
   t: TrumpModel,
-  lead: readonly Card[]
+  lead: readonly Card[],
+  p: BotParams
 ): Card[] {
   const deal = view.deal!;
   const hand = you.hand;
@@ -406,21 +609,39 @@ function followPlay(
   // 注意：`finalTrick` 时**没有选牌自由度** —— 手牌数 = 领出张数意味着这三张都得打出去，
   // 所以这里不必（也不能）为「末轮赌注」做取舍。x 倍的决定权只在领出者手里，
   // 那条决策在 `leadPlay` 里（全押只押主牌门），见那里的注释。
-  const wantWin =
-    trickPoints >= 5 ||
-    finalTrick ||
-    (you.isDeclarer && contract !== null && declarerPoints + trickPoints < contract.points);
+  const declarerNeeds =
+    you.isDeclarer && contract !== null && declarerPoints + trickPoints < contract.points;
+  // 跟牌与杀牌用**两个**门槛：实测这两件事的方向相反（见 `BotParams.ruffPointThreshold`）
+  const followWant = trickPoints >= p.winPointThreshold || finalTrick || declarerNeeds;
+  const ruffWant = trickPoints >= p.ruffPointThreshold || finalTrick || declarerNeeds;
+
+  // 同伴概念（`BotParams.partnerAware`）：只有闲家有同伴，庄家恒 null。
+  // `last` = 我是第三家 ⇒ 此刻的赢家**就是本墩终局**，后面没人能翻案。
+  // 只在这一种局面上做同伴决策：第二家时同伴的赢墩还没定，让利/喂分都可能送给庄家。
+  const partner = partnerSeatOf(you.seat, deal);
+  const last = trick.plays.length === 2;
+  const currentWinner = trick.plays.length > 0 ? trickWinner(trick.plays, t) : null;
+  const partnerWins = partner !== null && last && currentWinner === partner;
+  // 「不抢 / 不杀同伴已定的赢墩」是 `partnerAware` 这一半
+  const partnerSettled = p.partnerAware && partnerWins;
+  // 「把分垫给同伴」是另一半，单独一个开关（它自己就要求认出同伴，所以不依赖 partnerAware）
+  const feed = p.feedPartner && partnerWins;
+  // 能垫得出非主牌才谈得上「不杀」：手里全是主牌时只能杀（本墩归属不变，不是浪费）。
+  const keepTrumpsBack = partnerSettled || p.ruffPolicy === 'never';
 
   const verify = (cards: Card[]): Card[] => {
     if (checkPlay(hand, cards, t, lead) === null) return cards;
-    return fallbackPlay(hand, t, lead, n);
+    return fallbackPlay(hand, t, lead, n, p);
   };
 
   if (mode === 'must-follow-class') {
     const profile = bestProfile(holding, t, n);
     const win = buildFollow(holding, t, profile, 'top');
     const low = buildFollow(holding, t, profile, 'bottom');
-    if (wantWin && wouldWin(trick.plays, you.seat, win, t)) return verify(win);
+    // 同伴已定的赢墩不抢：本墩已经是本侧的，牌的高低只影响手里留下什么 ⇒ 出最低的。
+    // （普通局面下这里可能仍会被迫压过同伴 —— 整门都比同伴那张大时无牌可让，那不是浪费。）
+    if (partnerSettled) return verify(low);
+    if (followWant && wouldWin(trick.plays, you.seat, win, t)) return verify(win);
     return verify(low);
   }
 
@@ -434,17 +655,30 @@ function followPlay(
     candidates.sort(
       (a, b) => cardLevel(a[a.length - 1]!, t) - cardLevel(b[b.length - 1]!, t) || a.length - b.length
     );
-    if (wantWin) {
+    // `ruffPolicy`：`always` = 能杀就杀；`points-only` = 历史行为（过 `ruffPointThreshold` 才杀）；`never` = 不杀。
+    // 同伴已定的赢墩优先于它 —— 杀那一墩只是白花一张主牌，本墩归属不会变。
+    const ruffWanted = p.ruffPolicy === 'always' || ruffWant;
+    if (!partnerSettled && p.ruffPolicy !== 'never' && ruffWanted) {
       for (const run of candidates) {
         if (wouldWin(trick.plays, you.seat, run, t)) return verify(run);
       }
     }
   }
 
-  // 垫牌/贴牌：出完该门剩下的牌 + 最不心疼的 k 张
-  const rest = [...hand].filter((c) => cardClass(c, t) !== info.cardClass);
-  const sorted = rest.sort((a, b) => discardValue(a, t) - discardValue(b, t));
-  return verify([...holding, ...sorted.slice(0, n - holding.length)]);
+  // 垫牌/贴牌：出完该门剩下的牌 + 最不心疼的 k 张。
+  // 决定不杀时（同伴已定赢墩 / `ruffPolicy: never`）先把非主牌垫出去 —— 缺门时用主牌
+  // 「垫牌」其实就是杀牌，会把这一墩从同伴手里抢回来，白花一张主牌。
+  const need = n - holding.length;
+  const offClass = [...hand].filter((c) => cardClass(c, t) !== info.cardClass);
+  let pool = offClass;
+  if (keepTrumpsBack && info.cardClass !== 'T') {
+    const nonTrump = offClass.filter((c) => cardClass(c, t) !== 'T');
+    if (nonTrump.length >= need) pool = nonTrump;
+  }
+  const sorted = [...pool].sort((a, b) =>
+    feed ? feedValue(b, t) - feedValue(a, t) : discardValue(a, t, p.discardPointWeight) - discardValue(b, t, p.discardPointWeight)
+  );
+  return verify([...holding, ...sorted.slice(0, need)]);
 }
 
 /**
@@ -483,7 +717,13 @@ function buildFollow(
 }
 
 /** 兜底出牌：策略构造失败（理论不该发生）时的合法保底，绝不让桌面卡在机器人手里 */
-function fallbackPlay(hand: readonly Card[], t: TrumpModel, lead: readonly Card[] | null, n: number): Card[] {
+function fallbackPlay(
+  hand: readonly Card[],
+  t: TrumpModel,
+  lead: readonly Card[] | null,
+  n: number,
+  p: BotParams
+): Card[] {
   const ok = (cards: readonly Card[]): boolean => checkPlay(hand, cards, t, lead) === null;
   if (lead === null) return [sortHand(hand, t)[0]!];
   const info = leadInfo(lead, t)!;
@@ -495,7 +735,7 @@ function fallbackPlay(hand: readonly Card[], t: TrumpModel, lead: readonly Card[
   }
   const rest = hand
     .filter((c) => cardClass(c, t) !== info.cardClass)
-    .sort((a, b) => discardValue(a, t) - discardValue(b, t));
+    .sort((a, b) => discardValue(a, t, p.discardPointWeight) - discardValue(b, t, p.discardPointWeight));
   return [...holding, ...rest.slice(0, n - holding.length)];
 }
 

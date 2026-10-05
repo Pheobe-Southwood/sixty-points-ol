@@ -185,7 +185,7 @@ test('同一种子完全可复现（策略确定性）', () => {
   }
 });
 
-test('全 pass 重发不失控（门槛 12 之后实测 6%，这里卡 50%）', () => {
+test('全 pass 重发不失控（门槛 12 之后实测 3–5%，这里卡 50%）', () => {
   let totalRedeals = 0;
   let totalDeals = 0;
   for (let seed = 1; seed <= SEEDS; seed++) {
@@ -196,7 +196,7 @@ test('全 pass 重发不失控（门槛 12 之后实测 6%，这里卡 50%）', 
   assert.ok(totalDeals > 0);
   assert.ok(
     totalRedeals < totalDeals * 0.5,
-    `重发 ${totalRedeals} 次 / 结算 ${totalDeals} 副：叫牌太保守（初版实测 36%，现在是 6%）`
+    `重发 ${totalRedeals} 次 / 结算 ${totalDeals} 副：叫牌太保守（初版门槛 15 实测 36%）`
   );
 });
 
@@ -209,9 +209,12 @@ test('叫牌够进取：一半以上的开叫机会有人开叫', () => {
     opened += out.opened;
   }
   assert.ok(openings > 0);
+  // 这条只受 `BotParams.bidBar` 影响（门槛 12 ⇒ 实测 ~54%）；ADR-0017 把**竞叫阶梯**
+  // 也参数化了，但那动的是「要不要把别人的庄家位抢过来」，与本条的读数无关 ——
+  // 所以这里钉住不动，是为了让「门槛被谁调低了」这件事单独看得见。
   assert.ok(
     opened / openings >= 0.5,
-    `开叫率只有 ${((opened / openings) * 100).toFixed(1)}%：门槛又变保守了（实测应为 ~59%）`
+    `开叫率只有 ${((opened / openings) * 100).toFixed(1)}%：门槛又变保守了（门槛 12 实测 ~54%）`
   );
 });
 

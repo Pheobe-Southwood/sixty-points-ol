@@ -11,7 +11,8 @@
   },
   "scripts": {
     "test": "node --test --test-isolation=none \"test/*.test.ts\"",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "arena": "node scripts/arena.ts"
   },
   "dependencies": {
     "@sixty/engine": "workspace:*"

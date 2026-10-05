@@ -9,7 +9,14 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const ALLOWED_IMPORTS = new Set(['@sixty/engine', './sight.ts', './policy.ts', './sim.ts', './index.ts']);
+const ALLOWED_IMPORTS = new Set([
+  '@sixty/engine',
+  './sight.ts',
+  './policy.ts',
+  './sim.ts',
+  './arena.ts',
+  './index.ts'
+]);
 
 const FORBIDDEN_NAMES = [
   'node:fs',
@@ -23,15 +30,23 @@ const FORBIDDEN_NAMES = [
   'Date.now'
 ];
 
-const SOURCE_FILES = ['index.ts', 'policy.ts', 'sight.ts', 'sim.ts'].map((name) =>
+const SOURCE_FILES = ['index.ts', 'policy.ts', 'sight.ts', 'sim.ts', 'arena.ts'].map((name) =>
   fileURLToPath(new URL(`../src/${name}`, import.meta.url))
 );
+
+/**
+ * 剥掉注释：**块注释也要剥**（只剥行注释是个假阳性盲区 —— 文档注释里最需要正当地写出
+ * 「这里没有 `Math.random`」这类说明，漏剥就等于逼着作者把注释写得含糊）。
+ * 先剥块再剥行，否则块注释里的 `//` 会先把后半段吃掉。
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
 
 test('策略包源码只依赖引擎且无 IO/随机', () => {
   for (const file of SOURCE_FILES) {
     const source = readFileSync(file, 'utf8');
-    // 去掉行注释（注释里会正当地提到这些名字）
-    const code = source.replace(/\/\/[^\n]*/g, '');
+    const code = stripComments(source);
     for (const name of FORBIDDEN_NAMES) {
       assert.ok(!code.includes(name), `${file} 出现了 ${name}：策略必须是纯函数`);
     }
@@ -47,9 +62,15 @@ test('策略包源码只依赖引擎且无 IO/随机', () => {
 test('守卫非空转：违规源码必须被抓住', () => {
   // 拿真正的违规源码喂同一段判断，证明禁用名单与 import 白名单都会命中
   const bad = 'import { readFileSync } from "node:fs";\nconst x = Math.random();';
-  assert.ok(bad.includes('node:fs'), '样例源码应包含 node:fs');
-  assert.ok(bad.includes('Math.random'), '样例源码应包含 Math.random');
-  const imports = [...bad.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
+  assert.ok(stripComments(bad).includes('node:fs'), '样例源码应包含 node:fs');
+  assert.ok(stripComments(bad).includes('Math.random'), '样例源码应包含 Math.random');
+  // 块注释里的同名文字**不是**违规（否则文档注释没法解释这条守卫）；行注释同理
+  const inComments = '/** 这里没有 Date.now 与 Math.random */\n// 也没有 node:fs';
+  assert.ok(!FORBIDDEN_NAMES.some((name) => stripComments(inComments).includes(name)));
+  // 但同一行注释末尾的真代码必须还抓得住（剥注释不能连代码一起吃掉）
+  const trailing = '/* 注释 */ const t = Date.now();';
+  assert.ok(stripComments(trailing).includes('Date.now'));
+  const imports = [...stripComments(bad).matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
   assert.deepEqual(imports, ['node:fs']);
   assert.ok(!ALLOWED_IMPORTS.has(imports[0]!), 'node:fs 不该在 import 白名单里');
   // 注释被剥掉之后不该再命中（否则守卫会把解释性注释当成违规）
