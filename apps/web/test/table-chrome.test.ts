@@ -1183,3 +1183,41 @@ test('反证：升级表也加入口、弹窗丢入口、重演里自写算式�
     '页面不再持有重演数据通道没有被判出来'
   );
 });
+
+test('座位卡上的名字不许被裁剪：机器人名字曾在卡上只剩「机…」', () => {
+  const source = code(seatCard);
+  // 参照物：头行必须在，否则下面的判据会跟着一起「通过」（守卫空转）
+  assert.ok(
+    source.includes('flex items-center gap-2">'),
+    '座位卡的头行不见了 —— 判据变了，请重看这条守卫'
+  );
+  const nameNode = /<p class="([^"]*)">\{name \?\? '空座'\}<\/p>/.exec(source);
+  assert.ok(nameNode !== null, '座位卡里找不到名字节点（<p>{name ?? 空座}</p>），判据变了');
+  const classes = nameNode[1] ?? '';
+  // 名字与头像/徽标/级别同处一行时，只有名字是 flex-1：实测 176px 的卡只剩 23.6px、
+  // `w-36` 的手机卡只剩 0px，而「机器人·小六」需要 76px —— 卡上于是只画出「机…」。
+  for (const forbidden of ['truncate', 'line-clamp', 'whitespace-nowrap', 'overflow-hidden']) {
+    assert.ok(
+      !classes.includes(forbidden),
+      `名字节点带上了 ${forbidden}：窄卡上会被裁掉（实测「机器人·小六」需要 76px）`
+    );
+  }
+  assert.ok(
+    classes.includes('break-words'),
+    '名字节点不再折行（缺 break-words）：长名字会溢出卡片而不是换行'
+  );
+  // 名字不许自己当那个 flex item —— 那正是被装饰吃干净的原因；它必须住在 flex-1 的列里
+  assert.ok(
+    !/<p class="min-w-0 flex-1/.test(source),
+    '名字又自己当 flex item 了：它会与头像/徽标/级别抢同一行，重新被挤成「机…」'
+  );
+  assert.ok(
+    source.includes('<div class="min-w-0 flex-1">'),
+    '座位卡里没有包住名字的 min-w-0 flex-1 列：名字失去了独占的那一行'
+  );
+  // 文档化的两样东西不许被顺手删掉（CONTEXT.md：机器人照旧是一张普通座位卡，
+  // 只多一枚「机器人」徽标与一个「请离」入口）
+  assert.ok(source.includes('>机器人</span'), '座位卡上少了「机器人」徽标');
+  assert.ok(source.includes('请离'), '座位卡上少了「请离」入口');
+  assert.ok(source.includes('<LevelBadge'), '座位卡上少了级别徽标');
+});

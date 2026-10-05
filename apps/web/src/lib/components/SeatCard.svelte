@@ -67,7 +67,18 @@
     >
   {/if}
 
-  <div class="flex items-center gap-2.5">
+  <!--
+    名字独占一列，装饰不许与它抢同一行。同一行里只有名字是 flex-1、其余全是 shrink-0，宽度会被
+    吃干净：实测 176px 的卡能给名字的只剩 23.6px（`w-36` 的手机卡是 0px），而「机器人·小六」
+    需要 76px —— 于是机器人只画出「机…」，手机上干脆什么都看不到（人类名「截图玩家」也只剩
+    0.4px 余量）。所以：名字进 `min-w-0 flex-1` 的列、去掉 `truncate`（改 `break-words`，
+    宁可折行也不隐藏，合法名字上限 12 字），「机器人」徽标下移一行。
+
+    卡高在 ≥640px 时不变：级别徽标实测 40px 高，而「名字 18px + 徽标行 19px」= 37px ≤ 40px。
+    `gap-2`（而非 2.5）也是量出来的：名字列 79.6px ≥ 76px，全名正好一行放得下。
+    加宽卡片不是替代方案 —— 容下这一行要 ≈240px，640px 视口下会撞上居中的大厅面板。
+  -->
+  <div class="flex items-center gap-2">
     <div class="relative shrink-0">
       <div
         class={[
@@ -83,14 +94,15 @@
       {/if}
     </div>
 
-    <p class="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">{name ?? '空座'}</p>
-
-    {#if bot}
-      <span
-        class="shrink-0 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/70"
-        title="机器人：由服务器代打（没有凭据串，不可能被人冒充）">机器人</span
-      >
-    {/if}
+    <div class="min-w-0 flex-1">
+      <p class="break-words text-sm font-semibold leading-tight">{name ?? '空座'}</p>
+      {#if bot}
+        <span
+          class="mt-0.5 inline-block rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-white/70"
+          title="机器人：由服务器代打（没有凭据串，不可能被人冒充）">机器人</span
+        >
+      {/if}
+    </div>
 
     {#if level}
       <LevelBadge {level} class="shrink-0" />

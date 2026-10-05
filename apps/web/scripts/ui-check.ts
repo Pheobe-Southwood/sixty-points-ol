@@ -392,6 +392,56 @@ async function main(): Promise<void> {
   }
   assertNoPositionMix(lobby, '未开局页面');
 
+  // 4b) 座位卡上的名字不许被裁剪。实测：名字与 36px 头像 +「机器人」徽标 + 级别徽标同处一行时，
+  //     176px 的卡只剩 23.6px、`w-36` 的手机卡只剩 0px，而「机器人·小六」需要 76px ——
+  //     卡上于是只画出「机…」，手机上干脆什么都看不到。这里只有 fetch、量不到几何（几何由浏览器
+  //     走查量），所以守渲染出来的**形状**：名字节点是 `<p class="text-sm font-semibold leading-tight">`，
+  //     它的 class 里不许出现裁切类。这个类名组合在全仓只出现在 SeatCard.svelte（见该文件注释）。
+  //     整页会有 6 个这样的节点：毡面 3 张 + 抽屉「牌桌」页里同款组件的 3 张（那一页常驻 DOM）。
+  //     两边是同一份组件、同一条判据，所以一起断言；计数只做下限——判据一变就没人可查，守卫会空转。
+  const nameNodesOf = (html: string): string[][] =>
+    [...html.matchAll(/<p class="([^"]*)">([^<]{1,24})<\/p>/g)]
+      .map((match) => [match[1] ?? '', match[2] ?? ''])
+      .filter(([cls]) => /\btext-sm font-semibold leading-tight\b/.test(cls));
+  const nameNodes = nameNodesOf(lobby);
+  assert(
+    nameNodes.length >= 3,
+    `座位卡名字节点应至少有 3 个（毡面三张），实际 ${nameNodes.length} 个：判据（类名组合）变了，这条守卫会空转`
+  );
+  for (const [cls, text] of nameNodes) {
+    for (const forbidden of ['truncate', 'line-clamp', 'whitespace-nowrap', 'overflow-hidden']) {
+      assert(
+        !cls.includes(forbidden),
+        `座位卡上的名字带了 ${forbidden}：窄卡上会被裁成「机…」（实测「机器人·小六」需要 76px）—— [${cls}] ${text}`
+      );
+    }
+  }
+
+  // 4c) 机器人座位：名字节点里必须是**全名**（带「机器人·」前缀），徽标与「请离」入口都还在。
+  //     HTML 里一直是全名（当年被裁掉的是 CSS），所以这条抓的是**显示名被改短**，
+  //     4b 抓的是**被裁**（CONTEXT.md：机器人照旧是一张普通座位卡，只多一枚徽标与一个「请离」入口）。
+  const botTable = (await fetch(`${BASE}/api/tables`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${players[0]!.credential}` }
+  }).then((response) => response.json())) as { code: string };
+  const botAdded = await fetch(`${BASE}/api/tables/${botTable.code}/bot`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${players[0]!.credential}` }
+  });
+  assert(botAdded.ok, `加机器人失败：${botAdded.status}`);
+  const botLobby = await page(`/table/${botTable.code}`, players[0]!.credential);
+  const botNames = nameNodesOf(botLobby).map(([, text]) => text ?? '');
+  const botName = botNames.find((text) => text.startsWith('机器人'));
+  assert(
+    botName?.startsWith('机器人·') === true,
+    `机器人卡上的名字不是全名（座位卡不许把「机器人·」前缀吃掉）：${JSON.stringify(botNames)}`
+  );
+  assert(botLobby.includes('>机器人</span'), '机器人卡上少了「机器人」徽标');
+  assert(botLobby.includes('请离'), '机器人卡上少了「请离」入口');
+  console.log(
+    `界面结构：${nameNodes.length} 个座位卡名字节点都不裁剪，机器人卡上是全名「${botName}」且徽标与「请离」入口都在`
+  );
+
   // 5) 发牌后：仍是同一个「?」入口，但内容换成叫牌阶段；等待类提示与方位称谓都不该出现
   const dealt = await fetch(`${BASE}/api/tables/${code}/action`, {
     method: 'POST',
