@@ -10,22 +10,43 @@
  *    不得再出现东/南/西方位称谓。
  * 4. 牌面：大小王的角落（大+王）与正中（大王）必须指向同一张牌；牌角不得再有任何装饰圆点
  *    —— 这一条抓的是**出货样式表**，不是源码（源码删了但产物没重建，一样会被抓到）。
+ *    主牌只许改 `background`（浅金底），不许再改边框颜色；叫牌阶段另有 `.card.rank-hint`
+ *    （比主牌再浅一档，标「点数可能成为级牌」的牌）。
  * 5. 叫品一律写「分数 + 花色字形」：页面文本里不许再出现 `40 C` 这种裸花色字母
  *    —— 回归的是「叫牌历史走引擎 bidLabel(40 梅花)、候选按钮走 strainGlyph(♣)」那种一物两写。
- * 6. 出牌按钮：必须带 `.play-btn`（z-index 抬到手牌之上 + ≥44px 命中区）。
- *    叫牌面板必须自己就是**唯一**的滚动区，而「不叫」必须是它内部的 sticky 底部页脚
- *    （判据在 src/lib/panel-guard.ts，源码守卫 test/bid-panel.test.ts 用的是同一份）
- *    —— 旧守只断言「页面里有 max-h-* 与 overflow-y-auto」，这两个类一直都在，所以对
- *    「面板把最后一行裁掉、按钮再也滚不回来」这次故障完全瞎。
- * 7. 底牌可见性：庄家埋底页要能看见「你拿上来的底牌」；闲家的同一页不能出现它。
- *    这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家，观战者更没有）。
+ * 6. 出牌按钮：必须带 `.play-btn`（36px 命中高度 + z-index 抬在毡面之上）。
+ *    叫牌面板的可达性（判据在 src/lib/panel-guard.ts，源码守卫 test/bid-panel.test.ts 用同一份）：
+ *    面板是 flex 列，**唯一可伸缩**的是叫牌历史的滚动区（min-h-0 + flex-1 + overflow-y-auto），
+ *    「不叫」排在它后面、正常文档流、shrink-0 —— 页脚既不压住内容，也不会被裁掉或顶出面板。
+ *    两代坏形状都被钉住：`overflow-hidden` 从底部裁掉最后一行（按钮再也滚不回来）、
+ *    sticky 页脚浮在历史行上（压掉半行叫牌记录 —— 截图里那半行就是这么丢的）。
+ * 6b. 叫牌面板的内容：头部只写「第 N 副」（发牌人文案已删 ——「发牌」对新手不透明，
+ *    谁先叫由轮次 chip 说）、历史是**三列表格**（一行塞几个人不再由昵称长度决定）、
+ *    候选叫品**只摆三档**（正常不跳叫，多余档位只会把面板撑高）。
+ *    「信息面 → 候选档位 → 历史（自己滚） → 页脚」这个顺序由源码守卫钉住。
+ * 7. 底牌可见性：庄家的埋底页要有「拿上来的底牌」那一行（`data-taken-kitty` 钩子）；闲家与观战者
+ *    的同一页不能出现它。这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家）。
+ *    埋底页也不再写「埋底 · 选 3 张扣入暗底 / 庄家埋底中」与底牌说明句（说明归「?」、动作提示归
+ *    操作条），并且定约/庄已抓必须是大号数字 —— 这两条一起抓「文案与字号又回潮」。
+ * 7b. **出牌阶段**（真的把牌打出去）：动作控件活在一条**钉在操作条正上方**的单行浮层里
+ *    （`data-action-tray`：`absolute bottom-full` + `left-1/2` + `z-30` + `flex-nowrap` + `w-max`；
+ *    垂直居中悬在操作条上、或允许换行，都会垂下来盖住手牌 —— 截图里返工过；
+ *    `left-1/2` 的绝对定位盒在 shrink-to-fit 下只有半个容器宽，没有 `w-max` 时子项被压缩、
+ *    中文按钮会竖排，所以每个按钮还要自带 `whitespace-nowrap`），操作条只剩
+ *    「?」、状态句与右端的计时；跟牌时手牌把**领出那一门**标成蓝框（数量必须等于该门在手里
+ *    的张数，期望值从 `/view` 现算，不写死花色）；收墩后的徽标只说「庄 +N 分 / 闲 +N 分」。
+ *    轮空的人与观战者既没有托盘、也没有任何蓝框。
+ * 7c. **「距上一步」计时**：未发牌的大厅页没有它（还没有牌局动作）；发牌后玩家页与观战页都有，
+ *    并且**真的在走** —— 取两次（中间等 1.2 秒）秒数必须变大、且增幅合理（抓「冻住的时钟」与单位错）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
- * 9. **页头只留必要信息**：`← 大厅`、邀请码（外加观战者补位用的「入座」）—— 战报/教程/改名/
- *    离座/观战人数一律不许再出现在页头，它们属于右侧的活页签抽屉；连接圆点也已下线（正常与首帧
- *    都不占像素，只有 SSE 断开时才在页头下方出一句话）。这条守的是「页头又爆满」这个已经发生过
- *    两次的回归，顺带守住那枚绿点不回来、也守住断线提示不变成常显。
- * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 我` 四项、顺序固定；抽屉默认是关闭态
- *    （`inert` + 滑出屏幕）；而「我」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
+ * 9. **页头只留必要信息**：`← 大厅`、邀请码，外加右上角那枚**桌况簇**（观战人数含 0 常显；
+ *    在座给「离座」、不在座给「改名」+ 有空座才给「入座」）—— 战报/教程/叫牌/底牌/结算详情
+ *    一律不许出现在页头，它们属于右侧的活页签抽屉；连接圆点也已下线（正常与首帧都不占像素，
+ *    只有 SSE 断开时才在页头下方出一句话）。两次「页头爆满」堆进去的都是**查阅**入口，而桌况簇
+ *    是有界的一枚人数加至多两枚小按钮（且都是有时间性的一步动作），所以它回到了页头；
+ *    这条顺带守住那枚绿点不回来、也守住断线提示不变成常显。
+ * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 牌桌` 四项、顺序固定；抽屉默认是关闭态
+ *    （`inert` + 滑出屏幕）；而「牌桌」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
  * /learn 还额外守住幻灯机骨架（幻灯片语义、自动播放、每屏 aria-label、无裸花色字母）
@@ -34,6 +55,7 @@
  *
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
+import { cardClass, cardKey, checkPlay, type Card, type TrumpModel } from '@sixty/engine';
 import { checkBidPanelReachability } from '../src/lib/panel-guard.ts';
 
 // BASE 优先取环境变量；没有 env 注入的场景（例如沙箱里通过 bridge 跑）可以直接把地址当参数传：
@@ -148,8 +170,9 @@ function headerOf(html: string): string {
 }
 
 /**
- * 页头只留必要信息：大厅、邀请码（+ 观战者的「入座」）。
- * 其余一律在右侧活页签抽屉里 —— 这条守的是「手机端页头又爆满」这个已经发生过两次的回归。
+ * 页头只留必要信息：大厅、邀请码，以及右上角那枚**桌况簇**（观战人数 + 一步动作）。
+ * 其余一律在右侧活页签抽屉里 —— 这条守的是「手机端页头又爆满」这个已经发生过两次的回归；
+ * 那两次堆进去的都是**查阅**入口（战报、教程、历史记录），而桌况簇是有界的一行。
  *
  * 连接状态也归在这里管：它不再是常驻指示器（绿点已下线），只在 SSE 断开时出声。
  * 抓的是**出货 SSR HTML**，所以后半条同时证明「提示条没有变成常显」——SSR 首帧的
@@ -157,9 +180,13 @@ function headerOf(html: string): string {
  */
 function assertLeanHeader(html: string, where: string): void {
   const header = headerOf(html);
-  for (const stray of ['战报', '教程', '改名', '离座', '观战']) {
+  for (const stray of ['战报', '教程', '叫牌', '底牌', '结算详情']) {
     assert(!header.includes(stray), `${where}：页头里仍出现「${stray}」（它应当只在右侧活页签抽屉里）`);
   }
+  assert(
+    header.includes('人观战'),
+    `${where}：页头右上角没有观战人数（含 0 常显，所以它任何时候都在）`
+  );
   assert(header.includes('大厅'), `${where}：页头没有回大厅的入口`);
   assert(
     /<button[^>]*aria-label="复制邀请链接"/.test(header),
@@ -175,6 +202,17 @@ function assertLeanHeader(html: string, where: string): void {
   );
 }
 
+/**
+ * 页头右上角的桌况簇按「在不在座」换按钮：在座给「离座」、不在座给「改名」（有空座才多一枚「入座」）。
+ * 这里是**出货 HTML** 上的证据；源码层那三条判据在 `test/table-chrome.test.ts` 的 `headerClusterCheck`。
+ */
+function assertHeaderSeatAction(html: string, where: string, label: '离座' | '改名'): void {
+  const header = headerOf(html);
+  assert(header.includes(label), `${where}：页头桌况簇里没有「${label}」（在座给离座、不在座给改名）`);
+  const other = label === '离座' ? '改名' : '离座';
+  assert(!header.includes(other), `${where}：页头桌况簇同时出现了「${label}」与「${other}」`);
+}
+
 /** 右边缘活页签条：四项、顺序固定（`lib/drawer-tabs.ts` 是唯一真相） */
 function assertTabRail(html: string, where: string): void {
   const rail = /<div[^>]*role="tablist"[\s\S]*?<\/div>/.exec(html)?.[0];
@@ -183,14 +221,14 @@ function assertTabRail(html: string, where: string): void {
     (m) => m[1]
   );
   assert(
-    JSON.stringify(labels) === JSON.stringify(['战报', '叫牌', '底牌', '我']),
-    `${where}：页签应为 战报/叫牌/底牌/我 且顺序固定，实际 [${labels.join(', ')}]`
+    JSON.stringify(labels) === JSON.stringify(['战报', '叫牌', '底牌', '牌桌']),
+    `${where}：页签应为 战报/叫牌/底牌/牌桌 且顺序固定，实际 [${labels.join(', ')}]`
   );
 }
 
 /** 抽屉默认关闭：外壳仍在 DOM 里，但滑出屏幕且 inert（不可聚焦、不读屏） */
 function assertDrawerClosed(html: string, where: string): void {
-  // 只看 aside **自己的开标签**：整段子树里本来就含 inert（常驻的「我」页带自己的 inert），
+  // 只看 aside **自己的开标签**：整段子树里本来就含 inert（常驻的「牌桌」页带自己的 inert），
   // 对着子树断言会变成空转 —— 注入实验里 `inert={false}` 也能通过，就是这么被抓出来的。
   const tag = /<aside[^>]*>/.exec(html)?.[0];
   assert(tag !== undefined, `${where}：找不到抽屉外壳（aside）`);
@@ -199,19 +237,100 @@ function assertDrawerClosed(html: string, where: string): void {
 }
 
 /** 叫品文本里的裸花色字母：`40 C` / `45 H` 这类（花色必须出字形 ♣♦♥♠） */
-function bareStrainLetters(html: string): string[] {
-  const text = html.replace(/<[^>]*>/g, ' ');
+/**
+ * 叫品文本里的裸花色字母：`40 C` / `45 H` 这类（花色必须出字形 ♣♦♥♠）。
+ *
+ * `ignore` 里的子串先从文本里删掉再匹配：**邀请码是随机 6 位码**（字母表含数字与 C/D/H/S），
+ * 出现过 `34W29H` 这种恰好命中 `\d\d[CDHS]\b` 的码 —— 它一张牌都没叫，却让守卫红了一次。
+ * 忽略已知的随机串，守卫才既能抓住真的 `40 C`，又不会按 1/120 的概率误报。
+ */
+function bareStrainLetters(html: string, ignore: readonly string[] = []): string[] {
+  let text = html.replace(/<[^>]*>/g, ' ');
+  for (const noise of ignore) {
+    if (noise.length > 0) text = text.split(noise).join(' ');
+  }
   return [...text.matchAll(/\d{2,3}\s?[CDHS]\b/g)].map((m) => m[0]);
 }
 
 /** 叫牌控件：必须有「不叫」，且叫品不许出现裸花色字母 */
-function assertBidControls(html: string, where: string): void {
+function assertBidControls(html: string, where: string, ignore: readonly string[] = []): void {
   assert(html.includes('不叫'), `${where}：找不到「不叫」按钮`);
-  const stray = bareStrainLetters(html);
+  const stray = bareStrainLetters(html, ignore);
   assert(
     stray.length === 0,
     `${where}：叫品里出现了裸花色字母（应走 strainGlyph/♣♦♥♠）：${stray.join(', ')}`
   );
+}
+
+/** 取叫牌面板 `<section data-bid-panel>` 的切片：面板里的断言只该看面板自己（不掺手牌与抽屉） */
+function bidPanelMarkup(html: string): string {
+  const marker = html.indexOf('data-bid-panel');
+  assert(marker >= 0, '页面里找不到叫牌面板（缺 data-bid-panel）');
+  const end = html.indexOf('</section>', marker);
+  assert(end > marker, '叫牌面板的 <section> 没有闭合');
+  return html.slice(marker, end);
+}
+
+/** 定约状态块的 HTML 片段：从金色描边的容器起取一段（只为断言那个数字的字号够大） */
+function contractMarkup(html: string): string {
+  const start = html.indexOf('ring-gold/25');
+  assert(start >= 0, '页面里找不到定约状态块（ring-gold/25）：定约与庄已抓必须一直在牌面上');
+  return html.slice(start, start + 500);
+}
+
+/** 数表头格：`<thead` 也以 `<th` 开头，所以正则必须带定界符（空格或 `>`） */
+function thCount(html: string): number {
+  return (html.match(/<th[\s>]/g) ?? []).length;
+}
+
+/**
+ * 动作托盘的开标签切片：它是**钉在操作条正上方的一条单行浮层**（见 ActionTray 的注释），
+ * 所以守卫照这里抓：`absolute bottom-full` + `left-1/2 -translate-x-1/2` + `z-30` + `flex-nowrap`
+ * + `w-max` 少一个都会在真机上出问题（垂直居中或换行 → 垂下来压住手牌；宽度被压成半个容器
+ * → 子项被压缩、中文按钮竖排；不绝对定位 → 轮到自己时整页高度跳）。
+ */
+function actionTrayMarkup(html: string): string | null {
+  return /<div[^>]*data-action-tray="true"[^>]*>/.exec(html)?.[0] ?? null;
+}
+
+/**
+ * 动作托盘的整块切片（开标签 → 闭合标签）：用来查按钮自己的 class —— 开标签只看得到根节点。
+ * 托盘的子元素只有 `span` 与 `button`（错误气泡也是 `span`），所以第一个 `</div>` 就是它自己那个。
+ */
+function actionTrayBlock(html: string): string | null {
+  return /<div[^>]*data-action-tray="true"[\s\S]*?<\/div>/.exec(html)?.[0] ?? null;
+}
+
+/**
+ * 页面上的「距上一步」计时 → 秒数。抓不到直接抛：守卫绝不静默跳过。
+ * 三档都要认（`12 秒` / `1 分 05 秒` / `2 小时 03 分`），否则等久了守卫会假红。
+ */
+function clockSeconds(html: string, where: string): number {
+  const match = /距上一步 (?:(\d+) 小时 )?(?:(\d+) 分 )?(\d+) 秒/.exec(html);
+  assert(match !== null, `${where}：找不到「距上一步」计时（时钟不见了，或文案/格式变了）`);
+  return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3]);
+}
+
+/** `/api/tables/<code>/view` 的载荷（在座拿到个人视图；牌面就是引擎的 Card 对象） */
+interface RestPayload {
+  view: { deal: RestDeal | null };
+  you: { seat: number; hand: readonly Card[] } | null;
+}
+
+interface RestDeal {
+  phase: string;
+  trump: TrumpModel | null;
+  declarerSeat: number | null;
+  playTurn: number | null;
+  trick: { leaderSeat: number; plays: readonly { seat: number; cards: readonly Card[] }[] } | null;
+}
+
+async function viewOf(code: string, credential: string): Promise<RestPayload> {
+  const response = await fetch(`${BASE}/api/tables/${code}/view`, {
+    headers: { authorization: `Bearer ${credential}` }
+  });
+  if (!response.ok) throw new Error(`取视图失败：${response.status}`);
+  return (await response.json()) as RestPayload;
 }
 
 async function main(): Promise<void> {
@@ -249,11 +368,12 @@ async function main(): Promise<void> {
   assertNoCompassLabels(lobby, '未开局页面');
   assertHelpTrigger(lobby, '准备阶段', '未开局页面');
   assertLeanHeader(lobby, '未开局页面');
+  assertHeaderSeatAction(lobby, '未开局页面', '离座');
   assertTabRail(lobby, '未开局页面');
   assertDrawerClosed(lobby, '未开局页面');
   assert(
     lobby.includes('改名 / 换身份'),
-    '未开局页面：常驻的「我」页不见了（改名入口应当始终在页面上）'
+    '未开局页面：常驻的「牌桌」页不见了（改名入口应当始终在页面上）'
   );
 
   // 4) 座位卡必须钉在毡面四角（absolute），不能被自身 relative 覆盖
@@ -283,35 +403,59 @@ async function main(): Promise<void> {
   assert(auction.includes('叫牌'), '发牌后页面没有进入叫牌界面');
   assertHelpTrigger(auction, '叫牌：定庄、定主', '叫牌页面');
   assertLeanHeader(auction, '叫牌页面');
+  assertHeaderSeatAction(auction, '叫牌页面', '离座');
   assertTabRail(auction, '叫牌页面');
   assertDrawerClosed(auction, '叫牌页面');
   assertNoRemovedHints(auction, '叫牌页面');
   assertNoCompassLabels(auction, '叫牌页面');
   assert(!auction.includes('等待'), '叫牌页面仍有「等待」式常驻提示');
   assertNoPositionMix(auction, '叫牌页面');
-  // 5b) 叫牌面板：还没人叫时有顶部大字位，并且谁先叫由发牌人决定（不能假设是座位 0）
+
+  // 5a) 未发牌的大厅页没有计时（还没有「上个动作」可说），发牌后就有了，而且**真的在走**。
+  //     走时这一条同时抓两件事：时钟冻住（恒 0）、单位写错（把毫秒当秒 → 一取就跳到几百秒）。
+  assert(
+    !lobby.includes('data-action-clock'),
+    '未发牌的大厅页出现了「距上一步」计时：这一桌还没有任何牌局动作'
+  );
+  const beforeWait = clockSeconds(auction, '叫牌页面');
+  assert(beforeWait < 60, `刚发完牌就显示等了 ${beforeWait} 秒：计时没有从动作那一刻起算`);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const afterWait = clockSeconds(await page(`/table/${code}`, players[0]!.credential), '叫牌页面（1.2 秒后）');
+  assert(
+    afterWait > beforeWait,
+    `计时没有在走：1.2 秒前是 ${beforeWait} 秒，之后还是 ${afterWait} 秒（时钟冻住了？）`
+  );
+  assert(
+    afterWait - beforeWait <= 5,
+    `计时跳得太快：1.2 秒里从 ${beforeWait} 秒变成 ${afterWait} 秒（单位错了？）`
+  );
+  // 5b) 叫牌面板：还没人叫时有顶部大字位；头部只写「第 N 副」（发牌人文案已删 ——
+  //     「发牌」这个词本身对新手不透明，谁先叫由轮次 chip 说清楚）。
   assert(auction.includes('还没人叫'), '叫牌面板顶部没有「还没人叫」大字位');
-  // 发牌人从**视图**里取，不是从文案里反查名字：首副发牌人是随机的，当它正好是 0 号座
-  // （也就是看这个页面的 players[0]）时，界面按设计写「你」，靠名字反查会得到 -1 —— 那正是
-  // 这条守卫曾经偶发失败（约 1/3 概率）的原因，而它要守的恰恰是「不许假设发牌人是座位 0」。
+  assert(auction.includes('第 1 副'), '叫牌面板头部没有「第 1 副」');
+  assert(
+    !auction.includes('发牌'),
+    '叫牌页面仍在写「发牌」：发牌人信息已从界面删除（谁先叫由「X 叫牌中 / 轮到你」表达）'
+  );
+  // 发牌人从**视图**里取而不是从文案里反查名字：首副发牌人是随机的，下面的叫牌脚本必须按它出手。
   const seatView = (await fetch(`${BASE}/api/tables/${code}/view`, {
     headers: { authorization: `Bearer ${players[0]!.credential}` }
   }).then((response) => response.json())) as { view: { deal: { dealerSeat: number } } };
   const dealerIndex = seatView.view.deal.dealerSeat;
-  const dealerLabel = /第 1 副 · (.+?) 发牌/.exec(auction)?.[1];
-  assert(dealerLabel !== undefined, '叫牌面板没有写出谁发牌');
-  const expectedDealer = dealerIndex === 0 ? '你' : players[dealerIndex]!.name;
-  assert(
-    dealerLabel === expectedDealer,
-    `叫牌面板的发牌人文案对不上：页面「${dealerLabel}」，${dealerIndex} 号座应为「${expectedDealer}」`
-  );
   assert(
     auction.includes('叫牌中') || auction.includes('轮到你'),
     '叫牌面板没有标出当前轮到谁'
   );
+  // 历史必须是三列表格：一行塞几个人不再由昵称长度决定
+  const panelIdle = bidPanelMarkup(auction);
+  assert(panelIdle.includes('<table'), '叫牌历史不是表格（昵称长度会决定一行塞几个人）');
+  assert(
+    thCount(panelIdle) === 3,
+    `叫牌历史表头应是 3 列（三位玩家），实际 ${thCount(panelIdle)} 列`
+  );
   // 此刻不一定是自己的轮次（发牌人随机），所以只看面板本身、不要求「不叫」在页面上
-  const panelIdle = checkBidPanelReachability(auction, { requirePassButton: false });
-  assert(panelIdle.ok, `叫牌面板不可达：${panelIdle.reason}`);
+  const panelIdleReach = checkBidPanelReachability(auction, { requirePassButton: false });
+  assert(panelIdleReach.ok, `叫牌面板不可达：${panelIdleReach.reason}`);
 
   // 5c) 轮到自己时：候选按钮是花色字形、「不叫」在页面里；随后 1 叫 + 2 pass 成交
   const dealerCred = players[dealerIndex]!.credential;
@@ -319,21 +463,35 @@ async function main(): Promise<void> {
   await act(code, dealerCred, { type: 'bid', call: { points: 40, strain: 'C' } });
   const secondBidder = await page(`/table/${code}`, players[nextIndex]!.credential);
   assert(secondBidder.includes('轮到你'), '第二位叫牌人的页面没有「轮到你」');
-  assertBidControls(secondBidder, '叫牌页面（轮到你）');
-  // 「不叫」必须钉在面板底部的 sticky 页脚上：面板自己是唯一滚动区，按钮任何视口高度都在
-  const panelMine = checkBidPanelReachability(secondBidder);
-  assert(panelMine.ok, `轮到自己时「不叫」不可达：${panelMine.reason}`);
+  assertBidControls(secondBidder, '叫牌页面（轮到你）', [code]);
+  // 「不叫」必须是历史滚动区之后、正常文档流里的页脚：不压住任何一行，也不会被顶出面板
+  const panelMineReach = checkBidPanelReachability(secondBidder);
+  assert(panelMineReach.ok, `轮到自己时「不叫」不可达：${panelMineReach.reason}`);
   for (const glyph of ['♣', '♦', '♥', '♠']) {
     assert(secondBidder.includes(glyph), `叫牌候选按钮里缺花色字形 ${glyph}`);
   }
   assert(secondBidder.includes('40♣'), `叫牌历史里应看到「40♣」，实际页面里没有`);
+  // 三档：候选只摆基准、+5、+10（正常情况不跳叫）；更大的跳叫只能走 API/MCP
+  const panelMine = bidPanelMarkup(secondBidder);
+  for (const points of ['>40<', '>45<', '>50<']) {
+    assert(panelMine.includes(points), `候选档位缺 ${points}（应恰有三档：基准 +5/+10）`);
+  }
+  assert(!panelMine.includes('>55<'), '候选档位出现了第四档（>55<）：面板只应摆三档');
+  assert(thCount(panelMine) === 3, '叫牌历史表头不是 3 列（三位玩家）');
   await act(code, players[nextIndex]!.credential, { type: 'bid', call: 'pass' });
   await act(code, players[(dealerIndex + 2) % 3]!.credential, { type: 'bid', call: 'pass' });
 
-  // 6) 埋底：庄家（= 发牌人）看得到「拿上来的底牌」
+  // 6) 埋底：庄家（= 发牌人）看得到「拿上来的底牌」那一行
   const bury = await page(`/table/${code}`, dealerCred);
-  assert(bury.includes('埋底'), '成交后庄家页面没有进入埋底界面');
-  assert(bury.includes('你拿上来的底牌'), '埋底页面没有点明拿上来的底牌');
+  assert(bury.includes('确认埋底'), '成交后庄家页面没有进入埋底界面（缺「确认埋底」）');
+  assert(
+    clockSeconds(bury, '埋底页面') < 60,
+    '埋底页面上的「距上一步」不是刚成交的那个动作（计时没跟着动作重置）'
+  );
+  assert(
+    bury.includes('data-taken-kitty="true"'),
+    '埋底页面没有把「拿上来的底牌」单独摆出来（底牌并进 20 张手牌后庄家认不出是哪三张）'
+  );
   for (const glyph of ['♣', '♦', '♥', '♠']) {
     assert(bury.includes(glyph), `埋底页面缺花色字形 ${glyph}`);
   }
@@ -342,11 +500,28 @@ async function main(): Promise<void> {
   assert(marked === 6, `庄家埋底页面应有 6 处底牌标记（手牌 3 + 底牌行 3），实际 ${marked}`);
   const prow = (bury.match(/底牌 [123]/g) ?? []).length;
   assert(prow === 3, `底牌行应有 3 个可点按钮，实际 ${prow}`);
+  // 6c) 埋底页的文案已经收敛：那三句都不再出现（说明在「?」里、动作提示在操作条上）
+  for (const gone of ['你拿上来的底牌', '选 3 张扣入暗底', '庄家埋底中']) {
+    assert(!bury.includes(gone), `埋底页面仍在写「${gone}」：这句已删`);
+  }
+  // 6d) 定约与庄已抓是**大号金数字**（小号 chip 被判为不显眼）
+  const statusBlock = contractMarkup(bury);
+  assert(
+    statusBlock.includes('text-2xl'),
+    `定约数字又缩回小号了（缺 text-2xl）：${statusBlock.slice(0, 120)}`
+  );
+  assert(
+    /庄已抓[\s\S]{0,200}?text-2xl/.test(bury),
+    '「庄已抓」的分数不是大号数字（缺 text-2xl）'
+  );
 
   // 6b) 闲家看不到底牌：同一页没有底牌行，也没有任何标记
   const defenderIndex = nextIndex === dealerIndex ? (dealerIndex + 2) % 3 : nextIndex;
   const defender = await page(`/table/${code}`, players[defenderIndex]!.credential);
-  assert(!defender.includes('你拿上来的底牌'), '闲家页面不该出现「你拿上来的底牌」');
+  assert(
+    !defender.includes('data-taken-kitty="true"'),
+    '闲家页面不该出现「拿上来的底牌」那一行（它对闲家必须是 null）'
+  );
   assert(
     !defender.includes('data-marked="true"'),
     '闲家页面不该有任何底牌标记（拿上来的底牌对闲家必须是 null）'
@@ -365,16 +540,20 @@ async function main(): Promise<void> {
   assert(!watching.includes('开始第一副'), '观战页面仍渲染了开局按钮');
   assert(!watching.includes('不叫'), '观战页面出现了叫牌按钮');
   assert(!watching.includes('确认埋底'), '观战页面出现了埋底按钮');
-  assert(!watching.includes('你拿上来的底牌'), '观战页面出现了庄家私有的底牌行');
+  assert(
+    !watching.includes('data-taken-kitty="true"'),
+    '观战页面出现了庄家私有的「拿上来的底牌」那一行'
+  );
   assert(!watching.includes('data-marked="true"'), '观战页面出现了底牌标记');
   assert(!/class="card[ "]/.test(watching), '观战页面渲染了牌（手牌或其他人的牌）');
   assert(watching.includes('改名 / 换身份'), '观战页面没有身份快捷编辑入口');
   assert(!watching.includes('补进了空座'), '观战页面出现了「接下手牌」提示（那是补位玩家的）');
   assertHelpTrigger(watching, '观战', '观战页面');
   assertLeanHeader(watching, '观战页面');
+  assertHeaderSeatAction(watching, '观战页面', '改名');
   assertTabRail(watching, '观战页面');
   assertDrawerClosed(watching, '观战页面');
-  assert(watching.includes('座位已满'), '观战页面没有说清座位已满（常驻的「我」页里应当有）');
+  assert(watching.includes('座位已满'), '观战页面没有说清座位已满（常驻的「牌桌」页里应当有）');
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');
   assertNoPositionMix(watching, '观战页面');
@@ -389,6 +568,121 @@ async function main(): Promise<void> {
     assert(found.length === 1 && found[0] === 'absolute', `观战座位卡定位类应唯一为 absolute：${value.slice(0, 120)}`);
   }
   console.log('观战页面：无操作按钮、无牌面、无底牌标记，三张座位卡仍钉在毡面上，「?」给的是观战说明');
+
+  // 7b) 出牌阶段：动作托盘 / 跟牌蓝框 / 赢墩徽标 ---------------------------------
+  //     埋底后由庄家领出、下家跟牌。牌面是随机发的，所以期望值一律从 `/view` 现算 ——
+  //     写死花色的断言只能在某一种发牌下通过（等于空转）。
+  const beforeBury = await viewOf(code, dealerCred);
+  const buryDeal = beforeBury.view.deal;
+  if (buryDeal === null) throw new Error('庄家此刻还没有牌局，无法进入出牌阶段');
+  assert(buryDeal.phase === 'bury', `庄家此刻应处于埋底阶段，实际 ${buryDeal.phase}`);
+  const trump = buryDeal.trump;
+  if (trump === null) throw new Error('埋底阶段应当已经有将牌模型（定约已成交）');
+  const own = beforeBury.you?.hand ?? [];
+  const followerHand = (await viewOf(code, players[nextIndex]!.credential)).you?.hand ?? [];
+  const countIn = (cls: string): number =>
+    followerHand.filter((card) => cardClass(card, trump) === cls).length;
+  // 领出「下家手上有牌」的那一门：既贴近真实打法，也让下面「蓝框数 = 该门张数」不落空
+  const lead = [...own].sort((a, b) => countIn(cardClass(b, trump)) - countIn(cardClass(a, trump)))[0]!;
+  const ledClass = cardClass(lead, trump);
+  const expectedMarks = countIn(ledClass);
+  assert(
+    expectedMarks > 0,
+    `下家在能领的每一门上都缺门（极罕见的发牌，${ledClass} 一张没有）：这次验证不了跟牌蓝框，重跑即可`
+  );
+
+  /** 替「该出牌的那个座位」出一张合法牌：座位从视图现算，牌面走引擎的 checkPlay（与界面同一份规则） */
+  async function playOneLegalCard(): Promise<void> {
+    const turn = (await viewOf(code, dealerCred)).view.deal?.playTurn ?? null;
+    assert(turn !== null, '当前不在出牌阶段（playTurn 为 null）');
+    const credential = players[turn]!.credential;
+    const state = await viewOf(code, credential);
+    const hand = state.you?.hand ?? [];
+    const plays = state.view.deal?.trick?.plays ?? [];
+    const leadCards = plays.length > 0 ? plays[0]!.cards : null;
+    const card = hand.find((candidate) => checkPlay(hand, [candidate], trump, leadCards) === null);
+    assert(card !== undefined, `座位 ${turn} 手里找不到一张合法出牌`);
+    await act(code, credential, { type: 'play', cards: [card] });
+  }
+
+  // 埋底时避开要领出的那张，再打出它（单张领出恒合法）
+  await act(code, dealerCred, {
+    type: 'bury',
+    cards: own.filter((card) => cardKey(card) !== cardKey(lead)).slice(0, 3)
+  });
+  await act(code, dealerCred, { type: 'play', cards: [lead] });
+
+  const follower = await page(`/table/${code}`, players[nextIndex]!.credential);
+  const tray = actionTrayMarkup(follower);
+  assert(tray !== null, '跟牌者页面没有动作托盘（data-action-tray）：出牌控件还挤在操作条那一行？');
+  // 形状守卫：钉在操作条**上方**（bottom-full）的一行（flex-nowrap）。截图里那次返工就是
+  // 居中悬在操作条上（-translate-y-1/2）→ 垂到手牌上；外加 flex-wrap 让「清空」与红字各占一行。
+  for (const cls of ['absolute', 'bottom-full', 'left-1/2', '-translate-x-1/2', 'z-30', 'flex-nowrap']) {
+    assert(
+      tray.includes(cls),
+      `动作托盘缺少 ${cls}：单行浮层会走形（要么垂下来压住手牌，要么被撑成两行）——${tray.slice(0, 160)}`
+    );
+  }
+  assert(
+    !tray.includes('-translate-y-1/2') && !tray.includes('flex-wrap'),
+    `动作托盘又垂直居中或允许换行了：它会垂到操作条下面盖住手牌 ——${tray.slice(0, 160)}`
+  );
+  // 宽度：`absolute` + `left-1/2` + 宽度 auto 时 shrink-to-fit 只有半个容器可用，flex 子项被压缩，
+  // 而 CJK 可以在任意字间断行 ——「出 牌」「清 空」于是竖排（截图里那次返工）。
+  assert(
+    tray.includes('w-max'),
+    `动作托盘的根节点缺少 w-max：宽度会被压成半个容器，子项被压缩后「出 牌」会竖排 ——${tray.slice(0, 160)}`
+  );
+  const trayBlock = actionTrayBlock(follower);
+  assert(trayBlock !== null, '取不到动作托盘的整块 HTML（data-action-tray 那一层）');
+  const trayButtons = (trayBlock ?? '').match(/<button[^>]*>/g) ?? [];
+  assert(
+    trayButtons.length >= 2,
+    `动作托盘里只有 ${trayButtons.length} 个按钮：出牌与清空都该在这一条里`
+  );
+  for (const button of trayButtons) {
+    assert(
+      button.includes('whitespace-nowrap'),
+      `动作托盘的按钮没有 whitespace-nowrap：被压缩时「出 牌」「清空」会竖排成两行 ——${button.slice(0, 140)}`
+    );
+  }
+  assert(follower.includes('出 牌'), '跟牌者页面没有出牌按钮');
+  assert(
+    !follower.includes('上一轮') && !follower.includes('赢墩'),
+    '出牌页面还在写「上一轮 / 赢墩」：徽标只报这 N 分归庄方还是闲方'
+  );
+  const marks = (follower.match(/data-marked="true"/g) ?? []).length;
+  assert(
+    marks === expectedMarks,
+    `跟牌蓝框数不对：页面 ${marks} 处，下家手里领出门 ${ledClass} 实为 ${expectedMarks} 张`
+  );
+
+  // 不是自己回合的人：既没有托盘，也没有任何蓝框（标记只给正要出手的那个人）
+  const idle = await page(`/table/${code}`, players[(nextIndex + 1) % 3]!.credential);
+  assert(!idle.includes('data-action-tray="true"'), '没轮到的人页面上出现了动作托盘');
+  assert(!idle.includes('data-marked="true"'), '没轮到的人手上出现了蓝框标记');
+  assert(idle.includes('出牌中'), '没轮到的人页面上没有「X 出牌中」的状态句');
+
+  // 观战者在出牌阶段也拿不到蓝框（那是手牌信息），但「距上一步」是公开的，观战者照样看得到
+  const watchPlay = await page(`/table/${code}`, guest.credential);
+  assert(!watchPlay.includes('data-marked="true"'), '观战页面在出牌阶段出现了手牌标记');
+  assert(!watchPlay.includes('data-action-tray="true"'), '观战页面出现了动作托盘');
+  assert(
+    clockSeconds(watchPlay, '观战页面（出牌阶段）') < 60,
+    '观战页面的「距上一步」不是刚领出的那个动作：计时对观战者不生效或没跟着动作走'
+  );
+
+  // 收完这一墩：徽标只说这 N 分归哪一方 —— 「庄 +N 分」或「闲 +N 分」
+  await playOneLegalCard();
+  await playOneLegalCard();
+  const afterTrick = await page(`/table/${code}`, dealerCred);
+  const badge = /(庄|闲) \+\d+ 分/.exec(afterTrick);
+  assert(badge !== null, '收墩后没有出现「庄/闲 +N 分」的赢墩徽标');
+  assert(!afterTrick.includes('赢墩'), '收墩后的徽标里又出现了「赢墩」');
+  console.log(
+    '出牌阶段：动作托盘是**钉在操作条正上方**的一条单行浮层（bottom-full、不占流、w-max 宽度、'
+      + `按钮各自 nowrap）；跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」`
+  );
 
   // 8) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在
   const rules = await page('/rules');
@@ -435,17 +729,31 @@ async function main(): Promise<void> {
   const jokerPips = new Set((rules.match(/<span class="pip joker">([^<]+)<\/span>/g) ?? []).map((s) => s));
   assert(jokerPips.size === 2, `王牌正中的图案应有 ☀ 与 ☾ 两种，实际 ${jokerPips.size} 种`);
 
-  // 9) 角点已从出货产物里消失：牌角不再有装饰圆点，主牌只剩金边
+  // 9) 角点已从出货产物里消失：牌角不再有装饰圆点；主牌改成**浅金底**，叫牌阶段另有更浅一档的级牌候选
   const cssHref = cssHrefOf(rules);
   const css = await asset(cssHref);
   assert(css.includes('.card.trump'), `样式表里找不到 .card.trump（抓到的可能不是牌面样式：${cssHref}）`);
   assert(css.includes('.card .pip'), '样式表里找不到 .card .pip（正对照失败）');
   assert(!css.includes('.card.pt'), '出货样式表里仍有分牌角点 .card.pt');
   assert(!/\.card\.trump:{1,2}after/.test(css), '出货样式表里仍有主牌角点 .card.trump::after');
+  // 2.4) 主牌的金边已改成底色：`.card.trump` 只许改 background，不许再动边框颜色
+  const trumpRule = /\.card\.trump\{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert(trumpRule.includes('background'), `.card.trump 没有底色（主牌应走浅金底）：${trumpRule}`);
+  assert(
+    !trumpRule.includes('border-color'),
+    `.card.trump 仍在改边框颜色（主牌金边应已全部改成底色）：${trumpRule}`
+  );
+  assert(
+    css.includes('.card.rank-hint'),
+    '样式表里找不到 .card.rank-hint（叫牌阶段「可能成为级牌」的更浅一档金底）'
+  );
   // 9b) 出牌按钮与底牌标记的样式必须真的出货（源码改了但产物没重建，一样会漏）
   assert(css.includes('.play-btn'), '出货样式表里找不到 .play-btn（出牌按钮没有防遮挡层级）');
   assert(/\.play-btn\{[^}]*z-index:20/.test(css), '出货样式表里 .play-btn 没有 z-index:20（会被上浮的手牌盖住）');
-  assert(/\.play-btn\{[^}]*min-height:44px/.test(css), '出货样式表里 .play-btn 没有 44px 命中高度');
+  assert(
+    /\.play-btn\{[^}]*min-height:36px/.test(css),
+    '出货样式表里 .play-btn 不是 36px 命中高度（又回到又高又胖的 44px，或缩成点不中的细条）'
+  );
   assert(
     css.includes("[data-marked='true']") || css.includes('[data-marked=true]'),
     '出货样式表里找不到底牌标记 [data-marked]'
@@ -537,12 +845,15 @@ async function main(): Promise<void> {
   console.log('界面结构：position 工具类无混用，三张座位卡均为 absolute');
   console.log('文案：邀请码可点复制，常驻提示已清空，? 按阶段给说明，界面无方位称谓');
   console.log(`教程：9 个小节齐备（含观战与离座），渲染 ${ruleCards} 张真实牌面；大小王牌面自洽（名字只在角落，正中是 ☀/☾）`);
-  console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌只剩金边`);
-  console.log('叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、面板自己滚且「不叫」是它的 sticky 底部');
-  console.log('底牌：庄家埋底页有「你拿上来的底牌」+ 6 处标记；闲家页面 0 处标记');
+  console.log(`牌面：出货样式表 ${cssHref} 已无角点（.card.pt / .card.trump::after），主牌走浅金底、级牌候选更浅一档`);
+  console.log(
+    '叫牌：叫品一律花色字形（无裸字母）、顶部有最高叫品大字、历史表是面板里唯一的滚动区，'
+      + '「不叫」排在它之后的正常文档流里（不是 sticky：sticky 会浮在最后一行叫牌上）'
+  );
+  console.log('底牌：庄家埋底页有「拿上来的底牌」那一行 + 6 处标记；闲家与观战页 0 处标记');
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
-  console.log('页头：只剩 大厅 / 邀请码（+ 观战者的入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/我 四项页签常驻右边缘，抽屉默认 inert');
-  console.log('抽屉：查阅面进抽屉、动作面留桌面；「我」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
+  console.log('页头：大厅 / 邀请码 + 右上角桌况簇（观战人数含 0 常显；在座离座、不在座改名+入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/牌桌 四项页签常驻右边缘，抽屉默认 inert');
+  console.log('抽屉：查阅面进抽屉、动作面留桌面；「牌桌」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
   console.log(`演示：/learn 有幻灯片语义与自动播放；深链 ?s=245-trick-8 直接渲染出 ${trickCards} 张真实牌面；大厅与文字教程都指向它`);
   console.log(`牌局章：三家当前的牌随出牌递减（叫牌 17/17/17 → 第 1 墩 13/13/13 → 末墩 0/0/0），出牌与手牌之间有配对过渡`);
   console.log('UI OK');

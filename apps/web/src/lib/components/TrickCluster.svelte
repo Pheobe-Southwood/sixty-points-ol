@@ -12,7 +12,7 @@
     trump?: TrumpModel | null;
     /** 牌堆上方的小字（真实牌局里是出牌人） */
     caption?: string | null;
-    /** 牌堆下方的金色徽标（如「上一轮 · 赢墩 +20 分」） */
+    /** 牌堆下方的金色徽标（如「庄 +20 分」：这墩分归哪一方） */
     badge?: string | null;
   } = $props();
 </script>

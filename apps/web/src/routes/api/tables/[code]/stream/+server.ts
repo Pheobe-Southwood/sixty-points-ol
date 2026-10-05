@@ -8,7 +8,7 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async (event) => {
   const identity = requireIdentity(event);
   const table = getTableByCode(event.params.code);
-  if (table === null) error(404, '同桌不存在');
+  if (table === null) error(404, '牌桌不存在');
 
   const encoder = new TextEncoder();
   const tableId = table.id;

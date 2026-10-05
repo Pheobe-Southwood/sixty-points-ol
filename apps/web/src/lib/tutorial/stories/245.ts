@@ -460,7 +460,7 @@ export const STORY: StoryDealData = {
       "index": 19,
       "kind": "play",
       "seat": 2,
-      "headline": "小美 跟出 ♣6 ♣10 ♦2 ♦9",
+      "headline": "小美 跟出 ♦2 ♦9 ♣6 ♣10",
       "tags": [
         "垫牌",
         "此轮不赢",
@@ -587,7 +587,7 @@ export const STORY: StoryDealData = {
       "index": 25,
       "kind": "play",
       "seat": 0,
-      "headline": "你 跟出 ♣8 ♦5",
+      "headline": "你 跟出 ♦5 ♣8",
       "tags": [
         "垫牌",
         "此轮不赢",
@@ -978,7 +978,7 @@ export const STORY: StoryDealData = {
           "index": 19,
           "kind": "play",
           "seat": 2,
-          "headline": "小美 跟出 ♣6 ♣10 ♦2 ♦9",
+          "headline": "小美 跟出 ♦2 ♦9 ♣6 ♣10",
           "tags": [
             "垫牌",
             "此轮不赢",
@@ -1186,7 +1186,7 @@ export const STORY: StoryDealData = {
           "index": 25,
           "kind": "play",
           "seat": 0,
-          "headline": "你 跟出 ♣8 ♦5",
+          "headline": "你 跟出 ♦5 ♣8",
           "tags": [
             "垫牌",
             "此轮不赢",

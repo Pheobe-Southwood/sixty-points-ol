@@ -30,6 +30,7 @@ import { handOf } from '../src/lib/tutorial/scenarios.ts';
 
 const TRUMP_H5: TrumpModel = { strain: 'H', rank: 5 };
 const TRUMP_H4: TrumpModel = { strain: 'H', rank: 4 };
+const TRUMP_C5: TrumpModel = { strain: 'C', rank: 5 };
 const TRUMP_S2: TrumpModel = { strain: 'S', rank: 2 };
 const TRUMP_S10: TrumpModel = { strain: 'S', rank: 10 };
 
@@ -39,12 +40,15 @@ test('cardsSummary：只有真的相邻才用 - 连起来', () => {
   // ♣2 ♣3 相邻，♣6 与它们差着 —— 各自成记号，绝不写成 ♣2-3-6
   assert.equal(cardsSummary(handOf('C2', 'C3', 'C6'), TRUMP_H5), '♣2-3 ♣6');
   // 245 步20 的原样：两个门各是两个单张，引擎段分解是 [1,1] / [1,1] 而不是长顺。
-  // 段内按层号升序（与作者写法一致：♠K-A、♣J-Q-K-A 都是升序）
-  assert.equal(cardsSummary(handOf('C10', 'C6', 'D9', 'D2'), TRUMP_H4), '♣6 ♣10 ♦2 ♦9');
+  // 段内按层号升序（与作者写法一致：♠K-A、♣J-Q-K-A 都是升序）；
+  // 门序与手牌一致 = 副牌黑红交替（主打 ♥ 时剩下 ♠♦♣，故 ♦ 段排在 ♣ 段前）
+  assert.equal(cardsSummary(handOf('C10', 'C6', 'D9', 'D2'), TRUMP_H4), '♦2 ♦9 ♣6 ♣10');
   assert.deepEqual(
     segments(handOf('C10', 'C6').filter((c) => 'suit' in c), TRUMP_H4),
     [1, 1]
   );
+  // 用户提出的那个例子：主打 ♣ 时 ♥ 与 ♦ 不相邻（中间隔着 ♠）
+  assert.equal(cardsSummary(handOf('H2', 'S3', 'D4'), TRUMP_C5), '♥2 ♠3 ♦4');
   // 222 步39：♥4 与 ♥8 中间隔着 ♥5 ♥6 ♥7（副牌跳过级牌 2 后的层号是 2 与 6）
   assert.equal(cardsSummary(handOf('H4', 'H8'), TRUMP_S2), '♥4 ♥8');
   // 245 步21：真正的三顺 + 一张散的

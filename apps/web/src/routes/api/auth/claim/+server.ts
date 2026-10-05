@@ -23,7 +23,7 @@ export const POST: RequestHandler = async (event) => {
     // 换身份前必须先离座：否则旧身份继续占着座位，变成没人认领的幽灵占位（见 ADR-0009）
     if (current !== null && current.id !== identity.id) {
       const held = seatedTableCode(current.id);
-      if (held !== null) error(400, `你的身份还坐在同桌 ${held} 的座位上，先离座再换身份`);
+      if (held !== null) error(400, `你的身份还坐在牌桌 ${held} 的座位上，先离座再换身份`);
     }
     const credential = credentialOf(identity);
     setCredentialCookie(cookies, credential);

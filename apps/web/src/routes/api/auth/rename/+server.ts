@@ -26,7 +26,7 @@ export const POST: RequestHandler = async (event) => {
   if (name === null) error(400, '名字需为 1-12 个字符，且不含冒号');
 
   const held = seatedTableCode(identity.id);
-  if (held !== null) error(400, `你还在同桌 ${held} 的座位上，先离座再改名`);
+  if (held !== null) error(400, `你还在牌桌 ${held} 的座位上，先离座再改名`);
 
   const taken = findByName(name);
   if (taken !== null && taken.id !== identity.id) error(400, '这个名字已被使用');

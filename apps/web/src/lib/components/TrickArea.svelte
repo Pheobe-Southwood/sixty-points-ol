@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PublicView } from '@sixty/engine';
-  import { whoLabel } from '$lib/labels';
+  import { trickSideBadge, whoLabel } from '$lib/labels';
   import TrickCluster from './TrickCluster.svelte';
 
   let {
@@ -29,6 +29,7 @@
   const plays = $derived(showingCurrent ? current!.plays : (previous?.plays ?? []));
   const winnerSeat = $derived(showingCurrent ? null : (previous?.winnerSeat ?? null));
   const trickPoints = $derived(showingCurrent ? 0 : (previous?.points ?? 0));
+  const declarerSeat = $derived(deal?.declarerSeat ?? null);
 
   const leftSeat = $derived((seat + 1) % 3);
   const rightSeat = $derived((seat + 2) % 3);
@@ -46,14 +47,16 @@
   }
 </script>
 
-<!-- 首次领出前桌面是空的：不写任何提示，规则说明只在「?」弹层里 -->
+<!-- 首次领出前桌面是空的：不写任何提示，规则说明只在「?」弹层里。
+     上一墩的金色徽标只报「这 N 分归庄方还是闲方」（`trickSideBadge`）——
+     赢家是谁由牌堆上方那行玩家名说，徽标再重复一遍名字只是把字号浪费在已知信息上。 -->
 {#each plays as play (play.seat)}
   <div class={spotOf(play.seat)}>
     <TrickCluster
       cards={play.cards}
       {trump}
       caption={whoLabel(names, mySeat, play.seat)}
-      badge={winnerSeat === play.seat ? `上一轮 · 赢墩 +${trickPoints} 分` : null}
+      badge={winnerSeat === play.seat ? trickSideBadge(declarerSeat, play.seat, trickPoints) : null}
     />
   </div>
 {/each}

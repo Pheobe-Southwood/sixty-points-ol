@@ -1,16 +1,27 @@
 <script lang="ts">
-  import { levelLabel } from '@sixty/engine';
   import type { TableClient } from '$lib/client/table.svelte';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import CardView from './Card.svelte';
-  import { whoLabel } from '$lib/labels';
-  import { strainGlyph } from '$lib/labels';
+  import { levelRows, strainGlyph, whoLabel } from '$lib/labels';
+  import type { ReplayResult } from '$lib/replays';
+  import LevelTable from './LevelTable.svelte';
+  import ReplayPanel from './ReplayPanel.svelte';
+  import ScoreEquation from './ScoreEquation.svelte';
+  import VerdictBadge from './VerdictBadge.svelte';
 
   let {
     client,
     open = false,
-    onClose
-  }: { client: TableClient; open?: boolean; onClose?: () => void } = $props();
+    onClose,
+    replays = {},
+    onOpenReplay
+  }: {
+    client: TableClient;
+    open?: boolean;
+    onClose?: () => void;
+    /** 机器重演缓存与拉取通道（页面持有，与战报逐副卡同一条路，见 `ReplayPanel`） */
+    replays?: Readonly<Record<number, ReplayResult>>;
+    onOpenReplay?: (dealNo: number) => void;
+  } = $props();
 
   const view = $derived(client.view);
   const summary = $derived(view?.deal?.summary ?? null);
@@ -19,11 +30,18 @@
   const mySeat = $derived(client.you?.seat ?? SPECTATOR_LABEL_SEAT);
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const who = (seat: number): string => whoLabel(names, mySeat, seat);
+
+  /** 升级表：三家都要出现（没动的那家写「不变」），升级的排前面 —— 见 labels.ts 的 levelRows */
+  const rows = $derived(summary !== null && view !== null ? levelRows(summary, view.levels) : []);
 </script>
 
 {#if open && summary !== null && view !== null}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-    <div class="w-[24rem] max-w-[94vw] rounded-2xl bg-felt-800 p-4 ring-1 ring-gold/30 sm:p-5">
+    <!-- 高度上限与自己的滚动区：结算内容高度不定（底牌牌面、级别表、对局结束块），
+         没有上限时短屏上排在最后的「下一副 / 开新对局」会落到视口外，且无处可滚。 -->
+    <div
+      class="max-h-[92dvh] w-[24rem] max-w-[94vw] overflow-y-auto overscroll-contain rounded-2xl bg-felt-800 p-4 ring-1 ring-gold/30 sm:p-5"
+    >
       <div class="flex items-start justify-between gap-2">
         <h2 class="text-base font-bold">
           本副结算
@@ -40,68 +58,21 @@
         >
       </div>
 
-      <!-- 一条算式，各项下方标注含义 -->
-      <div class="mt-5 flex items-start justify-center gap-1.5">
-        <div class="w-14 text-center">
-          <p class="text-[26px] font-black leading-none tabular-nums">{summary.declarerTrickPoints}</p>
-          <p class="mt-1.5 text-[10px] text-white/50">墩分</p>
-        </div>
-        <span class="mt-2 text-lg leading-none text-white/40">+</span>
-        <div class="w-14 text-center">
-          <p class="text-[26px] font-black leading-none tabular-nums">{summary.kittyPoints}</p>
-          <p class="mt-1.5 text-[10px] text-white/50">底牌 {summary.kitty.length} 张</p>
-          <div class="kitty-mini mt-1 flex justify-center">
-            {#each summary.kitty as card, index (index)}
-              <CardView {card} trump={summary.trump} size="sm" />
-            {/each}
-          </div>
-        </div>
-        <span class="mt-2 text-lg leading-none text-white/40">×</span>
-        <div class="w-10 text-center">
-          <p class="text-[26px] font-black leading-none tabular-nums text-gold">{summary.multiplier}</p>
-          <p class="mt-1.5 text-[10px] text-white/50">末轮张数</p>
-        </div>
-        <span class="mt-2 text-lg leading-none text-white/40">=</span>
-        <div class="w-14 text-center">
-          <p class="text-[26px] font-black leading-none tabular-nums text-gold">{summary.finalScore}</p>
-          <p class="mt-1.5 text-[10px] text-white/50">最终得分</p>
-        </div>
+      <!-- 算式、结论、升级表三块都住在**共用组件**里 —— 战报的每副卡用的是同一份
+           （`ScoreEquation` / `VerdictBadge` / `LevelTable`），两处的读法因此不可能各走各的。 -->
+      <div class="mt-5">
+        <ScoreEquation {summary} />
       </div>
 
-      <p class="mt-2 text-center text-[10px] {summary.protectedBottom ? 'text-emerald-300/90' : 'text-rose-300/90'}">
-        {summary.protectedBottom
-          ? `保底 · 末轮由庄家赢下，底分 ×${summary.multiplier} 计入`
-          : `抠底 · 末轮被闲家赢走，底分 ×${summary.multiplier} 扣除`}
-      </p>
+      <VerdictBadge {summary} class="mt-4" />
 
-      <div
-        class="mt-4 rounded-xl px-4 py-2 text-center ring-1 {summary.made
-          ? 'bg-emerald-500/15 ring-emerald-400/30'
-          : 'bg-rose-500/15 ring-rose-400/30'}"
-      >
-        <p class="text-sm font-bold {summary.made ? 'text-emerald-300' : 'text-rose-300'}">
-          {summary.made
-            ? `打成 · ${summary.finalScore} ≥ ${summary.contract.points}`
-            : `打输 · 差 ${summary.shortfall} 分`}
-        </p>
-        <!-- 把升级依据写出来：升级只看实际得分档位，不看叫了多少分 -->
-        <p class="mt-0.5 text-[10px] text-white/55">
-          {summary.made
-            ? `按 ${summary.finalScore} 分档位：庄家升 ${summary.levelChanges[0]?.levels ?? 0} 级（升几级只看得分，与叫分无关）`
-            : `两名闲家各升 ceil(${summary.shortfall} / 10) = ${summary.levelChanges[0]?.levels ?? 0} 级；庄家级别不变`}
-        </p>
+      <div class="mt-3">
+        <LevelTable {rows} {who} heading />
       </div>
 
-      <div class="mt-3 space-y-1 text-xs">
-        {#each summary.levelChanges as change (change.seat)}
-          <p class="rounded-lg bg-gold/15 px-3 py-2 ring-1 ring-gold/30">
-            {who(change.seat)} 升 {change.levels} 级：<b>{levelLabel(change.from)} → {levelLabel(change.to)}</b>
-          </p>
-        {/each}
-        {#if !summary.made}
-          <p class="rounded-lg bg-white/5 px-3 py-2 text-white/60">庄家级别不变。</p>
-        {/if}
-      </div>
+      <!-- 机器重演（ADR-0016）：结算那一刻服务端已算好落库，这里点开只是取存档。
+           展开体复用上面那三件套，弹窗与战报的读法一致。 -->
+      <ReplayPanel dealNo={summary.dealNo} {replays} onOpen={(no) => onOpenReplay?.(no)} {who} />
 
       {#if finished && view.result}
         <div class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">

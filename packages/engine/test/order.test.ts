@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { bestProfile, cardClass, cardLevel, compareProfiles, isRun, segments, sortHand } from '../src/order.ts';
+import { bestProfile, cardClass, cardLevel, compareProfiles, isRun, segments, sortHand, suitDisplayOrder } from '../src/order.ts';
 import { validateFollow } from '../src/validate.ts';
-import { fullDeck } from '../src/cards.ts';
+import { fullDeck, type Suit } from '../src/cards.ts';
 import { BJ, SJ, c, combinations, mulberry32, sample } from './helpers.ts';
 
 const T = { strain: 'H' as const, rank: 7 };
@@ -179,12 +179,36 @@ describe('bestProfile 与暴力枚举一致', () => {
   });
 });
 
-describe('手牌排序', () => {  it('主牌在前，其余按 ♠♥♣♦，同门由大到小', () => {
+describe('手牌排序', () => {  it('主牌在前，其余副牌黑红交替，同门由大到小', () => {
     const cards = [c('D', 5), c('C', 9), BJ, c('S', 3), c('H', 7), c('H', 9)];
     const sorted = sortHand(cards, T);
     assert.deepEqual(
       sorted.map((x) => ('joker' in x ? x.joker : `${x.suit}${x.rank}`)),
-      ['big', 'H7', 'H9', 'S3', 'C9', 'D5']
+      ['big', 'H7', 'H9', 'S3', 'D5', 'C9']
     );
+  });
+
+  it('副牌显示序：去掉主牌花色后同色两门放两端，相邻两门必异色', () => {
+    const red = (suit: Suit): boolean => suit === 'H' || suit === 'D';
+    for (const strain of ['S', 'H', 'C', 'D'] as const) {
+      const order = suitDisplayOrder({ strain, rank: 7 });
+      assert.deepEqual(
+        [...order].sort(),
+        ['S', 'H', 'C', 'D'].filter((suit) => suit !== strain).sort(),
+        `主打 ${strain} 时副牌序应恰为其余三门`
+      );
+      for (let i = 1; i < order.length; i++) {
+        assert.notEqual(
+          red(order[i]!),
+          red(order[i - 1]!),
+          `主打 ${strain} 时 ${order[i - 1]} 与 ${order[i]} 同色相邻（应为黑红交替）：${order.join('')}`
+        );
+      }
+    }
+  });
+
+  it('无主与将牌未定：四门仍是 ♠♥♣♦（它本身就黑红交替）', () => {
+    assert.deepEqual(suitDisplayOrder(null), ['S', 'H', 'C', 'D']);
+    assert.deepEqual(suitDisplayOrder({ strain: 'NT', rank: 7 }), ['S', 'H', 'C', 'D']);
   });
 });

@@ -3,6 +3,7 @@
   import { helpKeyOf, phaseHelp } from '@sixty/engine';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { whoLabel } from '$lib/labels';
+  import ActionClock from './ActionClock.svelte';
   import HelpPopover from './HelpPopover.svelte';
 
   let {
@@ -15,7 +16,6 @@
   const deal = $derived(view?.deal ?? null);
   const finished = $derived(view?.status === 'finished');
   const phase = $derived(deal?.phase ?? null);
-  const selectedCount = $derived(client.selected.length);
   /** 观战者：mySeat = -1 让下面所有「你」的判断自动不成立，不需要另写一套分支 */
   const spectating = $derived(client.you === null);
   const mySeat = $derived(client.you?.seat ?? SPECTATOR_LABEL_SEAT);
@@ -57,19 +57,18 @@
     return null;
   });
 
+  /**
+   * 只剩两类按钮：结算阶段的「结算详情 / 下一副 / 开新对局」。
+   * 出牌与埋底的动作控件（已选张数、出牌、清空、确认埋底）已搬进 `ActionTray` ——
+   * 它们只在「该你出手」时存在，挤在这一行里会让窄屏换行、并把整页高度顶来顶去。
+   */
   const gold =
     'rounded-lg bg-gold px-4 py-1.5 text-xs font-bold text-ink transition enabled:hover:brightness-110 disabled:opacity-30';
-  const ghost = 'rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10 disabled:opacity-30';
-  /**
-   * 「出 牌」单独放大：它是本页唯一的高频主操作，字号与命中区都要比旁边的大一档。
-   * `disabled:opacity-40`（而不是 30）+ 实心金字，避免没选牌时看着像一坨灰的禁用态。
-   */
-  const play =
-    'play-btn inline-flex items-center justify-center rounded-xl bg-gold px-7 py-2.5 text-base font-bold tracking-wide text-ink shadow-[0_6px_20px_-6px_rgba(216,180,90,.75)] transition enabled:hover:brightness-110 enabled:active:scale-95 disabled:opacity-40';
 </script>
 
 <!-- z-10：手牌容器在 DOM 里排在操作条之后，上浮的选中牌会盖到这一条上。
-     操作条整体抬到牌面之上，按钮（.play-btn 再抬到 z-20）就不会被任何牌盖住。 -->
+     这里只剩信息（「?」与状态句），抬到牌面之上是为了让它们始终读得到；
+     `.play-btn` 的 z-20 仍在 ActionTray 里保着出牌键不被任何牌盖住。 -->
 <div class="relative z-10 flex min-h-[2.6rem] flex-wrap items-center gap-2 py-1.5">
   <!-- 阶段说明只活在这里：所有常驻提示文案都已删除，正文与 /rules 教程同源 -->
   <HelpPopover align="left" placement="up" title={help.title} label="?">
@@ -87,30 +86,12 @@
     <span class="text-xs text-white/45">{status}</span>
   {/if}
 
-  {#if phase === 'bury' && isDeclarer}
-    <span class="text-xs text-white/70">
-      已选 <b class="tabular-nums text-gold">{selectedCount}</b> / 3 张入底
-    </span>
-    <button type="button" class={gold} disabled={selectedCount !== 3 || client.busy} onclick={() => void client.bury()}>
-      确认埋底
-    </button>
-  {:else if phase === 'play' && myTurn}
-    <span class="text-xs text-white/70">已选 <b class="tabular-nums text-gold">{selectedCount}</b> 张</span>
-    <button
-      type="button"
-      class={play}
-      disabled={selectedCount === 0 || client.playError !== null || client.busy}
-      onclick={() => void client.play()}
-    >
-      出 牌
-    </button>
-    <button type="button" class={ghost} disabled={selectedCount === 0} onclick={() => client.clearSelection()}>
-      清空
-    </button>
-    {#if client.playError}
-      <span class="text-xs text-red-300">{client.playError}</span>
-    {/if}
-  {:else if phase === 'scored'}
+  <!-- 距上一步多久：轮到自己时上面那句状态是 null，但计时照常显示 —— 那时它读作「你自己想了多久」。
+       `ml-auto` 把它推到这一条的右端：手机窄屏上「该你出手」时动作托盘正居中都悬在中间，
+       计时留在左端会被那张托盘压掉。 -->
+  <ActionClock class="ml-auto" ageMs={client.table?.actionAgeMs ?? null} />
+
+  {#if phase === 'scored'}
     <button
       type="button"
       class="rounded-lg border border-gold/50 px-3 py-1.5 text-xs font-bold text-gold hover:bg-gold/10"

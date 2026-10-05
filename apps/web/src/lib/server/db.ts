@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_table ON events (table_id, seq);
+-- 机器重演（ADR-0016）：每副结算时同步算好、只读不回写、不再重算。
+-- 键是 (table_id, deal_no)；开新对局时 dealNo 从 1 重新计数，所以那张事务里整表清空。
+CREATE TABLE IF NOT EXISTS replays (
+  table_id INTEGER NOT NULL REFERENCES tables(id),
+  deal_no INTEGER NOT NULL,
+  result TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (table_id, deal_no)
+);
 `);
 
 // 机器人座位（ADR-0015）：老库补列。上面的 CREATE TABLE 只对新建库生效，

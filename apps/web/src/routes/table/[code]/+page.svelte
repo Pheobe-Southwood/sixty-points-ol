@@ -4,8 +4,10 @@
   import { TableClient } from '$lib/client/table.svelte';
   import { BOT_LIMIT } from '$lib/shared';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
-  import type { DrawerTabKey } from '$lib/drawer-tabs';
+  import { fetchReplays, type ReplayResult } from '$lib/replays';
+  import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
+  import ActionTray from '$lib/components/ActionTray.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BotRemoveConfirm from '$lib/components/BotRemoveConfirm.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
@@ -14,13 +16,13 @@
   import InviteCode from '$lib/components/InviteCode.svelte';
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
-  import SeatActions from '$lib/components/SeatActions.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
   import TabRail from '$lib/components/TabRail.svelte';
   import TableDrawer from '$lib/components/TableDrawer.svelte';
+  import TableHeaderActions from '$lib/components/TableHeaderActions.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
-  import { kittyHandDelta } from '$lib/labels';
+  import { followSuitCards, kittyHandDelta } from '$lib/labels';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -42,6 +44,13 @@
    * 每副结束自动弹出的结算（`summaryOpen`）与它无关，仍然是整页的模态。
    */
   let active = $state<DrawerTabKey | null>(null);
+  /** 战报页内的模式（逐副 / 升级表）：页面持有，抽屉关掉再开还停在那一页 */
+  let reportMode = $state<ReportMode>('deals');
+  /**
+   * 机器重演缓存（ADR-0016）：按副号取、结果不可变 —— 某副首次点开时整表拉一次，
+   * 之后全靠缓存。SSE 不碰它（重演是静态存档，没有「随帧更新」这回事）。
+   */
+  let replays = $state<Record<number, ReplayResult>>({});
   let summaryOpen = $state(false);
   let leaveOpen = $state(false);
   /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
@@ -57,6 +66,18 @@
   const deal = $derived(view?.deal ?? null);
   const summary = $derived(deal?.summary ?? null);
   const trump = $derived(deal?.trump ?? null);
+  /**
+   * 叫牌阶段的主牌预示：三家级别的点数。
+   *
+   * 本副级牌点数取自**庄家**的级别，而庄家还没定 —— 所以哪一家的级别都可能成为它，
+   * 手牌里命中任一点数的牌都该标「可能成为级牌」。王不在此列：它恒是主牌，
+   * 由 `Card` 按主牌单独上色（`candidateRanks` 非 null 时）。
+   */
+  const candidateRanks = $derived(
+    deal !== null && deal.phase === 'auction' && view !== null
+      ? [...new Set(view.levels.map((level) => level.rank))]
+      : null
+  );
   const you = $derived(client.you);
   const seated = $derived(you !== null);
   /** 文本里一律用玩家名指代（不再有东/南/西）：座位卡显示的就是这些名字 */
@@ -88,12 +109,24 @@
         (deal.phase === 'bury' && you.isDeclarer))
   );
 
-  /** 埋底阶段给庄家的手牌标出「拿上来的底牌」；其余阶段与闲家都是空集合（观战者没有 you） */
-  const markedKeys = $derived(
-    deal !== null && deal.phase === 'bury' && you?.isDeclarer === true
-      ? kittyHandDelta(you.hand, you.originalKitty).map(cardKey)
-      : []
-  );
+  /**
+   * 手牌蓝框标记（`data-marked`）：两个阶段各有一个「这几张现在最要紧」的集合。
+   *
+   * - **埋底（庄家）**：拿上来的底牌 —— `you.originalKitty` 是权威来源；
+   * - **出牌（轮到自己跟牌）**：领出那一门的手牌 —— 跟牌必须先跟同门，缺门时集合自然为空。
+   *
+   * 其余阶段、其余人（含观战者）一律空集：标记是给正要出手的那个人看的。
+   */
+  const markedKeys = $derived.by(() => {
+    if (deal === null || you === null) return [];
+    if (deal.phase === 'bury' && you.isDeclarer) {
+      return kittyHandDelta(you.hand, you.originalKitty).map(cardKey);
+    }
+    if (deal.phase === 'play' && deal.playTurn === you.seat) {
+      return followSuitCards(you.hand, trump, deal.trick).map(cardKey);
+    }
+    return [];
+  });
 
   // 每副结束自动弹出结算；关闭后可随时用「结算详情」重开（观战者也照弹，结算信息本来就是公开的）
   $effect(() => {
@@ -137,12 +170,24 @@
   function selectTab(key: DrawerTabKey): void {
     active = active === key ? null : key;
   }
+
+  /**
+   * 某副的重演首次点开时拉全表（每副至多一次有效请求；失败的拉取不进缓存，
+   * 下次点开自然重试）。战报逐副卡与结算弹窗共用这一条通道。
+   */
+  function openReplay(dealNo: number): void {
+    if (dealNo in replays) return;
+    void fetchReplays(data.code).then((rows) => {
+      replays = Object.fromEntries(rows.map((row) => [row.dealNo, row.result]));
+    });
+  }
 </script>
 
 <main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
-  <!-- 页头只留必要信息：大厅、邀请码，以及观战者补位用的「入座」——
+  <!-- 页头只留必要信息：大厅、邀请码，以及右上角那枚**桌况簇**（观战人数 + 离座 / 改名 + 入座）——
        连接正常时页头一个像素都不占（断线才由下面那条提示出声）。
-       战报/叫牌/底牌/我 全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。 -->
+       战报/叫牌/底牌/牌桌 的**查阅面**全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。
+       桌况簇回到页头是因为它是有界的三个「一步动作」，而页头两次爆满都是堆**查阅**入口堆出来的。 -->
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
@@ -153,14 +198,18 @@
       />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
-      <SeatActions {client} variant="sit-only" />
+      <TableHeaderActions
+        {client}
+        onLeave={() => (leaveOpen = true)}
+        onRename={() => (active = 'table')}
+      />
     </div>
   </header>
 
   <!-- 连接异常只在坏的时候出声：`live`（常态）与首帧的 `connecting` 都不占像素 ——
        手机上没有 hover，旧的那枚绿点既解释不了、也没有动作可做；EventSource 自己会重连，
        所以这里只需说明「画面可能停在上一帧」。role="status" 让读屏也能听到重连。
-       被否的替代（常驻圆点 / 挪进「我」页 / connecting 也提示）见 CONTEXT.md。 -->
+       被否的替代（常驻圆点 / 挪进「牌桌」页 / connecting 也提示）见 CONTEXT.md。 -->
   {#if client.connection === 'offline'}
     <p
       role="status"
@@ -213,27 +262,43 @@
     {#if deal === null}
       <LobbyPanel {client} code={data.code} />
     {:else if view !== null}
-      {#if deal.phase !== 'auction'}
-        <TableStatus {view} />
-      {/if}
-
-      {#if deal.phase === 'auction'}
+      {#if deal.phase === 'bury'}
+        <!-- 阶段状态条与埋底面板同属**一个**绝对定位的列容器：槽位永远排在状态条下面。
+             早先两者各自绝对定位（状态条 top-[5.5rem]、面板 top-[12%]），手机短屏上
+             「定约 / 庄已抓」会压到暗底槽位上 —— 两处各算各的位置，谁也管不了谁。
+             这一层横跨整幅毡面，所以要**让开点击**（`pointer-events-none`）：它会在座位卡的
+             「+ 机器人」/「请离」按钮上吃掉点击。里面只有埋底面板那行底牌是可点的，
+             由 BuryPanel 自己 `pointer-events-auto` 接回来（见 `BuryPanel.svelte` 与
+             `test/table-chrome.test.ts` 的「横跨毡面的覆盖层必须让开点击」）。 -->
+        <div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2 sm:top-6">
+          <TableStatus {view} />
+          <BuryPanel {client} />
+        </div>
+      {:else if deal.phase === 'auction'}
         <BidPanel {client} />
-      {:else if deal.phase === 'bury'}
-        <BuryPanel {client} />
       {:else}
+        <div class="pointer-events-none absolute inset-x-0 top-[5.5rem] flex justify-center px-2 sm:top-6">
+          <TableStatus {view} />
+        </div>
         <TrickArea {view} seat={anchor} mySeat={label} {names} />
       {/if}
     {/if}
   </div>
 
-  <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+  <!-- 操作条与动作托盘是**同一块版面**：托盘绝对定位悬在这一条上、再居中于手牌正上方。
+       它不占流，所以「轮到自己 / 轮空」之间切换时毡面与手牌不会上下跳；z-30 压过上浮的选中牌。
+       早先出牌/埋底控件就在这一条的行内 —— 窄屏一晚换行就把整页高度顶动，按钮还落在最左侧。 -->
+  <div class="relative">
+    <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+    <ActionTray {client} />
+  </div>
 
   <!-- 观战者没有手牌：手牌区整块消失，牌桌更大 -->
   {#if you !== null}
     <HandFan
       hand={you.hand}
       {trump}
+      {candidateRanks}
       selected={client.selected}
       marked={markedKeys}
       {selectable}
@@ -243,13 +308,28 @@
 </main>
 
 <!-- 右边缘活页签条：常驻，点一个拉起对应的抽屉页；点当前页签即收起。
-     抽屉**不套 {#if view}**：「我」页（改名/换身份、座位/观战）在没发牌时也要能用，
+     抽屉**不套 {#if view}**：「牌桌」页（座位/身份、改名换身份）在没发牌时也要能用，
      而且它常驻 DOM 正是那两条观战守卫仍然有效的原因。 -->
 <TabRail {active} onSelect={selectTab} />
-<TableDrawer {client} {active} onClose={() => (active = null)} onLeave={() => (leaveOpen = true)} />
+<TableDrawer
+  {client}
+  {active}
+  {reportMode}
+  onReportMode={(mode) => (reportMode = mode)}
+  {replays}
+  onOpenReplay={openReplay}
+  onClose={() => (active = null)}
+  onLeave={() => (leaveOpen = true)}
+/>
 
 {#if view !== null}
-  <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
+  <DealSummary
+    {client}
+    open={summaryOpen}
+    onClose={() => (summaryOpen = false)}
+    {replays}
+    onOpenReplay={openReplay}
+  />
 {/if}
 <LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />
 <BotRemoveConfirm

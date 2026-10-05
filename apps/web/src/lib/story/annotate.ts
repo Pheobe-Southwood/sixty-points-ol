@@ -17,6 +17,7 @@ import {
   segments,
   SEATS,
   SUIT_LABEL,
+  suitDisplayOrder,
   type Card,
   type GameState,
   type Seat,
@@ -26,9 +27,6 @@ import {
 
 import { bidText, cardText } from '../labels.ts';
 import type { ReplayResult, ReplayedStep, ReplayedTrick } from './replay.ts';
-
-/** 花色在正文里的显示序（与 sortHand 一致）；主牌由 cardClass 单独处理，不在这里 */
-const SUIT_DISPLAY_ORDER: readonly Suit[] = ['S', 'H', 'C', 'D'];
 
 /**
  * 一手牌的紧凑写法。**一个空格分隔的记号 = 恰好一条顺子**，这是唯一的读法：
@@ -62,8 +60,11 @@ export function cardsSummary(cards: readonly Card[], trump: TrumpModel | null): 
     if (trump !== null) return cardLevel(card, trump);
     return isJoker(card) ? (card.joker === 'big' ? 16 : 15) : card.rank;
   };
+  // 门的显示序与引擎的 sortHand 同源（副牌黑红交替，主打 ♣ 时 ♥ 与 ♦ 不相邻）；
+  // 主牌门（'T' / 无将牌信息时的 'joker'）恒排在最前，不在这个序里
+  const suitOrder = suitDisplayOrder(trump);
   const rankOfClass = (cls: string): number =>
-    cls === 'T' || cls === 'joker' ? -1 : SUIT_DISPLAY_ORDER.indexOf(cls as Suit) + 1;
+    cls === 'T' || cls === 'joker' ? -1 : suitOrder.indexOf(cls as Suit) + 1;
 
   const tokens: string[] = [];
   for (const cls of [...groups.keys()].sort((a, b) => rankOfClass(a) - rankOfClass(b))) {

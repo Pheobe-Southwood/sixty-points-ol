@@ -2,6 +2,12 @@
  * 机器人作弊面守卫：驱动器（`apps/web/src/lib/server/bots.ts`）与加/移座位的路由
  * 只能经过**个人视图**取信息、经过 `applyTableAction` 发动作。
  *
+ * 机器重演（ADR-0016）进来后同一条边界多守两处：`replays` 读端必须是**只读存档**
+ * （谁都能看结算后的公开牌面，但拿不到完整状态、也不许在路由里自己重算）；
+ * 浏览器侧的重演形状 `$lib/replays.ts` **零策略依赖** —— 否则机器人策略会被打进浏览器包。
+ * 而 `$lib/server/replays.ts` 故意不进这张表：它按设计就拿 `GameState`（结算那一刻唯一
+ * 还留着全部隐藏信息的地方），边界要落在「路由只读」那一层，不是把它也锁掉。
+ *
  * 为什么需要它：这个文件和 `/api/mcp` 的进程内适配层一样，离完整权威状态只有一步之遥
  * （`db` 就在隔壁）。ADR-0015 的承诺是「机器人看不到别人的手牌与底牌」——那条承诺
  * 由这里静态钉死，而不是靠自律。
@@ -37,11 +43,26 @@ const GUARDED: readonly { readonly file: string; readonly rule: GuardRule }[] = 
       allow: ['@sveltejs/kit', '$lib/server/auth', '$lib/server/bots', './$types'],
       forbidden: ['getGameState', 'dispatch', 'createGame', 'personalView', 'db']
     }
+  },
+  {
+    // 机器重演读端：只把存档端出去，不许在路由里碰完整状态、也不许自己重算
+    file: '../src/routes/api/tables/[code]/replays/+server.ts',
+    rule: {
+      allow: ['@sveltejs/kit', '$lib/server/auth', '$lib/server/replays', '$lib/server/tables', './$types'],
+      forbidden: ['getGameState', 'dispatch', 'createGame', 'personalView', 'db']
+    }
+  },
+  {
+    // 浏览器侧的重演形状：手抄一份是为了不依赖策略包（`import-scan` 的白名单就写在 allow 里）
+    file: '../src/lib/replays.ts',
+    rule: { allow: ['@sixty/engine'], forbidden: ['simulateDeal'] }
   }
 ];
 
 const BOTS_RULE = GUARDED[0]!.rule;
 const ROUTE_RULE = GUARDED[1]!.rule;
+const REPLAY_ROUTE_RULE = GUARDED[2]!.rule;
+const CLIENT_SHAPE_RULE = GUARDED[3]!.rule;
 
 test('机器人驱动器与路由不得触碰完整牌局状态', () => {
   for (const { file, rule } of GUARDED) {
@@ -63,6 +84,20 @@ test('守卫非空转：违规源码必须被抓住', () => {
   assert.deepEqual(violationsOf("import { db } from '$lib/server/db';", ROUTE_RULE), [
     'db',
     'import $lib/server/db'
+  ]);
+  // 重演读端同样不许够到存储与完整状态
+  assert.deepEqual(violationsOf("import { db } from '$lib/server/db';", REPLAY_ROUTE_RULE), [
+    'db',
+    'import $lib/server/db'
+  ]);
+  assert.deepEqual(violationsOf('const s = getGameState(id);', REPLAY_ROUTE_RULE), ['getGameState']);
+  // 浏览器侧形状不许把策略包拉进来（手抄一份的理由）
+  assert.deepEqual(violationsOf("import type { ReplayResult } from '@sixty/bot';", CLIENT_SHAPE_RULE), [
+    'import @sixty/bot'
+  ]);
+  assert.deepEqual(violationsOf("import { simulateDeal } from './sim';", CLIENT_SHAPE_RULE), [
+    'simulateDeal',
+    'import ./sim'
   ]);
   // 注释里提到这些名字不算违规（否则文档就不能解释这条守卫）
   assert.deepEqual(violationsOf('// 不碰 getGameState 与 dispatch\nconst ok = 1;', BOTS_RULE), []);
