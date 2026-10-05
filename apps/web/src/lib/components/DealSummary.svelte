@@ -2,15 +2,26 @@
   import type { TableClient } from '$lib/client/table.svelte';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { levelRows, strainGlyph, whoLabel } from '$lib/labels';
+  import type { ReplayResult } from '$lib/replays';
   import LevelTable from './LevelTable.svelte';
+  import ReplayPanel from './ReplayPanel.svelte';
   import ScoreEquation from './ScoreEquation.svelte';
   import VerdictBadge from './VerdictBadge.svelte';
 
   let {
     client,
     open = false,
-    onClose
-  }: { client: TableClient; open?: boolean; onClose?: () => void } = $props();
+    onClose,
+    replays = {},
+    onOpenReplay
+  }: {
+    client: TableClient;
+    open?: boolean;
+    onClose?: () => void;
+    /** 机器重演缓存与拉取通道（页面持有，与战报逐副卡同一条路，见 `ReplayPanel`） */
+    replays?: Readonly<Record<number, ReplayResult>>;
+    onOpenReplay?: (dealNo: number) => void;
+  } = $props();
 
   const view = $derived(client.view);
   const summary = $derived(view?.deal?.summary ?? null);
@@ -58,6 +69,10 @@
       <div class="mt-3">
         <LevelTable {rows} {who} heading />
       </div>
+
+      <!-- 机器重演（ADR-0016）：结算那一刻服务端已算好落库，这里点开只是取存档。
+           展开体复用上面那三件套，弹窗与战报的读法一致。 -->
+      <ReplayPanel dealNo={summary.dealNo} {replays} onOpen={(no) => onOpenReplay?.(no)} {who} />
 
       {#if finished && view.result}
         <div class="mt-3 rounded-lg border border-gold/50 bg-black/30 p-3">

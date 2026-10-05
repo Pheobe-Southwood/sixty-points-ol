@@ -2,6 +2,7 @@
   import type { TableClient } from '$lib/client/table.svelte';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
   import { drawerTabLabel, type DrawerTabKey, type ReportMode } from '$lib/drawer-tabs';
+  import type { ReplayResult } from '$lib/replays';
   import AuctionRecord from './AuctionRecord.svelte';
   import HistoryList from './HistoryList.svelte';
   import KittyPanel from './KittyPanel.svelte';
@@ -10,7 +11,7 @@
   /**
    * 右侧活页签抽屉：外壳（标题 + × + 滚动区）与四页正文都在这里，`TabRail` 只负责点。
    *
-   * 四条不可动摇的规则：
+   * 五条不可动摇的规则：
    * 1. **动作面不进来**：叫牌候选按钮、确认埋底、出牌按钮、每副结算弹窗都留在桌面。
    * 2. **纯手动**：不自动打开、不自动换页；SSE 每帧不改开合状态（`active` 由页面持有）。
    * 3. **「牌桌」页常驻 DOM**：抽屉关着时它仍在 HTML 里（`hidden` + `inert`），
@@ -18,12 +19,16 @@
    *    战报/叫牌/底牌按需渲染 —— 战报会随副数无限增长，没必要常驻撑大 SSR 与 DOM。
    * 4. **页内的模式由页面持有**（战报的「逐副 / 升级表」）：抽屉关掉再开还停在上一次那一页，
    *    但它与开合状态一样只由人改，SSE 不碰。
+   * 5. **战报的数据通道由页面持有**：`replays` 缓存与 `onOpenReplay` 只是穿过去给
+   *    `HistoryList` / `ReplayPanel` —— 抽屉和战报都不该自己发请求。
    */
   let {
     client,
     active = null,
     reportMode = 'deals',
     onReportMode,
+    replays = {},
+    onOpenReplay,
     onClose,
     onLeave
   }: {
@@ -31,6 +36,8 @@
     active?: DrawerTabKey | null;
     reportMode?: ReportMode;
     onReportMode?: (mode: ReportMode) => void;
+    replays?: Readonly<Record<number, ReplayResult>>;
+    onOpenReplay?: (dealNo: number) => void;
     onClose?: () => void;
     onLeave?: () => void;
   } = $props();
@@ -101,6 +108,8 @@
             {names}
             mode={reportMode}
             onModeChange={onReportMode}
+            {replays}
+            onOpenReplay={(no) => onOpenReplay?.(no)}
           />
         {/if}
       </div>

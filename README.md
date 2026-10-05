@@ -24,21 +24,22 @@ packages/engine     纯 TS 规则引擎（零依赖，可被服务端与客户�
   src/              cards / order / validate / trick / auction / state / view / help
   test/             node:test 表驱动 + 属性测试（默认 60 个随机整局，GAME_SEEDS 可放大）
 packages/bot        机器人策略（零依赖，只 import 引擎；纯函数「个人视图 → 动作」，见 ADR-0015）
-  src/              policy（叫牌/埋底/出牌）/ sight（记牌与拆链）
-  test/             表驱动单测 + 整局属性测试（三个机器人直驱引擎打完整场）+ 纯净守卫
+  src/              policy（叫牌/埋底/出牌）/ sight（记牌与拆链）/ sim（机器重演：结算过的牌重打一遍）
+  test/             表驱动单测 + 整局属性测试（三个机器人直驱引擎打完整场）+ 纯净守卫 + 重演自洽
 packages/mcp        MCP 工具面（stdio 入口 + 与传输无关的工具定义，两条传输共用）
   src/              tools（工具表）/ server（挂到 SDK）/ http-api（stdio 取数）/ bootstrap（启动判定）/ wire / stdio
   test/             node:test：工具层单测 + 内存链对上的协议单测 + stdio 启动契约
   scripts/          mcp-check.ts（两条传输各打一整副 + 形状/在线/权威守卫）
 apps/web            SvelteKit 2 + Svelte 5 + Tailwind 4 + adapter-node
-  src/lib/server/   SQLite（node:sqlite）、身份凭据、牌桌服务、SSE hub、MCP 进程内适配层、机器人调度
+  src/lib/server/   SQLite（node:sqlite）、身份凭据、牌桌服务、SSE hub、MCP 进程内适配层、机器人调度、
+                    机器重演存档（replays，结算时同步算好，见 ADR-0016）
   src/routes/       大厅、牌桌页、规则演示（/learn）、文字教程（/rules）、牌局编排台（/studio）、
                     REST 动作接口（含入座/离座/加机器人）、SSE 流、MCP（/api/mcp）
   src/hooks.server.ts  启动时补扫机器人回合（重启自愈，见 ADR-0015）
   src/lib/tutorial/ 演示页的幻灯片模型（deck.ts）与示例数据（scenarios.ts）
   src/lib/tutorial/stories/  由 docs/deals 生成的故事数据（勿手改，见 ADR-0010）
   src/lib/story/    牌局编排台的内核：种子↔牌局、回放、说明标签、导出/导入、草稿存储
-  scripts/          smoke.ts（三人 HTTP 端到端）、resume-check.ts（重启续局校验）
+  scripts/          smoke.ts（三人 HTTP 端到端 + 机器重演存档逐副核对）、resume-check.ts（重启续局校验）
                     lobby-check.ts（开局入口回归）、ui-check.ts（版面与文案守卫）
                     spectate-check.ts（观战/离座/改名换身份的端到端回归）
                     bot-check.ts（1 人 + 2 机器人打两副 + 中途踢/补的端到端）
@@ -164,6 +165,14 @@ BASE=http://127.0.0.1:5178 pnpm bot-check              # 机器人端到端：1 
   全 pass 重发只剩 5%（初版是 36%），所以别指望它每次都把庄家位让给你；埋底默认不埋分，
   只有主牌控制到「几乎必然保住末轮」时才埋不超过 10 分（约四分之一的副数），
   于是「机器人做庄必然 0 分底」并不成立。
+- **机器重演（Bot replay，见 ADR-0016）**：每副牌**结算那一刻**，服务端用**机器人策略**把
+  **整副牌（含叫牌）**重打一遍并存档；战报的每副卡卡尾、结算弹窗的升级表下方各有一枚
+  「机器重演」按钮，点开就是「换三个机器人来打会怎样」的对照。它**不是**模拟 —— 没有搜索、
+  没有随机，同一副牌永远是同一个结果。定约与庄家可能与真实那副不同（重演连叫牌一起重走），
+  所以展开体头行写的是**重演的**定约；重演自己也可能三家 pass（约 5%），那时如实说
+  「机器人全 pass · 这副会被作废重发」，不靠重试凑一个定约出来。重演看的是「**这副牌**」
+  而不是「当初那桌」—— 手牌序没有保存，而策略的取舍与下标有关。升级到这一版之前结算的老副
+  没有记录，点开会说一句；**升级表模式里没有这个入口**（它说的是真实进度）。
 - **手机端页头与右侧活页签抽屉**：页头只留 `← 大厅`、邀请码，以及右上角的**桌况簇**
   （观战人数含 0 常显；在座给「离座」、不在座给「改名」，有空座才多一枚「入座」—— 补位有时限，
   不藏起来）。两次「页头爆满」堆进去的都是**查阅**入口，而这一簇是有界的一行，所以它留在页头。

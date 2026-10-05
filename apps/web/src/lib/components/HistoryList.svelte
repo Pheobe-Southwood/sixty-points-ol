@@ -3,8 +3,10 @@
   import { SEATS } from '@sixty/engine';
   import { changedLevelRows, contractText, levelProgression, whoLabel } from '$lib/labels';
   import { REPORT_MODES, type ReportMode } from '$lib/drawer-tabs';
+  import type { ReplayResult } from '$lib/replays';
   import LevelBadge from './LevelBadge.svelte';
   import LevelTable from './LevelTable.svelte';
+  import ReplayPanel from './ReplayPanel.svelte';
   import ScoreEquation from './ScoreEquation.svelte';
   import VerdictBadge from './VerdictBadge.svelte';
 
@@ -14,8 +16,11 @@
    * - `deals` 逐副：新 → 旧，每副一张卡 = 结算弹窗的紧凑版。算式、结论、升级行分别复用
    *   `ScoreEquation` / `VerdictBadge` / `LevelTable`（同一份标记，只有尺寸与列数不同），
    *   再加上 `contractText` 给的「定约 · 级牌」——旧副的级牌各不相同，只写定约读不出来。
+   *   卡尾是 `ReplayPanel`（机器重演入口）：数据通道由页面持有（`replays` 缓存 +
+   *   `onOpenReplay`），本组件不碰网络。
    * - `progress` 升级表：开局 → 最后一副，三家级别逐副累积（`levelProgression`），
-   *   当副动了的格子亮、没动的淡显，纵着扫一列就是那个人的全程。
+   *   当副动了的格子亮、没动的淡显，纵着扫一列就是那个人的全程。**没有**重演入口 ——
+   *   升级表说的是真实进度，重演是每副的对照。
    *
    * 逐副卡的升级**只列升级者**（`changedLevelRows`）：历史负载只记变动，没升级的座位当时
    * 是什么级别无从还原 —— 与弹窗三家全列有意不同。
@@ -28,7 +33,9 @@
     mySeat = -1,
     names = [],
     mode = 'deals',
-    onModeChange
+    onModeChange,
+    replays = {},
+    onOpenReplay
   }: {
     view: PublicView;
     /** 文案里的「我的座位」：观战者传 -1，于是都显示玩家名 */
@@ -37,6 +44,10 @@
     /** 页内模式（由页面持有，抽屉关掉再开还停在上一次那一页） */
     mode?: ReportMode;
     onModeChange?: (mode: ReportMode) => void;
+    /** 机器重演缓存（页面持有；按副号取，见 `ReplayPanel`） */
+    replays?: Readonly<Record<number, ReplayResult>>;
+    /** 首次点开某副的重演时拉全表（页面去重） */
+    onOpenReplay?: (dealNo: number) => void;
   } = $props();
 
   const deals = $derived([...view.history].reverse());
@@ -102,6 +113,7 @@
               <LevelTable rows={changedLevelRows(deal)} {who} />
             </div>
           {/if}
+          <ReplayPanel dealNo={deal.dealNo} {replays} onOpen={(no) => onOpenReplay?.(no)} {who} />
         </div>
       {/each}
     </div>

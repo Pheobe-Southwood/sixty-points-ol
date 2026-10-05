@@ -6,4 +6,6 @@
  */
 export { moveFor, fallbackFor, bidFor, buryFor, playFor, strengthOf, willingPoints } from './policy.ts';
 export type { BotMove, StrainStrength } from './policy.ts';
+export { simulateDeal } from './sim.ts';
+export type { ReplayInput, ReplayResult } from './sim.ts';
 export { Sight, classCards, extractChains } from './sight.ts';

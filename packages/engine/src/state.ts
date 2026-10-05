@@ -197,13 +197,26 @@ export function newDeal(dealNo: number, dealerSeat: Seat, rng: RNG): DealState {
     deck.slice(CARDS_PER_SEAT, CARDS_PER_SEAT * 2),
     deck.slice(CARDS_PER_SEAT * 2, CARDS_PER_SEAT * 3)
   ];
-  const originalKitty = deck.slice(CARDS_PER_SEAT * 3);
+  return dealWith(hands, deck.slice(CARDS_PER_SEAT * 3), dealerSeat, dealNo);
+}
+
+/**
+ * 用**已知**的三家手牌与底牌构造一副（叫牌阶段）。洗牌只是牌的一个来源：
+ * 机器重演要把结算过的那副牌原样重发给三个机器人重打（ADR-0016），
+ * 构造本身不该绑死在 RNG 上。入参一律拷贝，构造后互不影响。
+ */
+export function dealWith(
+  hands: readonly (readonly Card[])[],
+  originalKitty: readonly Card[],
+  dealerSeat: Seat,
+  dealNo: number
+): DealState {
   return {
     phase: 'auction',
     dealNo,
     dealerSeat,
-    hands,
-    originalKitty,
+    hands: hands.map((hand) => [...hand]),
+    originalKitty: [...originalKitty],
     kitty: [...originalKitty],
     auction: [],
     contract: null,

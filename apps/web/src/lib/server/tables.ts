@@ -14,6 +14,7 @@ import { projectionFor, resolveArrivalRole } from '../role';
 import { db, now, transaction } from './db';
 import { broadcast, connectionUserIds, forget, hasAnyConnection, isRecentlyActive, isUserOnline, touch } from './hub';
 import { scheduleBots } from './bots';
+import { clearReplays, computeReplay, saveReplay } from './replays';
 
 export interface TableInfo {
   readonly id: number;
@@ -475,9 +476,18 @@ export function applyTableAction(code: string, userId: number, action: Action): 
   const result = dispatch(state, serverAction, cryptoRng);
   if (!result.ok) return { ok: false, message: result.message };
 
+  // 结算那一刻同步算机器重演（ADR-0016）：此刻 `deal` 里还留着这副的全部隐藏信息，
+  // 下一副发牌就没了。纯 CPU、毫秒级；失败只缺一条重演记录，结算本身不受影响。
+  const replay = result.events.some((event) => event.type === 'dealScored')
+    ? computeReplay(result.state)
+    : null;
+
   transaction(() => {
     saveGame(table.id, result.state);
     appendEvents(table.id, result.events);
+    if (replay !== null) saveReplay(table.id, replay);
+    // 开新对局：dealNo 从 1 重新计数，旧重演必须整表清掉（见 db.ts 的表注释）
+    if (action.type === 'newGame') clearReplays(table.id);
   });
   broadcast(table.id);
   // 状态变了，轮到机器人的话让它想（见 bots.ts / ADR-0015）。

@@ -28,6 +28,11 @@
  * 各自形状的判据。结算弹窗 SSR 里永远不出现（`summaryOpen` 初值是 false，只在客户端
  * 「本副刚结算」那一帧打开），ui-check 够不到，所以只能落在源码这一层。
  *
+ * 第五块是**机器重演入口**（`ReplayPanel`，ADR-0016）：它同时挂在战报逐副卡与结算弹窗上，
+ * 但**升级表没有** —— 升级表说的是真实进度，重演是每副的对照；展开体复用结算那三件套，
+ * 数据通道由页面持有（组件自己发请求就是第二条取数路径）。战报按需渲染（`active === 'report'`
+ * 才在 DOM 里），所以 ui-check 同样够不到它，判据也只能在这一层。
+ *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
@@ -61,6 +66,7 @@ const historyList = read('../src/lib/components/HistoryList.svelte');
 const scoreEquation = read('../src/lib/components/ScoreEquation.svelte');
 const verdictBadge = read('../src/lib/components/VerdictBadge.svelte');
 const levelTable = read('../src/lib/components/LevelTable.svelte');
+const replayPanel = read('../src/lib/components/ReplayPanel.svelte');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -1053,5 +1059,127 @@ test('反证：少一态、提示不居中、解释段回潮、镜像槽位回�
     kittyPanelCheck(kittyPanel + '\n<p>{client.selectedCards.length}</p>') ?? '',
     /待定槽位|selectedCards/,
     '毡面待定槽位的镜像回潮没有被判出来'
+  );
+});
+
+/**
+ * 机器重演入口（`ReplayPanel`，ADR-0016）：两个入口 + 一条数据通道 + 复用结算那三件套。
+ *
+ * 判据分四层：① **入口只在逐副卡与结算弹窗**，升级表**没有** —— 升级表说的是真实进度，
+ * 重演是每副的对照；② 逐副卡按 `deal.dealNo` 显式取存档；③ 展开体**复用**
+ * `contractText` / `ScoreEquation` / `VerdictBadge` —— 弹窗、战报、重演三处读法不可能各走各的；
+ * ④ **数据通道归页面**（`fetchReplays` + `onOpenReplay`）：组件自己发请求就是第二条取数路径。
+ * 两种「没有」也要如实说（全 pass / 老副无记录），不许退化成按钮消失 —— 那看起来像功能坏了。
+ */
+function replayEntryCheck(
+  historyListSource: string,
+  dealSummarySource: string,
+  panelSource: string,
+  pageSource: string
+): string | null {
+  const history = code(historyListSource);
+  const entry = history.indexOf('<ReplayPanel');
+  if (entry < 0) return '战报逐副卡的卡尾没有机器重演入口（<ReplayPanel）';
+  if (history.indexOf('<ReplayPanel', entry + 1) >= 0) {
+    return '机器重演入口不止一处（升级表分支也给了）：升级表说的是真实进度，重演是每副的对照';
+  }
+  if (entry < history.lastIndexOf('{:else}')) {
+    return '机器重演入口落在升级表分支里（最后一个 {:else} 之前）：它只属于逐副卡';
+  }
+  if (!history.includes('dealNo={deal.dealNo}')) {
+    return '逐副卡没有把副号显式传给重演面板（dealNo={deal.dealNo}）：面板要按副号取存档';
+  }
+
+  const summary = code(dealSummarySource);
+  const inSummary = summary.indexOf('<ReplayPanel');
+  if (inSummary < 0) return '结算弹窗没有机器重演入口（<ReplayPanel）';
+  if (inSummary < summary.indexOf('<LevelTable')) {
+    return '结算弹窗把机器重演排在了升级表之前：那三件套之后才是每副的对照';
+  }
+
+  const panel = code(panelSource);
+  if (!panel.includes('contractText(')) {
+    return '重演面板没有写重演自己的定约（contractText）：重演含叫牌，定约可能与真实那副不同';
+  }
+  if (!/<ScoreEquation[\s\S]*?summary=\{replay\.summary\}/.test(panel)) {
+    return '重演面板没有复用 ScoreEquation 的紧凑档（compact）：算式会有第二份实现';
+  }
+  if (!panel.includes('<VerdictBadge')) return '重演面板没有复用 VerdictBadge：结论会各写各的';
+  if (!panel.includes('机器重演')) return '重演入口没有「机器重演」这枚按钮';
+  if (!panel.includes('全 pass')) return '全 pass 那句话没了：约 5% 的副是合法终态，要如实说';
+  if (!panel.includes('没有机器重演记录')) {
+    return '老副没有记录时没有一句话：不许玩「按钮消失」，那看起来像功能坏了';
+  }
+  if (/fetchReplays|fetch\(/.test(panel)) {
+    return '重演面板自己发请求：数据通道必须由页面持有（replays 缓存 + onOpen）';
+  }
+
+  const pageCode = code(pageSource);
+  if (!pageCode.includes('fetchReplays(')) return '页面没有持有重演数据通道（fetchReplays）';
+  if (!pageCode.includes('onOpenReplay')) return '页面没有把 onOpenReplay 传给战报与结算弹窗';
+  return null;
+}
+
+test('机器重演：入口只在逐副卡与结算弹窗，复用结算那三件套，通道归页面', () => {
+  const problem = replayEntryCheck(historyList, dealSummary, replayPanel, page);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：升级表也加入口、弹窗丢入口、重演里自写算式、面板自发请求、页面丢通道，都必须被判出来', () => {
+  assert.match(
+    replayEntryCheck(
+      historyList.replace(
+        "{#if mode === 'progress'}",
+        "{#if mode === 'progress'}\n<ReplayPanel dealNo={0} {replays} onOpen={() => {}} {who} />"
+      ),
+      dealSummary,
+      replayPanel,
+      page
+    ) ?? '',
+    /不止一处/,
+    '升级表分支也给了重演入口没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary.replace(/[ \t]*<ReplayPanel[\s\S]*?\/>\n/, ''),
+      replayPanel,
+      page
+    ) ?? '',
+    /ReplayPanel/,
+    '结算弹窗丢了重演入口没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel.replace(
+        '<ScoreEquation summary={replay.summary} compact />',
+        '<p>{replay.summary.finalScore}</p>'
+      ),
+      page
+    ) ?? '',
+    /ScoreEquation/,
+    '重演面板自写一份算式没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel + '\n<script>const bogus = fetchReplays("a");</script>',
+      page
+    ) ?? '',
+    /数据通道/,
+    '重演面板自己发请求没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel,
+      page.replace('fetchReplays(', 'Fake(')
+    ) ?? '',
+    /fetchReplays/,
+    '页面不再持有重演数据通道没有被判出来'
   );
 });

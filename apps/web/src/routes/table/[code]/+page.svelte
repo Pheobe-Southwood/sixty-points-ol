@@ -4,6 +4,7 @@
   import { TableClient } from '$lib/client/table.svelte';
   import { BOT_LIMIT } from '$lib/shared';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
+  import { fetchReplays, type ReplayResult } from '$lib/replays';
   import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import ActionTray from '$lib/components/ActionTray.svelte';
@@ -45,6 +46,11 @@
   let active = $state<DrawerTabKey | null>(null);
   /** 战报页内的模式（逐副 / 升级表）：页面持有，抽屉关掉再开还停在那一页 */
   let reportMode = $state<ReportMode>('deals');
+  /**
+   * 机器重演缓存（ADR-0016）：按副号取、结果不可变 —— 某副首次点开时整表拉一次，
+   * 之后全靠缓存。SSE 不碰它（重演是静态存档，没有「随帧更新」这回事）。
+   */
+  let replays = $state<Record<number, ReplayResult>>({});
   let summaryOpen = $state(false);
   let leaveOpen = $state(false);
   /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
@@ -163,6 +169,17 @@
 
   function selectTab(key: DrawerTabKey): void {
     active = active === key ? null : key;
+  }
+
+  /**
+   * 某副的重演首次点开时拉全表（每副至多一次有效请求；失败的拉取不进缓存，
+   * 下次点开自然重试）。战报逐副卡与结算弹窗共用这一条通道。
+   */
+  function openReplay(dealNo: number): void {
+    if (dealNo in replays) return;
+    void fetchReplays(data.code).then((rows) => {
+      replays = Object.fromEntries(rows.map((row) => [row.dealNo, row.result]));
+    });
   }
 </script>
 
@@ -299,12 +316,20 @@
   {active}
   {reportMode}
   onReportMode={(mode) => (reportMode = mode)}
+  {replays}
+  onOpenReplay={openReplay}
   onClose={() => (active = null)}
   onLeave={() => (leaveOpen = true)}
 />
 
 {#if view !== null}
-  <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />
+  <DealSummary
+    {client}
+    open={summaryOpen}
+    onClose={() => (summaryOpen = false)}
+    {replays}
+    onOpenReplay={openReplay}
+  />
 {/if}
 <LeaveConfirm {client} open={leaveOpen} onClose={() => (leaveOpen = false)} />
 <BotRemoveConfirm

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const ALLOWED_IMPORTS = new Set(['@sixty/engine', './sight.ts', './policy.ts', './index.ts']);
+const ALLOWED_IMPORTS = new Set(['@sixty/engine', './sight.ts', './policy.ts', './sim.ts', './index.ts']);
 
 const FORBIDDEN_NAMES = [
   'node:fs',
@@ -23,7 +23,7 @@ const FORBIDDEN_NAMES = [
   'Date.now'
 ];
 
-const SOURCE_FILES = ['index.ts', 'policy.ts', 'sight.ts'].map((name) =>
+const SOURCE_FILES = ['index.ts', 'policy.ts', 'sight.ts', 'sim.ts'].map((name) =>
   fileURLToPath(new URL(`../src/${name}`, import.meta.url))
 );
 

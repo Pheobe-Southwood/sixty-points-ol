@@ -1,6 +1,7 @@
 /**
  * 三人线上对局冒烟测试：用 3 个身份走 HTTP API 打完若干副。
  * 服务器权威：本脚本自己挑候选出牌，合法性完全由服务端判定。
+ * 打完再核对**机器重演**存档逐副对得上、读端未带凭据回 401（ADR-0016）。
  * 运行：node scripts/smoke.ts   （服务端需已启动，BASE 可覆盖地址）
  */
 const BASE = process.env['BASE'] ?? 'http://127.0.0.1:5178';
@@ -244,6 +245,8 @@ async function main(): Promise<void> {
   let scoredDeals = 0;
   let lastDealNo = 0;
   let guard = 0;
+  /** 结算过的副号（机器重演存档要逐副对上，见循环之后） */
+  const scoredNos: number[] = [];
 
   while (guard++ < 20000) {
     const views = await Promise.all(identities.map((identity) => view(code, identity.credential)));
@@ -262,6 +265,7 @@ async function main(): Promise<void> {
       if (deal.dealNo > lastDealNo) {
         scoredDeals += 1;
         lastDealNo = deal.dealNo;
+        scoredNos.push(deal.dealNo);
         console.log(
           `第 ${deal.dealNo} 副结算完成（合同 ${deal.contract?.points} ${deal.contract?.strain}，庄 ${deal.contract?.declarerSeat}）` +
             ` 级别：${reference.levels.map((l) => `${l.rank}(+${l.cycle})`).join(' / ')}`
@@ -298,6 +302,32 @@ async function main(): Promise<void> {
     const seat = deal.playTurn!;
     await playOneLegalMove(code, identities[seat]!.credential, seat);
   }
+
+  // 机器重演（ADR-0016）：每副结算时服务端已**同步算好落库** —— 这一段是「存档真的被写进去了」
+  // 唯一的端到端证据。某副算不出来只会记一条日志（不阻塞结算），于是这里如实变红。
+  const archive = (await api(`/api/tables/${code}/replays`, {}, identities[0]!.credential)) as {
+    replays: { dealNo: number; result: { kind: string } }[];
+  };
+  for (const row of archive.replays) {
+    if (row.result.kind !== 'scored' && row.result.kind !== 'all-pass') {
+      throw new Error(`第 ${row.dealNo} 副的重演终态是「${row.result.kind}」：只允许 scored / all-pass`);
+    }
+  }
+  if (archive.replays.length !== scoredDeals) {
+    const stored = new Set(archive.replays.map((row) => row.dealNo));
+    const missing = scoredNos.filter((no) => !stored.has(no));
+    throw new Error(
+      `结算了 ${scoredDeals} 副，重演存档只有 ${archive.replays.length} 条` +
+        (missing.length > 0 ? `，缺第 ${missing.join('、')} 副` : '')
+    );
+  }
+  console.log(
+    `机器重演存档 ${archive.replays.length} 条（其中 all-pass ${archive.replays.filter((row) => row.result.kind === 'all-pass').length} 条）`
+  );
+  // 未带凭据的读端必须 401（裸 fetch：`api()` 见非 2xx 就抛，这里要的是那个状态码本身）
+  const anon = await fetch(`${BASE}/api/tables/${code}/replays`);
+  if (anon.status !== 401) throw new Error(`重演读端未带凭据应回 401，实际 ${anon.status}`);
+  console.log('重演读端鉴权正常（无凭据 401）');
 
   const final = await view(code, identities[0]!.credential);
   if (final === null) throw new Error('结束时拿不到视图');
