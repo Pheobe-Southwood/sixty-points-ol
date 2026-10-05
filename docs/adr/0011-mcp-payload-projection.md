@@ -89,3 +89,13 @@ ADR-0010 把「一个身份能看到什么、能做什么」包成了 MCP 工具
 - **预算进了测试**：`packages/mcp/test/payload-budget.test.ts` 用内存版服务器走完整副与整局，
   卡住调用数、实收、单份与整局累计；「非空转」由「同一条路上 `verbose` 必须超预算」证明。
   `scripts/mcp-check.ts` 另对**真服务器**卡一次调用数与字节数。
+- **后续：叫品入参也改成紧凑字符串**（`"pass"` / `"40C"` / `"45NT"`，`codec.ts` 的 `decodeCall` 解码，
+  宽容大小写与「分数 花色」之间的空格）。原先 `bid` 的 `call` 是 `z.union(['pass', {points, strain}])`，
+  而 MCP SDK 把 union 播报成 `anyOf` —— 宿主在把工具 schema 交给模型之前会**清洗**它，Cuplivo 的清洗器
+  原话是「把 anyOf/oneOf/allOf 拍平成第一个分支」，于是排在 `"pass"` 后面的对象分支整个消失，
+  模型被告知 `call` 只能是 `"pass"`：**真叫牌一律失败，只有 pass 成功**（Google 系 API 同样不支持
+  anyOf/const；pi-ai 里那个 `StringEnum` 就是为这类宿主准备的）。危险之处在于宿主**不报错**，
+  只是静默改掉工具的含义 —— 所以 `test/transport.test.ts` 新增「可移植子集」守卫，对**真实播报**的
+  `inputSchema` 断言不再出现 `anyOf`/`oneOf`/`allOf`/`const`/`$ref`，并钉住 `bid.call` 是扁平字符串。
+  `turn.legalBids` 与 `legal_bids.options` 同步从分组形状（`{points, strains[]}`）拍平成紧凑串：
+  入参既然收字符串，出参就原样给字符串，模型抄一下即可。引擎的 `bidCandidates` 与浏览器叫牌面板不受影响。

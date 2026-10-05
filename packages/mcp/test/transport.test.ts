@@ -134,3 +134,52 @@ test('服务端拒绝时返回 isError 文本，而不是把协议打崩', async
     await close();
   }
 });
+
+/**
+ * **可移植子集守卫**：播报出去的 `inputSchema` 只能用宿主都认的那一小撮关键字。
+ *
+ * 这条来自一次真实缺陷：`bid` 的 `call` 曾经是 `z.union(['pass', {points, strain}])`，SDK 把它播报成
+ * `anyOf`，而宿主在把工具 schema 交给模型之前会**清洗**它 —— Cuplivo 的清洗器把 `anyOf` 拍平成
+ * **第一个分支**（`"pass"`），排在后面的对象分支整个消失，模型于是被告知 `call` 只能是 `"pass"`：
+ * 真叫牌一律失败、只有 pass 成功。Google 系 API 同样不支持 `anyOf`/`const`。
+ *
+ * 这类构造的危险在于**宿主不报错**，只是静默改掉工具的含义，所以只能对着**真实播报**的 schema 断言。
+ */
+const FORBIDDEN_KEYWORDS = new Set(['anyOf', 'oneOf', 'allOf', 'const', '$ref', '$defs', 'definitions']);
+
+function combinatorsIn(node: unknown, found: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) combinatorsIn(item, found);
+    return found;
+  }
+  if (node === null || typeof node !== 'object') return found;
+  for (const [key, value] of Object.entries(node)) {
+    if (FORBIDDEN_KEYWORDS.has(key)) found.push(key);
+    combinatorsIn(value, found);
+  }
+  return found;
+}
+
+test('播报的 inputSchema 只用可移植子集：没有 anyOf/oneOf/allOf/const/$ref', async () => {
+  const { client, close } = await connect(new FakeApi());
+  try {
+    const tools = (await client.listTools()).tools;
+    assert.ok(tools.length > 0, '工具表是空的，这条守卫会变成空转');
+
+    for (const tool of tools) {
+      const found = [...new Set(combinatorsIn(tool.inputSchema))];
+      assert.deepEqual(
+        found,
+        [],
+        `${tool.name} 的 inputSchema 里有宿主会拍平/丢掉的构造：${found.join('、')}（它们会**静默**改掉工具的含义）`
+      );
+    }
+
+    // 叫品是扁平字符串 —— 这正是那个缺陷的正脸
+    const bid = tools.find((tool) => tool.name === 'bid');
+    const call = (bid?.inputSchema as { properties?: Record<string, { type?: unknown }> }).properties?.['call'];
+    assert.equal(call?.type, 'string', 'bid 的 call 必须是扁平字符串：union 会被宿主压成第一个分支');
+  } finally {
+    await close();
+  }
+});

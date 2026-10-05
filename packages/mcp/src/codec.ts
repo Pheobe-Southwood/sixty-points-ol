@@ -9,10 +9,22 @@
  *   - 出参与入参同形：`get_state` 给的 `"S14"` 可以原样喂回 `play`/`bury`。所以 `decodeCard`
  *     必须严格（认不出来的字符串当场报错，而不是猜一张牌出来）。
  *
- * 只编码、不解码叫品：`bid` 的入参仍是 `{points, strain}` 对象（一次只写一个，省不下体积，
- * 而显式形状少一类笔误），紧凑叫品只出现在**出参**里。
+ * **叫品也走这条编码，是被宿主逼出来的**（原先只编码出参，`bid` 的入参是 `{points, strain}` 对象）：
+ * 那个对象只能写成 `z.union`，而 MCP SDK 把 union 播报成 `anyOf` —— 宿主在把工具 schema 交给模型前
+ * 会清洗它，Cuplivo 的清洗器原话是「把 anyOf/oneOf/allOf 拍平成第一个分支」，于是 `anyOf` 里排在
+ * `"pass"` 后面的对象分支**整个消失**，模型被告知 `call` 只能是 `"pass"`：每次真叫牌都失败，只有
+ * pass 成功（Google 系 API 同样不支持 anyOf/const）。改成扁平字符串后 schema 只剩 `{"type":"string"}`，
+ * 任何宿主都压不坏，模型还能直接抄出参里的写法（`highestBid`、`auction[].call`）。
  */
-import { isJoker, type BidCall, type Card, type Suit } from '@sixty/engine';
+import {
+  BID_STEP,
+  isJoker,
+  MIN_BID,
+  type BidCall,
+  type Card,
+  type Strain,
+  type Suit
+} from '@sixty/engine';
 
 const LETTER_RANK: Record<string, number> = { J: 11, Q: 12, K: 13, A: 14, T: 10 };
 
@@ -59,6 +71,25 @@ export function decodeCards(codes: readonly string[]): Card[] | null {
 /** 引擎叫品 → 紧凑码：`pass` / `"40C"` / `"45NT"` */
 export function encodeCall(call: BidCall): string {
   return call === 'pass' ? 'pass' : `${call.points}${call.strain}`;
+}
+
+/**
+ * 紧凑码 → 引擎叫品；认不出来返回 null。
+ *
+ * 宽容的地方只在**大小写**与**分数与花色之间的空格**（两者都没有歧义，而一次参数错要白跑一个回合）；
+ * 形状按引擎的规则卡死：整数、不低于 `MIN_BID`、`BID_STEP` 的倍数，花色只在 C/D/H/S/NT。
+ *
+ * 「是否高于当前叫品」**不在这里判**：那要看局面，是服务端的裁决（`validateCall` 的另一半）。
+ */
+export function decodeCall(code: string): BidCall | null {
+  const raw = code.trim();
+  if (/^pass$/i.test(raw)) return 'pass';
+
+  const matched = /^(\d{1,4})\s*(C|D|H|S|NT)$/i.exec(raw);
+  if (matched === null) return null;
+  const points = Number.parseInt(matched[1]!, 10);
+  if (points < MIN_BID || points % BID_STEP !== 0) return null;
+  return { points, strain: matched[2]!.toUpperCase() as Strain };
 }
 
 /** 一次出牌：座位号 + 牌码数组 */

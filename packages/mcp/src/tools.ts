@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import {
   bidCandidates,
+  BID_STEP,
   checkPlay,
   HELP_KEYS,
+  MIN_BID,
   phaseHelp,
   playHint,
   type BidCall,
@@ -14,7 +16,7 @@ import {
   type TrumpModel
 } from '@sixty/engine';
 import { ApiError, type GameApi, type SeatlessAction } from './api.ts';
-import { decodeCard, decodeCards, encodeCall } from './codec.ts';
+import { decodeCall, decodeCard, decodeCards, encodeCall } from './codec.ts';
 import { project, type CompactPayload } from './project.ts';
 import type { Role, StreamPayload, TableSummary } from './wire.ts';
 
@@ -79,10 +81,15 @@ export const MIN_POLL_MS = 500;
  */
 const CardCode = z.string().min(1).describe('牌码，如 "S14"、"j0"');
 
-const CallSchema = z.union([
-  z.literal('pass'),
-  z.object({ points: z.number().int(), strain: z.enum(['C', 'D', 'H', 'S', 'NT']) })
-]);
+/**
+ * 叫品入参是**扁平字符串**，不是 `z.union`：MCP SDK 把 union 播报成 `anyOf`，而宿主在把工具 schema
+ * 交给模型之前会清洗它 —— Cuplivo 会把 `anyOf` 拍平成**第一个分支**（`"pass"`），对象分支整个消失，
+ * 于是「只有 pass 能叫出去」。字符串既压不坏，又与出参同形（见 codec.ts 的 `decodeCall`）。
+ */
+const CallSchema = z
+  .string()
+  .min(1)
+  .describe(`叫品："pass" 或 "40C"/"45NT"（分数为不低于 ${MIN_BID} 的 ${BID_STEP} 的倍数，花色 C/D/H/S/NT）`);
 
 /**
  * `code` 字段刻意**不写描述**：它在 8 个工具里重复出现，而 schema 是每个请求都要重发的 ——
@@ -104,8 +111,8 @@ export interface TurnSummary {
   /** 现在你能做点事吗（发牌/叫牌/埋底/出牌/开下一副都算） */
   readonly canAct: boolean;
   readonly hint: string;
-  /** 轮到你在叫牌：合法叫品集（与牌桌叫牌面板同一份实现） */
-  readonly legalBids?: readonly BidOption[] | undefined;
+  /** 轮到你在叫牌：合法叫品集，紧凑叫品串（与牌桌叫牌面板同一份 `bidCandidates` 派生） */
+  readonly legalBids?: readonly string[] | undefined;
   /** 轮到你在出牌：跟牌/领出的**约束**（不复述手牌，模型自己手上有 you.hand） */
   readonly legalPlay?: PlayHint | undefined;
 }
@@ -186,7 +193,7 @@ export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat 
         isYourTurn: mine,
         canAct: mine,
         hint: mine
-          ? '轮到你叫牌：turn.legalBids 就是全部合法叫品，直接 bid（也可以 pass）。'
+          ? '轮到你叫牌：turn.legalBids 就是全部合法叫品，挑一个原样喂给 bid 的 call（也可以 "pass"）。'
           : `等座位 ${deal.auctionTurn} 叫牌（要等就 wait_for_turn）。`
       };
     }
@@ -224,6 +231,17 @@ export function turnOf(role: Role, view: StreamPayload['view'], you: PlayerSeat 
 }
 
 /**
+ * 合法叫品集拍平成紧凑串（`["40C","40D",…,"55NT"]`，分数升序、同分按 C<D<H<S<NT）。
+ *
+ * 分组的形状（`{points, strains[]}`）对模型是要「拼」的：入参既然收 `"45H"` 这样的字符串，
+ * 出参就直接给字符串 —— 抄一下即可，少一类拼错（与牌码「出参与入参同形」同一条纪律）。
+ * 引擎的 `bidCandidates` 与浏览器叫牌面板不受影响：这里只是把同一份数据换个写法。
+ */
+function flatCalls(rows: readonly BidOption[]): string[] {
+  return rows.flatMap((row) => row.strains.map((strain) => encodeCall({ points: row.points, strain })));
+}
+
+/**
  * 轮到你时顺手把「合法集」给出，**不让模型逐个试探**。
  *
  * 这不是省几个字符的事：每次 `check_play` 都是一次完整的模型回合（整段会话重发一次），
@@ -237,7 +255,7 @@ function legalOf(payload: StreamPayload): Pick<TurnSummary, 'legalBids' | 'legal
   if (deal === null) return {};
 
   if (deal.phase === 'auction' && deal.auctionTurn === you.seat) {
-    return { legalBids: bidCandidates(view) };
+    return { legalBids: flatCalls(bidCandidates(view)) };
   }
   if (deal.phase === 'play' && deal.playTurn === you.seat && deal.trump !== null) {
     const lead = deal.trick !== null && deal.trick.plays.length > 0 ? deal.trick.plays[0]!.cards : null;
@@ -281,6 +299,21 @@ function cardsOf(codes: readonly string[], field: string): Card[] {
   if (cards !== null) return cards;
   const bad = codes.find((code) => decodeCard(code) === null);
   throw new ToolError(`参数格式不正确：${field} 里有认不出的牌码「${String(bad)}」（格式如 "S14"、"C5"、"j0"、"j1"）`);
+}
+
+/**
+ * 紧凑叫品 → 引擎叫品；认不出来时点名是哪一个。
+ *
+ * 这里只挡**形状**错（分数不是 5 的倍数、低于 40、花色拼错）—— 那不需要看局面，当场说清能省一个回合；
+ * 「是否高于当前叫品」仍然由服务端裁决，工具面绝不替它放水（ADR-0002）。
+ */
+function callOf(code: string): BidCall {
+  const call = decodeCall(code);
+  if (call !== null) return call;
+  throw new ToolError(
+    `参数格式不正确：call「${code}」认不出来（"pass"，或 "40C"、"45NT" 这样的紧凑叫品：` +
+      `分数为不低于 ${MIN_BID} 的 ${BID_STEP} 的倍数，花色取 C/D/H/S/NT）`
+  );
 }
 
 interface PlayContext {
@@ -442,7 +475,7 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'legal_bids',
     description:
-      '列出当前所有合法叫品（与牌桌叫牌面板同一份实现）：轮到你叫牌时 turn.legalBids 里已经有同一份；**叫牌阶段之外一律空表**。',
+      '列出当前所有合法叫品（紧凑叫品串，与牌桌叫牌面板同一份实现）：轮到你叫牌时 turn.legalBids 里已经有同一份；**叫牌阶段之外一律空表**。',
     input: codeField,
     run: async (rt, args) => {
       const { code, payload } = await rawOf(rt, args['code']);
@@ -450,7 +483,7 @@ export const TOOLS: readonly ToolSpec[] = [
       const deal = view?.deal ?? null;
       // 阶段门：埋底/出牌/结算之后叫品已经没有意义，`deal.highestBid` 却还留着 —— 不能照着它给一整套候选
       const inAuction = view !== null && view.status !== 'finished' && deal !== null && deal.phase === 'auction';
-      const options = inAuction && view !== null ? bidCandidates(view) : [];
+      const options = inAuction && view !== null ? flatCalls(bidCandidates(view)) : [];
       return {
         code,
         phase: deal?.phase ?? 'lobby',
@@ -483,9 +516,10 @@ export const TOOLS: readonly ToolSpec[] = [
   },
   {
     name: 'bid',
-    description: '叫牌：call 传 "pass" 或 {points, strain}（points 为 5 的倍数、≥40，strain 取 C/D/H/S/NT）。',
+    description:
+      '叫牌：call 传 "pass"，或紧凑叫品 "40C"/"45NT"（与 highestBid、auction 里同格式；分数为 5 的倍数、≥40，花色取 C/D/H/S/NT）。',
     input: { ...codeField, call: CallSchema, wait: WAIT_FIELD },
-    run: (rt, args) => act(rt, args['code'], { type: 'bid', call: args['call'] as BidCall }, args['wait'])
+    run: (rt, args) => act(rt, args['code'], { type: 'bid', call: callOf(args['call'] as string) }, args['wait'])
   },
   {
     name: 'bury',

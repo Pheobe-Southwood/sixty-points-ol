@@ -459,11 +459,10 @@ async function playOneDeal(session: Session): Promise<CompactView> {
 
       switch (deal.phase) {
         case 'auction': {
-          const option = state.turn.legalBids?.[0];
-          assert.ok(option !== undefined, '轮到叫牌却没给 turn.legalBids');
-          const strain = option.strains[0];
-          assert.ok(strain !== undefined, 'turn.legalBids 的候选没有花色');
-          const call = deal.auction.length === 0 ? { points: option.points, strain } : 'pass';
+          const opening = state.turn.legalBids?.[0];
+          assert.ok(opening !== undefined, '轮到叫牌却没给 turn.legalBids');
+          // 叫品入参与出参同形（紧凑串）：把第一个候选原样抄回去即可（它是最低叫品）
+          const call = deal.auction.length === 0 ? opening : 'pass';
           if (!waitedOnce) {
             // 顺手钉住「等待有界」：先不等待地叫一口（此刻就不是自己的回合了），
             // 再从一个「轮不到自己」的位置等一次 —— 必须超时返回，而不是挂住会话

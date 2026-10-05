@@ -18,12 +18,12 @@ import {
   checkPlay as engineCheckPlay,
   HELP_KEYS,
   validateCall,
+  type Bid,
   type Card,
-  type Strain,
   type TrumpModel
 } from '@sixty/engine';
 import { ApiError } from '../src/api.ts';
-import { decodeCard, encodeCard } from '../src/codec.ts';
+import { decodeCall, decodeCard, encodeCard } from '../src/codec.ts';
 import { decodePlay } from '../src/project.ts';
 import {
   callTool,
@@ -250,32 +250,33 @@ test('wait_for_turn：观战者不该空转到超时，立刻说清楚', async (
 
 // ---------------------------------------------------------------- legal_bids
 
-test('legal_bids：每个候选都用引擎 validateCall 反查为合法', async () => {
+/** 紧凑叫品 → 引擎叫品（断言它认得出、且不是 pass）；顺带把类型收窄给调用方用 */
+function bidOf(code: string): Bid {
+  const call = decodeCall(code);
+  assert.ok(call !== null && call !== 'pass', `${code} 不是能叫出去的紧凑叫品`);
+  return call;
+}
+
+test('legal_bids：每个候选都用引擎 validateCall 反查为合法（紧凑串，可直接喂回 bid）', async () => {
   const api = new FakeApi();
-  const out = await call<{ options: { points: number; strains: readonly string[] }[] }>('legal_bids', api);
-  const flat = out.options.flatMap((row) =>
-    row.strains.map((strain) => ({ points: row.points, strain: strain as Strain }))
-  );
-  assert.ok(flat.length > 0, '开局至少要有 40 分的候选');
-  for (const bid of flat) {
-    assert.equal(validateCall(bid, null), null, `${bid.points}${bid.strain} 其实不合法`);
+  const out = await call<{ options: string[] }>('legal_bids', api);
+
+  assert.ok(out.options.length > 0, '开局至少要有 40 分的候选');
+  for (const code of out.options) {
+    assert.equal(validateCall(bidOf(code), null), null, `${code} 其实不合法`);
   }
-  assert.equal(out.options[0]!.points, 40);
-  assert.deepEqual(out.options[0]!.strains, ['C', 'D', 'H', 'S', 'NT']);
+  // 分数升序、同分按 C < D < H < S < NT —— 第一项就是最低叫品，模型抄一下即可
+  assert.deepEqual(out.options.slice(0, 5), ['40C', '40D', '40H', '40S', '40NT']);
 });
 
 test('legal_bids：有人叫了 45♥ 之后，同分只剩更高的花色、低分全部消失', async () => {
   const api = new FakeApi();
-  await call('bid', api, { call: { points: 45, strain: 'H' }, wait: false });
-  const out = await call<{
-    options: { points: number; strains: readonly string[] }[];
-    highestBid: string | null;
-  }>('legal_bids', api);
+  await call('bid', api, { call: '45H', wait: false });
+  const out = await call<{ options: string[]; highestBid: string | null }>('legal_bids', api);
 
   assert.equal(out.highestBid, '45H', '叫品出参是紧凑码（40C / 45H / 45NT）');
-  assert.equal(out.options.find((row) => row.points === 45)?.strains.join(''), 'SNT');
-  assert.equal(out.options.filter((row) => row.points < 45).length, 0);
-  assert.equal(out.options[0]!.points, 45);
+  assert.deepEqual(out.options.slice(0, 2), ['45S', '45NT'], '同分只剩更高的花色');
+  assert.equal(out.options.filter((code) => bidOf(code).points < 45).length, 0, '低于 45 的候选都该消失');
 });
 
 test('legal_bids 的阶段门：埋底 / 出牌 / 结算之后一律空表（不再说谎）', async () => {
@@ -296,8 +297,7 @@ test('legal_bids 的阶段门：埋底 / 出牌 / 结算之后一律空表（不
 
 test('turn：轮到你叫牌时直接给合法集（不让模型逐个试探）', async () => {
   const mine = await call<TableState>('get_state', new FakeApi({ state: dealtState(), seat: 0 }));
-  assert.equal(mine.turn.legalBids?.[0]?.points, 40);
-  assert.deepEqual(mine.turn.legalBids?.[0]?.strains, ['C', 'D', 'H', 'S', 'NT']);
+  assert.deepEqual(mine.turn.legalBids?.slice(0, 5), ['40C', '40D', '40H', '40S', '40NT']);
 
   const theirs = await call<TableState>('get_state', new FakeApi({ state: dealtState(), seat: 1 }));
   assert.equal(theirs.turn.legalBids, undefined, '不是自己的回合不该给「你可以叫」的错觉');
@@ -395,12 +395,52 @@ test('牌码同形：get_state 给的 you.hand 元素可以原样喂回 play', a
   assert.deepEqual(api.actions[0], { type: 'play', cards: [decodeCard(code)] });
 });
 
+/**
+ * **叫品必须能叫出去**（回归守卫）：`call` 曾经是 `z.union(['pass', {points, strain}])`，SDK 把
+ * union 播报成 `anyOf`，而宿主在把工具 schema 交给模型前会清洗它 —— Cuplivo 把 `anyOf` 拍平成
+ * **第一个分支**（`"pass"`），对象分支整个消失，于是真叫牌一律失败、只有 pass 成功。
+ * 所以入参是扁平字符串：这里从「出参里抄下来的写法」一路验到服务端收到的引擎叫品。
+ */
+test('叫品同形：legal_bids 给的紧凑串可以原样喂回 bid（大小写与空格宽容）', async () => {
+  const api = new FakeApi();
+  const listed = await call<{ options: string[] }>('legal_bids', api);
+  const first = listed.options[0]!;
+  assert.equal(first, '40C');
+
+  await call('bid', api, { call: first, wait: false });
+  assert.deepEqual(api.actions[0], { type: 'bid', call: { points: 40, strain: 'C' } });
+
+  // 宿主/模型给的大小写与空格不该白费一个回合
+  const second = new FakeApi();
+  await call('bid', second, { call: ' 45h ', wait: false });
+  assert.deepEqual(second.actions[0], { type: 'bid', call: { points: 45, strain: 'H' } });
+
+  const third = new FakeApi();
+  await call('bid', third, { call: '40 NT', wait: false });
+  assert.deepEqual(third.actions[0], { type: 'bid', call: { points: 40, strain: 'NT' } });
+});
+
+test('叫品认不出来时点名是哪一个，并说清格式（形状错不打到服务端）', async () => {
+  const api = new FakeApi();
+  for (const [bad, hint] of [
+    ['41C', /call「41C」/],
+    ['39C', /认不出来/],
+    ['40N', /认不出来/],
+    ['S40', /认不出来/]
+  ] as const) {
+    await assert.rejects(() => call('bid', api, { call: bad }), hint, `${bad} 应当被参数层挡下`);
+  }
+  // 旧的对象写法也一并说清楚：现在只收紧凑叫品
+  await assert.rejects(() => call('bid', api, { call: { points: 40, strain: 'C' } }), /参数格式不正确：call/);
+  assert.deepEqual(api.actions, [], '形状错的叫品不该打到服务端');
+});
+
 test('动作自带等待：成功之后直接给「下一次轮到你能动」的局面', async () => {
   const api = new FakeApi({ state: dealtState(), seat: 0 });
   const out = await call<TableState & { timedOut?: boolean }>(
     'bid',
     api,
-    { call: { points: 40, strain: 'C' } },
+    { call: '40C' },
     liveRuntime(api)
   );
 

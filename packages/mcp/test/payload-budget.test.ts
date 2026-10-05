@@ -144,7 +144,7 @@ async function measureDeals(schema: number, deals: number): Promise<DealBudget> 
       continue;
     }
     if (deal.phase === 'auction') {
-      state = await send('bid', { call: deal.auction.length === 0 ? { points: 40, strain: 'C' } : 'pass' });
+      state = await send('bid', { call: deal.auction.length === 0 ? '40C' : 'pass' });
       continue;
     }
     if (deal.phase === 'bury') {
