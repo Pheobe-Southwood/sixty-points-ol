@@ -37,7 +37,7 @@
   <h3 class="text-sm font-bold text-ivory">{title}</h3>
   <p class="mt-1 text-[11px] leading-relaxed text-white/55">{task}</p>
   <!-- 每个练手题都标出将牌环境：不写这句，读者没法判断哪几张算连牌 -->
-  <p class="mt-1 text-[11px] text-gold/70">本副：{trumpText(trump)}（金边 = 主牌）</p>
+  <p class="mt-1 text-[11px] text-gold/70">本副：{trumpText(trump)}（浅金底 = 主牌）</p>
 
   {#if lead !== null && lead !== undefined}
     <div class="mt-3 flex items-end gap-3">

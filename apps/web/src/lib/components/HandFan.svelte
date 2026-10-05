@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { cardKey, type Card, type TrumpModel } from '@sixty/engine';
+  import { cardKey, type Card, type Rank, type TrumpModel } from '@sixty/engine';
   import { computeFanLayout } from '$lib/fan-layout';
   import CardView from './Card.svelte';
 
   let {
     hand,
     trump = null,
+    /** 叫牌阶段的主牌预示（三家级别点数）；缺省 null = 不预示（打牌、教程等一律不传） */
+    candidateRanks = null,
     selected = [],
     /** 需要标蓝描边的牌（埋底阶段 = 拿上来的底牌）；空数组即无标记 */
     marked = [],
@@ -14,6 +16,7 @@
   }: {
     hand: readonly Card[];
     trump?: TrumpModel | null;
+    candidateRanks?: readonly Rank[] | null;
     selected?: readonly string[];
     marked?: readonly string[];
     selectable?: boolean;
@@ -62,6 +65,7 @@
         <CardView
           {card}
           {trump}
+          {candidateRanks}
           size="lg"
           selected={selected.includes(cardKey(card))}
           marked={marked.includes(cardKey(card))}

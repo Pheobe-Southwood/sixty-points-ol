@@ -1,14 +1,18 @@
 import {
+  cardClass,
   cardKey,
   checkPlay as engineCheckPlay,
   isJoker,
   levelLabel,
   RANK_LABEL,
   rankLabel,
+  SEATS,
+  START_LEVEL,
   SUIT_LABEL,
   type Bid,
   type BidCall,
   type Card,
+  type DealSummary,
   type Level,
   type PublicView,
   type Seat,
@@ -134,6 +138,23 @@ export function selectKey(card: Card): string {
 }
 
 /**
+ * 把「距上一步」的毫秒数写成给人看的时长：`12 秒` / `1 分 05 秒` / `2 小时 03 分`。
+ *
+ * 三档而不是一串冒号：牌桌上读到的是「等了多久」，`1 分 05 秒` 比 `01:05` 不需要翻译。
+ * 秒与分都补零（`05` 而不是 `5`），这样同一个数字在走字时宽度不跳。
+ * 负数与非有限值一律当 0：宁可显示「0 秒」，也不许在牌面上出现 `NaN` 或负数。
+ */
+export function formatElapsed(ms: number): string {
+  const total = Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 1000)) : 0;
+  const seconds = total % 60;
+  const minutes = Math.floor(total / 60) % 60;
+  const hours = Math.floor(total / 3600);
+  if (hours > 0) return `${hours} 小时 ${String(minutes).padStart(2, '0')} 分`;
+  if (total >= 60) return `${Math.floor(total / 60)} 分 ${String(seconds).padStart(2, '0')} 秒`;
+  return `${total} 秒`;
+}
+
+/**
  * 手牌中「来自底牌」的那些牌（多重集合语义）。
  *
  * 用于埋底阶段给庄家标注手牌：`you.originalKitty` 是权威来源，这里只做交集，
@@ -158,6 +179,93 @@ export function kittyHandDelta(hand: readonly Card[], kitty: readonly Card[] | n
     }
   }
   return out;
+}
+
+/**
+ * 赢墩徽标：只说「这 N 分进了谁家的账」。
+ *
+ * 三家分两方 —— 庄家一方（**庄**）与两名闲家一方（**闲**），所以赢家座位就决定了写哪个字。
+ * 早先写「上一轮 · 赢墩 +N 分」：既报了时机（上一轮）又报了动作（赢墩），
+ * 而玩家真正要一眼看懂的是「分归哪一方」——「庄 / 闲 +N 分」才是这条信息本身。
+ */
+export function trickSideBadge(
+  declarerSeat: number | null,
+  winnerSeat: number,
+  points: number
+): string {
+  return `${winnerSeat === declarerSeat ? '庄' : '闲'} +${points} 分`;
+}
+
+/**
+ * 跟牌时要蓝框高亮的手牌：**领出那一门的全部手牌**。
+ *
+ * 领出（`trick.plays` 为空）没有「同一门」可跟，缺门时这一门在手上一张也没有 ——
+ * 两种情况都自然返回空集，所以调用方只按「轮到自己 + 跟牌」判断，不必再分情形。
+ * 门用引擎的 `cardClass`（主牌是一门：主花色、副级、主级、双王都算），
+ * 于是「领主牌」时高亮的正是整手主牌。
+ */
+export function followSuitCards(
+  hand: readonly Card[],
+  trump: TrumpModel | null,
+  trick: { readonly plays: readonly { readonly cards: readonly Card[] }[] } | null
+): Card[] {
+  if (trump === null || trick === null || trick.plays.length === 0) return [];
+  const led = trick.plays[0]!.cards;
+  if (led.length === 0) return [];
+  const cls = cardClass(led[0]!, trump);
+  return hand.filter((card) => cardClass(card, trump) === cls);
+}
+
+/**
+ * 结算算式里墩分与底牌之间的符号：保底 `+`、抠底 `−`。
+ *
+ * 用 U+2212 而不是键盘上的 ASCII `-`：它与 `/rules` 教程、编排台里的那个 `−` 是同一个字形，
+ * 同一条算式里不许出现两种破折号。这个符号是整条式子里唯一决定「加还是扣」的东西，
+ * 所以弹窗把它按保底/抠底着色并放大（见 ActionTray 旁边那条 CONTEXT.md 决定）。
+ */
+export function kittySign(protectedBottom: boolean): '+' | '−' {
+  return protectedBottom ? '+' : '−';
+}
+
+/**
+ * 结算结论一行：打输 `50/55（差 5 分）· 闲家升 1 级`，打成 `打成 65/60 · 庄家升 2 级`。
+ *
+ * 打输时「差 N 分」自己就把输赢说了，所以不再写「打输」二字；打成没有对应的余量说法
+ * （恰好打平时写「超 0 分」反而是句怪话），所以保留「打成」。
+ * 负分是合法的（抠底可以把庄家扣成负数），负数用同一个 U+2212 —— 不让面板里出现 ASCII 连字符。
+ */
+export function scoreLineText(s: DealSummary): string {
+  const levels = s.levelChanges[0]?.levels ?? 0;
+  const score = String(s.finalScore).replace(/^-/, '−');
+  return s.made
+    ? `打成 ${score}/${s.contract.points} · 庄家升 ${levels} 级`
+    : `${score}/${s.contract.points}（差 ${s.shortfall} 分）· 闲家升 ${levels} 级`;
+}
+
+/** 结算弹窗级别表的一行 */
+export interface LevelRow {
+  readonly seat: Seat;
+  readonly from: Level;
+  readonly to: Level;
+  readonly changed: boolean;
+}
+
+/**
+ * 结算弹窗的级别表：**三家都要出现**。
+ *
+ * 没升级的那家也看得见，于是不必再单写一行「庄家级别不变。」；升级的行排前面（`sort` 是稳定的，
+ * 所以两组内部仍按座位序）。没升级的那家没有 `LevelChange`，用它当前的级别同时当 from 与 to ——
+ * `view.levels` 在结算后已经是终值。
+ */
+export function levelRows(summary: DealSummary, levels: readonly Level[]): LevelRow[] {
+  const changed = new Map(summary.levelChanges.map((change) => [change.seat, change]));
+  return SEATS.map((seat): LevelRow => {
+    const change = changed.get(seat);
+    const now = levels[seat] ?? START_LEVEL;
+    return change === undefined
+      ? { seat, from: now, to: now, changed: false }
+      : { seat, from: change.from, to: change.to, changed: true };
+  }).sort((a, b) => Number(b.changed) - Number(a.changed));
 }
 
 /**

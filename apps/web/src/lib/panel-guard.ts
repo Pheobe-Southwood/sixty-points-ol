@@ -1,12 +1,14 @@
 /**
- * 叫牌面板「可达性」守卫：面板必须自己是**唯一**的滚动区，而「不叫」必须是它内部的
- * sticky 页脚 —— 判断是纯字符串级的，源码（`BidPanel.svelte`）与出货 SSR HTML 共用这一份。
+ * 叫牌面板「可达性」守卫：面板是一个 flex 列，**唯一可伸缩的滚动区**是叫牌历史，
+ * 「不叫」是它后面正常文档流里的固定页脚 —— 于是页脚既不压住内容，也不会被裁掉。
  *
- * 为什么守的是机制而不是「页面里有 max-h-*」：上一版正是那么守的。`max-h-[56%]` 与
- * `overflow-y-auto` 一直都在，可面板是 flex 列 + `overflow-hidden`，候选区是
- * `shrink-0 max-h-44` —— 手机上面板可用高度 ~240px、固定开销 ~344px，可压缩的历史区
- * 被压到 0 之后，差额由 `overflow-hidden` 从**底部**裁掉，裁掉的正是排在最后的「不叫」。
- * 类名全在、按钮没了，所以守卫必须落在「谁在滚动、按钮怎么钉住」这一层。
+ * 两代坏形状都是这条不变式的反例：
+ * 1. 「flex 列 + `overflow-hidden` + `shrink-0` 候选区」：固定开销超过面板高度时，
+ *    `overflow-hidden` 从底部裁掉最后一行（正是「不叫」），它又不在任何滚动区里，滚也滚不回来。
+ * 2. 「面板自己滚 + 「不叫」sticky 贴底」：按钮确实点得到，但它是**浮**在内容上的 ——
+ *    滚动时压住排在最后的历史行（手机上那半行「45无主 / 50无主 / 55♥」就是这么被切掉的）。
+ * 现在：面板 `flex flex-col` + `max-h`；历史区 `min-h-0 flex-1 overflow-y-auto`（自己滚、先被压缩）；
+ * 「不叫」排在它之后、`shrink-0`、不 sticky。任何视口高度下，页脚都在，且内容的可见部分都不被遮。
  *
  * 用 `data-bid-panel` 定位面板：与仓库既有的 `data-marked` 同一套路，SSR HTML 里也在。
  * 注释先剥掉再判断 —— 解释「上一版为什么坏」的注释里写着 `overflow-hidden`，不构成违规。
@@ -21,9 +23,6 @@ export interface PanelCheckOptions {
   readonly requirePassButton?: boolean;
 }
 
-/** Tailwind 的 bottom-* 取值（sticky 需要一个明确的贴边偏移） */
-const BOTTOM_OFFSET = /\bbottom-(?:0|0\.5|1|1\.5|2|2\.5|3|3\.5|4|5|6|8|10|12)\b/;
-
 function fail(reason: string): PanelCheck {
   return { ok: false, reason };
 }
@@ -32,6 +31,15 @@ function fail(reason: string): PanelCheck {
 function classOf(tag: string): string {
   const match = /\bclass="([^"]*)"/.exec(tag);
   return match?.[1] ?? '';
+}
+
+/** 取某个位置所在的标签（往回找最近的 `<`，往前后各截到 `>`） */
+function tagAt(body: string, index: number): string {
+  const start = body.lastIndexOf('<', index);
+  if (start < 0) return '';
+  const end = body.indexOf('>', index);
+  if (end < 0) return '';
+  return body.slice(start, end + 1);
 }
 
 /** 「不叫」按钮的 class：在「不叫」文字之前找最近的 `<button` */
@@ -59,7 +67,7 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
   const tag = source.slice(open, openEnd + 1);
   const body = source.slice(openEnd + 1, end);
   if (body.includes('<section')) {
-    return fail('叫牌面板里又套了一层 <section>：面板必须只有它自己一个滚动区');
+    return fail('叫牌面板里又套了一层 <section>：面板的几何只该由这一个容器决定');
   }
 
   const panelClass = classOf(tag);
@@ -68,19 +76,42 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
   }
   if (panelClass.includes('overflow-hidden')) {
     return fail(
-      '叫牌面板用 overflow-hidden 裁切自己：内容超过 max-h 时，排在最后的子元素会被从底部裁掉 —— 上一版就是这么丢掉「不叫」的'
+      '叫牌面板用 overflow-hidden 裁切自己：内容超过 max-h 时，排在最后的「不叫」会被从底部裁掉 —— 上一版就是这么丢掉「不叫」的'
     );
   }
-  if (!panelClass.includes('overflow-y-auto')) {
-    return fail('叫牌面板自己不是滚动区（缺 overflow-y-auto）：超出 max-h 的部分只会被裁掉，滚不到');
-  }
-  const innerScroll = body.match(/overflow-y-auto/g)?.length ?? 0;
-  const innerClip = body.match(/overflow-hidden/g)?.length ?? 0;
-  if (innerScroll > 0 || innerClip > 0) {
+  if (!/\bflex\b/.test(panelClass) || !panelClass.includes('flex-col')) {
     return fail(
-      `面板内部还有第二个滚动/裁切区（overflow-y-auto ×${innerScroll}、overflow-hidden ×${innerClip}）：` +
-        '固定高度的子块会把「不叫」顶出面板底边'
+      '叫牌面板不是 flex 列（缺 flex flex-col）：只有 flex 列才能让历史区先被压缩、「不叫」稳稳留在正常文档流里'
     );
+  }
+
+  const scrollIndex = body.indexOf('overflow-y-auto');
+  if (scrollIndex < 0) {
+    return fail('面板里找不到叫牌历史的滚动区（缺 overflow-y-auto）：历史一长就会把「不叫」顶出面板');
+  }
+  const scrollClass = classOf(tagAt(body, scrollIndex));
+  if (!scrollClass.includes('min-h-0') || !scrollClass.includes('flex-1')) {
+    return fail(
+      '历史的滚动区不是可伸缩的那一块（需要 min-h-0 + flex-1）：它不先被压缩，固定内容就会把「不叫」挤出面板'
+    );
+  }
+  const scrollCount = body.match(/overflow-y-auto/g)?.length ?? 0;
+  if (scrollCount > 1) {
+    return fail(`面板里有 ${scrollCount} 处 overflow-y-auto：只允许叫牌历史那一块滚`);
+  }
+  const elasticCount = body.match(/flex-1/g)?.length ?? 0;
+  if (elasticCount > 1) {
+    return fail(`面板里有 ${elasticCount} 处 flex-1：可伸缩的只允许历史滚动区这一块`);
+  }
+  if (body.includes('overflow-hidden')) {
+    return fail(
+      '面板里还有 overflow-hidden 裁切区：固定高度的子块会把「不叫」顶出面板底边（上一版的故障形状）'
+    );
+  }
+
+  const passIndex = body.indexOf('不叫');
+  if (passIndex >= 0 && passIndex < scrollIndex) {
+    return fail('「不叫」排在历史滚动区之前：页脚必须排在滚动区之后，历史才不会从它下面穿过去');
   }
 
   const buttonClass = passButtonClass(body);
@@ -88,10 +119,13 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
     if (options.requirePassButton === false) return { ok: true, reason: '' };
     return fail('面板里找不到「不叫」按钮：轮到自己时必须有一个可点的「不叫」');
   }
-  if (!buttonClass.includes('sticky') || !BOTTOM_OFFSET.test(buttonClass)) {
+  if (buttonClass.includes('sticky')) {
     return fail(
-      '「不叫」不是 sticky 底部（需要 sticky + bottom-*）：内容超出面板时它会被顶出滚动区，滚到底也可能点不到'
+      '「不叫」是 sticky 的：它会浮在历史行上，把排在最后的那半行叫牌记录压掉 —— 页脚要在正常文档流里（容器内不许出现 sticky）'
     );
+  }
+  if (!buttonClass.includes('shrink-0')) {
+    return fail('「不叫」不是 shrink-0：flex 列空间不够时它会被压缩，命中区随之变小');
   }
   if (!buttonClass.includes('min-h-11')) {
     return fail('「不叫」的命中区不足 44px（缺 min-h-11）');

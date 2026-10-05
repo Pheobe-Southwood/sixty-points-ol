@@ -37,7 +37,9 @@ export function fakeTableView(code = 'ABC123', online = true, spectatorCount = 0
     ],
     seatedCount: 3,
     ready: true,
-    spectatorCount
+    spectatorCount,
+    // 「距上一步」的年龄：工具面不消费它，测试固定一个值即可（形状与真实响应一致）
+    actionAgeMs: 0
   };
 }
 

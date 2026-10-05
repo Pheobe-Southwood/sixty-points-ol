@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { credentialOf, identityFrom } from '$lib/server/auth';
-import { myTables, type MyTable } from '$lib/server/tables';
+import { myTablesDetailed, type MyTableDetailed } from '$lib/server/tables';
 import { normalizeInvite } from '$lib/invite';
 import type { PageServerLoad } from './$types';
 
@@ -9,12 +9,12 @@ export const load: PageServerLoad = async (event) => {
   const join = normalizeInvite(event.url.searchParams.get('join') ?? '');
   const identity = identityFrom(event);
   if (identity === null) {
-    return { me: null, credential: null, myTables: [] as MyTable[], join };
+    return { me: null, credential: null, myTables: [] as MyTableDetailed[], join };
   }
   return {
     me: { name: identity.name },
     credential: credentialOf(identity),
-    myTables: myTables(identity.id),
+    myTables: myTablesDetailed(identity.id),
     join
   };
 };

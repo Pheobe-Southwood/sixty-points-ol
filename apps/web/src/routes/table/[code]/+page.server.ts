@@ -16,7 +16,7 @@ export const load: PageServerLoad = async (event) => {
   const code = event.params.code.toUpperCase();
   // 进入即到达：有空座自动入座，满座（或本人刚离座）则以观战身份进入
   const entered = enterTable(code, identity.id);
-  if ('error' in entered) error(404, '同桌不存在，请确认邀请码');
+  if ('error' in entered) error(404, '牌桌不存在，请确认邀请码');
 
   return {
     code: entered.table.code,

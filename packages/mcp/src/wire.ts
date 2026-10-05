@@ -30,6 +30,11 @@ export interface TableView {
   readonly ready: boolean;
   /** **实时**观战连接数（不是观战记录数） */
   readonly spectatorCount: number;
+  /**
+   * 距上一次牌局动作的毫秒数（这一桌还没发过牌为 `null`）。
+   * 它是浏览器侧的「距上一步」计时用的，工具面不消费（`project.ts` 的白名单不取它）。
+   */
+  readonly actionAgeMs: number | null;
 }
 
 /**
@@ -53,14 +58,21 @@ export interface TableSummary {
   readonly role: Role;
 }
 
-/** 形状守卫的字段清单：声明与服务器漂移时，mcp-check 按这几张表逐个核对 */
+/**
+ * 形状守卫的字段清单：声明与服务器漂移时，mcp-check 按这几张表逐个核对。
+ *
+ * 同一规矩也适用于 `TableView`：服务器负载**长了字段这里就要显式跟**，
+ * 忘了形状守卫立刻红 —— `actionAgeMs`（浏览器的「距上一步」计时）就是这么进来的；
+ * `bot`（机器人座位）同理。
+ */
 export const SEAT_FIELDS: readonly (keyof SeatInfo)[] = ['seat', 'userId', 'name', 'online', 'bot'];
 export const TABLE_FIELDS: readonly (keyof TableView)[] = [
   'code',
   'seats',
   'seatedCount',
   'ready',
-  'spectatorCount'
+  'spectatorCount',
+  'actionAgeMs'
 ];
 export const VIEW_FIELDS: readonly (keyof PublicView)[] = [
   'version',

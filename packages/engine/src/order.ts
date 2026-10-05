@@ -141,14 +141,34 @@ export function topLevel(cards: readonly Card[], t: TrumpModel): number {
   return cards.reduce((max, c) => Math.max(max, cardLevel(c, t)), -1);
 }
 
-const SUIT_DISPLAY_ORDER: Record<Suit, number> = { S: 0, H: 1, C: 2, D: 3 };
+const SUIT_DISPLAY_ORDER: readonly Suit[] = ['S', 'H', 'C', 'D'];
+const RED_SUITS: ReadonlySet<Suit> = new Set<Suit>(['H', 'D']);
 
-/** 手牌排序：主牌在前，随后 ♠♥♣♦，同门内由大到小；无将牌信息时双王在前 */
+/**
+ * 副牌的显示序：**黑红交替**。
+ *
+ * 主牌花色被提到最前面之后，剩下三门里必有两门同色、一门异色（♠♣ 黑、♥♦ 红）——
+ * 把同色那两门放两端、异色那门摆中间，相邻两门就必然异色：主打 ♣ 时 ♥ ♦ 不再挨着。
+ * 同色两门内部沿用固定序 ♠♥♣♦，所以同一副牌每次渲染的顺序都是稳定的。
+ * 无主与将牌未定时四门俱在，而 ♠♥♣♦ 本身就是黑红交替，直接返回固定序。
+ */
+export function suitDisplayOrder(t: TrumpModel | null): Suit[] {
+  if (t === null || t.strain === 'NT') return [...SUIT_DISPLAY_ORDER];
+  const off = SUIT_DISPLAY_ORDER.filter((suit) => suit !== t.strain);
+  const reds = off.filter((suit) => RED_SUITS.has(suit));
+  const blacks = off.filter((suit) => !RED_SUITS.has(suit));
+  return reds.length === 2
+    ? [reds[0]!, blacks[0]!, reds[1]!]
+    : [blacks[0]!, reds[0]!, blacks[1]!];
+}
+
+/** 手牌排序：主牌在前，随后按 `suitDisplayOrder`（副牌黑红交替），同门内由大到小；无将牌信息时双王在前 */
 export function sortHand(cards: readonly Card[], t: TrumpModel | null): Card[] {
+  const order = suitDisplayOrder(t);
   const group = (c: Card): number => {
     if (isJoker(c)) return -1;
     if (t !== null && cardClass(c, t) === 'T') return -1;
-    return SUIT_DISPLAY_ORDER[c.suit] + 1;
+    return order.indexOf(c.suit) + 1;
   };
   const level = (c: Card): number => {
     if (!t) return isJoker(c) ? (c.joker === 'big' ? 2 : 1) : c.rank;

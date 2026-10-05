@@ -169,7 +169,7 @@
   </div>
 {:else if widget.kind === 'lead-cases'}
   <div class={box}>
-    <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌）</p>
+    <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（浅金底 = 主牌）</p>
     <div class="space-y-2">
       {#each leadCases as item, index (index)}
         <div class="flex flex-wrap items-center gap-2">

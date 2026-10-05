@@ -302,7 +302,7 @@
       </p>
       <div>
         <p class={env}>
-          本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌；下面这 {TRUMP_RUN_CROSS.length} 张是一条合法顺子）
+          本副：{trumpText(TRUMP_HEARTS)}（浅金底 = 主牌；下面这 {TRUMP_RUN_CROSS.length} 张是一条合法顺子）
         </p>
         <CardRow cards={TRUMP_RUN_CROSS} trump={TRUMP_HEARTS} size="md" highlight={TRUMP_RUN_CROSS.map(cardKey).slice(3)} />
         <p class="mt-1 text-[11px] text-white/50">
@@ -387,7 +387,7 @@
       <p>
         庄家把底牌 3 张收进手里，一共 20 张，然后<b class="text-ivory">扣 3 张埋回去</b>。这 3 张在算账之前，另外两家都看不到。
       </p>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌；真实为 20 张，这里取 12 张展示扇形）</p>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（浅金底 = 主牌；真实为 20 张，这里取 12 张展示扇形）</p>
       <div class="rounded-xl bg-black/25 px-2 py-3">
         <HandFan hand={BURY_HAND} trump={TRUMP_HEARTS} />
       </div>
@@ -425,7 +425,7 @@
 
       <p class={subhead}>① 领出</p>
       <p>出一张，或者出<b class="text-ivory">同一门里大小相邻的连牌</b>（2 张及以上）。不允许甩牌。</p>
-      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（金边 = 主牌）</p>
+      <p class={env}>本副：{trumpText(TRUMP_HEARTS)}（浅金底 = 主牌）</p>
       <div class="space-y-2 rounded-xl bg-black/30 p-3">
         {#each leadCases as item, index (index)}
           <div class="flex flex-wrap items-center gap-2">
@@ -720,7 +720,7 @@
     <h2 class={heading}>9. 观战与离座</h2>
     <div class={body}>
       <p>
-        一张同桌只有 <b class="text-ivory">3 个座位</b>，但可以有任意多个<b class="text-ivory">观战者</b>。满座时用邀请链接进来的人
+        一张牌桌只有 <b class="text-ivory">3 个座位</b>，但可以有任意多个<b class="text-ivory">观战者</b>。满座时用邀请链接进来的人
         自动成为观战者；在座的人点「离座」也会转为观战者 —— 离座之后你仍然看得见这一桌，刷新也不会被自动塞回座位。
       </p>
 

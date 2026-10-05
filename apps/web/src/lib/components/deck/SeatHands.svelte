@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { cardClass, cardKey, isJoker, sortHand, SUIT_LABEL, type Card, type CardClass, type Seat } from '@sixty/engine';
+  import { cardClass, cardKey, isJoker, sortHand, SUIT_LABEL, suitDisplayOrder, type Card, type CardClass, type Seat } from '@sixty/engine';
   import CardView from '$lib/components/Card.svelte';
   import { handFromKeys } from '$lib/story/replay';
   import type { StoryDealData } from '$lib/story/story-data';
@@ -23,9 +23,10 @@
 
   const trump = $derived(story.deal.trump);
 
-  /** 固定五个槽位，顺序与引擎的 `sortHand` 一致：主牌一段，随后 ♠♥♣♦ */
-  const SLOTS: readonly CardClass[] = ['T', 'S', 'H', 'C', 'D'];
-
+  /**
+   * 固定槽位，顺序与引擎的 `sortHand` 一致：主牌一段，随后副牌按 `suitDisplayOrder`
+   * （副牌黑红交替，主打 ♣ 时 ♥ 与 ♦ 不会被排在一起）。
+   */
   interface Slot {
     readonly cls: CardClass;
     readonly label: string;
@@ -39,7 +40,8 @@
   function slotsOf(keys: readonly string[], t: StoryDealData['deal']['trump']): Slot[] {
     const sorted = sortHand(handFromKeys(keys), t);
     const clsOf = (card: Card): CardClass => (t === null ? (isJoker(card) ? 'T' : card.suit) : cardClass(card, t));
-    return SLOTS.map((cls) => ({
+    const order: readonly CardClass[] = ['T', ...suitDisplayOrder(t)];
+    return order.map((cls) => ({
       cls,
       label: cls === 'T' ? '主' : SUIT_LABEL[cls],
       cards: sorted.filter((card) => clsOf(card) === cls)

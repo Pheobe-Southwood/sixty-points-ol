@@ -69,7 +69,7 @@ export function serverApi(userId: number | null, ports: ServerApiPorts): GameApi
     async table(code: string): Promise<TablePayload> {
       const id = requireUser();
       const table = getTableByCode(code);
-      if (table === null) throw new ApiError('同桌不存在', 404);
+      if (table === null) throw new ApiError('牌桌不存在', 404);
       // payloadFor 现算角色：在座 → 个人视图（公共 + you），观战 → 公共视图（you 为 null）
       return payloadFor(table, id);
     },

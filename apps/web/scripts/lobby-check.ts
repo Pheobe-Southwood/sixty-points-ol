@@ -111,7 +111,7 @@ async function main(): Promise<void> {
   );
   const entry = await pageAnonymous(`/?join=${code}`);
   assert(entry.includes(code), '大厅没有把邀请码带进入座框，注册后回不到原桌');
-  assert(entry.includes('回到同桌'), '大厅没有告诉用户注册后会自动回到原桌');
+  assert(entry.includes('回到牌桌'), '大厅没有告诉用户注册后会自动回到原桌');
 
   // 邀请码不合法的路径不该把垃圾带进大厅（也不该变成任意外链）
   const garbage = await redirectOf('/table/zz');

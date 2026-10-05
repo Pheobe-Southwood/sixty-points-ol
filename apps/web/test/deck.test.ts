@@ -156,7 +156,7 @@ test('依赖级牌的示例都自带「本副：」环境说明（沿用 /rules 
   const widget = readFileSync(new URL('../src/lib/components/deck/DeckWidget.svelte', import.meta.url), 'utf8');
   const trick = readFileSync(new URL('../src/lib/components/deck/StoryTrick.svelte', import.meta.url), 'utf8');
   assert.ok(widget.includes('本副：') && widget.includes('trumpText('), '概念章的挂件没有渲染将牌环境');
-  // 牌局章每一墩屏都在页头写「级牌 X · 主打 Y」，且每张牌面的主牌金边走的是引擎判定
+  // 牌局章每一墩屏都在页头写「级牌 X · 主打 Y」，且每张牌面的主牌浅金底走的是引擎判定
   const page = readFileSync(new URL('../src/routes/learn/+page.svelte', import.meta.url), 'utf8');
   assert.ok(page.includes('role="group"') && page.includes('aria-roledescription="幻灯片"'), '演示页缺幻灯片语义');
   assert.ok(page.includes('aria-label={playing') || page.includes("aria-label={playing ? '暂停自动播放'"), '自动播放按钮缺 aria-label');

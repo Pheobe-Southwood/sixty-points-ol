@@ -122,6 +122,42 @@ export function myTables(userId: number): MyTable[] {
   }));
 }
 
+export interface MyTableDetailed {
+  readonly code: string;
+  readonly role: Role;
+  /** 在座玩家名（按座位顺序；空座没有座位行，所以只含已入座的名字） */
+  readonly names: string[];
+}
+
+/**
+ * 大厅「我的牌桌」行的加详版：多带在座玩家名（每桌独占一行，不必点进去看谁在座）。
+ * `myTables` 本体是 wire 形状（REST `/api/tables` 与 MCP `list_my_tables` 共用，ADR-0012），
+ * 加字段走这个**只给大厅页 load 用**的新函数，不动那份形状。
+ */
+export function myTablesDetailed(userId: number): MyTableDetailed[] {
+  const rows = db
+    .prepare(
+      `SELECT t.id AS id, t.code AS code,
+              (s.user_id IS NOT NULL) AS seated_me
+       FROM tables t
+       LEFT JOIN seats s ON s.table_id = t.id AND s.user_id = ?
+       LEFT JOIN spectators w ON w.table_id = t.id AND w.user_id = ?
+       WHERE s.user_id IS NOT NULL OR w.user_id IS NOT NULL
+       ORDER BY t.id DESC
+       LIMIT 20`
+    )
+    .all(userId, userId) as unknown as { id: number; code: string; seated_me: number }[];
+  const seatNames = db.prepare(
+    `SELECT u.name AS name FROM seats s JOIN users u ON u.id = s.user_id
+     WHERE s.table_id = ? ORDER BY s.seat`
+  );
+  return rows.map((row) => ({
+    code: row.code,
+    role: row.seated_me === 1 ? 'player' : 'spectator',
+    names: (seatNames.all(row.id) as unknown as { name: string }[]).map((seat) => seat.name)
+  }));
+}
+
 export function seatOf(table: TableInfo, userId: number): number | null {
   const index = table.seats.findIndex((id) => id === userId);
   return index === -1 ? null : index;
@@ -228,7 +264,7 @@ function dealInProgress(tableId: number): boolean {
  */
 export function enterTable(code: string, userId: number): EnterResult {
   const table = getTableByCode(code);
-  if (table === null) return { error: '同桌不存在' };
+  if (table === null) return { error: '牌桌不存在' };
   const seat = seatOf(table, userId);
   // 已经在座：什么都没变，不广播（重复 join_table 不该产生帧）
   if (seat !== null) return { role: 'player', table, seat, inherited: false };
@@ -259,7 +295,7 @@ export type ActionResult = { ok: true } | { ok: false; message: string };
 /** 离座：座位空出，本人转为观战者（写完观战记录后刷新也不会被自动塞回座位） */
 export function leaveSeat(code: string, userId: number): ActionResult {
   const table = getTableByCode(code);
-  if (table === null) return { ok: false, message: '同桌不存在' };
+  if (table === null) return { ok: false, message: '牌桌不存在' };
   if (seatOf(table, userId) === null) {
     // 幂等：本来就没在座，只确保观战意愿记下（按钮双击/重试不该报错）
     const watching = watchingOf(table.id, userId);
@@ -285,7 +321,7 @@ export function takeSeat(
   userId: number
 ): { seat: number; inherited: boolean } | { error: string } {
   const table = getTableByCode(code);
-  if (table === null) return { error: '同桌不存在' };
+  if (table === null) return { error: '牌桌不存在' };
   const existing = seatOf(table, userId);
   // 已经在座：幂等，没有变化
   if (existing !== null) return { seat: existing, inherited: false };
@@ -303,6 +339,22 @@ export function takeSeat(
   });
   broadcast(table.id);
   return result;
+}
+
+/**
+ * 距**上一次牌局动作**的毫秒数；这一桌还没发过牌时为 `null`。
+ *
+ * 来源是 `games.updated_at`：它由 `saveGame` 在每次动作的**同一个事务**里写入（唯一调用点），
+ * 所以它就是「上个动作」的时刻。入座/离座不写这张表 ⇒ 换人不重置计时。
+ * 传年龄而不是时间戳：浏览器不必相信自己的钟（见 CONTEXT.md 的「计时」）。
+ */
+function actionAgeMs(tableId: number): number | null {
+  const row = db.prepare('SELECT updated_at FROM games WHERE table_id = ?').get(tableId) as
+    | { updated_at: string }
+    | undefined;
+  if (row === undefined) return null;
+  const at = Date.parse(row.updated_at);
+  return Number.isFinite(at) ? Math.max(0, Date.now() - at) : null;
 }
 
 export function tableView(table: TableInfo): TableView {
@@ -336,7 +388,8 @@ export function tableView(table: TableInfo): TableView {
     seats,
     seatedCount,
     ready: seatedCount === SEAT_COUNT,
-    spectatorCount: spectators.size
+    spectatorCount: spectators.size,
+    actionAgeMs: actionAgeMs(table.id)
   };
 }
 
@@ -395,7 +448,7 @@ export function payloadFor(table: TableInfo, userId: number): StreamPayload {
 /** 服务器权威地执行一个动作：座位号一律由服务端根据身份推导（见 ADR-0002） */
 export function applyTableAction(code: string, userId: number, action: Action): ActionResult {
   const table = getTableByCode(code);
-  if (table === null) return { ok: false, message: '同桌不存在' };
+  if (table === null) return { ok: false, message: '牌桌不存在' };
   const seat = seatOf(table, userId);
   // 一次动作也是「最近活跃」：失败的动作同样说明这个人此刻在场（见 ADR-0010）
   touched(userId);

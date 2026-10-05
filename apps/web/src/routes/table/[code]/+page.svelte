@@ -6,6 +6,7 @@
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
   import type { DrawerTabKey } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
+  import ActionTray from '$lib/components/ActionTray.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
   import BotRemoveConfirm from '$lib/components/BotRemoveConfirm.svelte';
   import BuryPanel from '$lib/components/BuryPanel.svelte';
@@ -20,7 +21,7 @@
   import TableDrawer from '$lib/components/TableDrawer.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
-  import { kittyHandDelta } from '$lib/labels';
+  import { followSuitCards, kittyHandDelta } from '$lib/labels';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -57,6 +58,18 @@
   const deal = $derived(view?.deal ?? null);
   const summary = $derived(deal?.summary ?? null);
   const trump = $derived(deal?.trump ?? null);
+  /**
+   * 叫牌阶段的主牌预示：三家级别的点数。
+   *
+   * 本副级牌点数取自**庄家**的级别，而庄家还没定 —— 所以哪一家的级别都可能成为它，
+   * 手牌里命中任一点数的牌都该标「可能成为级牌」。王不在此列：它恒是主牌，
+   * 由 `Card` 按主牌单独上色（`candidateRanks` 非 null 时）。
+   */
+  const candidateRanks = $derived(
+    deal !== null && deal.phase === 'auction' && view !== null
+      ? [...new Set(view.levels.map((level) => level.rank))]
+      : null
+  );
   const you = $derived(client.you);
   const seated = $derived(you !== null);
   /** 文本里一律用玩家名指代（不再有东/南/西）：座位卡显示的就是这些名字 */
@@ -88,12 +101,24 @@
         (deal.phase === 'bury' && you.isDeclarer))
   );
 
-  /** 埋底阶段给庄家的手牌标出「拿上来的底牌」；其余阶段与闲家都是空集合（观战者没有 you） */
-  const markedKeys = $derived(
-    deal !== null && deal.phase === 'bury' && you?.isDeclarer === true
-      ? kittyHandDelta(you.hand, you.originalKitty).map(cardKey)
-      : []
-  );
+  /**
+   * 手牌蓝框标记（`data-marked`）：两个阶段各有一个「这几张现在最要紧」的集合。
+   *
+   * - **埋底（庄家）**：拿上来的底牌 —— `you.originalKitty` 是权威来源；
+   * - **出牌（轮到自己跟牌）**：领出那一门的手牌 —— 跟牌必须先跟同门，缺门时集合自然为空。
+   *
+   * 其余阶段、其余人（含观战者）一律空集：标记是给正要出手的那个人看的。
+   */
+  const markedKeys = $derived.by(() => {
+    if (deal === null || you === null) return [];
+    if (deal.phase === 'bury' && you.isDeclarer) {
+      return kittyHandDelta(you.hand, you.originalKitty).map(cardKey);
+    }
+    if (deal.phase === 'play' && deal.playTurn === you.seat) {
+      return followSuitCards(you.hand, trump, deal.trick).map(cardKey);
+    }
+    return [];
+  });
 
   // 每副结束自动弹出结算；关闭后可随时用「结算详情」重开（观战者也照弹，结算信息本来就是公开的）
   $effect(() => {
@@ -213,27 +238,43 @@
     {#if deal === null}
       <LobbyPanel {client} code={data.code} />
     {:else if view !== null}
-      {#if deal.phase !== 'auction'}
-        <TableStatus {view} />
-      {/if}
-
-      {#if deal.phase === 'auction'}
+      {#if deal.phase === 'bury'}
+        <!-- 阶段状态条与埋底面板同属**一个**绝对定位的列容器：槽位永远排在状态条下面。
+             早先两者各自绝对定位（状态条 top-[5.5rem]、面板 top-[12%]），手机短屏上
+             「定约 / 庄已抓」会压到暗底槽位上 —— 两处各算各的位置，谁也管不了谁。
+             这一层横跨整幅毡面，所以要**让开点击**（`pointer-events-none`）：它会在座位卡的
+             「+ 机器人」/「请离」按钮上吃掉点击。里面只有埋底面板那行底牌是可点的，
+             由 BuryPanel 自己 `pointer-events-auto` 接回来（见 `BuryPanel.svelte` 与
+             `test/table-chrome.test.ts` 的「横跨毡面的覆盖层必须让开点击」）。 -->
+        <div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2 sm:top-6">
+          <TableStatus {view} />
+          <BuryPanel {client} />
+        </div>
+      {:else if deal.phase === 'auction'}
         <BidPanel {client} />
-      {:else if deal.phase === 'bury'}
-        <BuryPanel {client} />
       {:else}
+        <div class="pointer-events-none absolute inset-x-0 top-[5.5rem] flex justify-center px-2 sm:top-6">
+          <TableStatus {view} />
+        </div>
         <TrickArea {view} seat={anchor} mySeat={label} {names} />
       {/if}
     {/if}
   </div>
 
-  <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+  <!-- 操作条与动作托盘是**同一块版面**：托盘绝对定位悬在这一条上、再居中于手牌正上方。
+       它不占流，所以「轮到自己 / 轮空」之间切换时毡面与手牌不会上下跳；z-30 压过上浮的选中牌。
+       早先出牌/埋底控件就在这一条的行内 —— 窄屏一晚换行就把整页高度顶动，按钮还落在最左侧。 -->
+  <div class="relative">
+    <ActionBar {client} {summaryOpen} onToggleSummary={() => (summaryOpen = !summaryOpen)} />
+    <ActionTray {client} />
+  </div>
 
   <!-- 观战者没有手牌：手牌区整块消失，牌桌更大 -->
   {#if you !== null}
     <HandFan
       hand={you.hand}
       {trump}
+      {candidateRanks}
       selected={client.selected}
       marked={markedKeys}
       {selectable}

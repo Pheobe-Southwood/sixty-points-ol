@@ -28,6 +28,14 @@ export interface TableView {
   readonly ready: boolean;
   /** **实时**观战连接数（不是观战记录数）：大厅列表用的是观战记录，两者口径不同 */
   readonly spectatorCount: number;
+  /**
+   * 距**上一次牌局动作**（发牌/叫牌/埋底/出牌/开新对局）的毫秒数；这一桌还没发过牌则为 `null`。
+   *
+   * 传的是**年龄**而不是时间戳：浏览器因此永远不必拿自己的钟去对服务端的钟，
+   * 帧与帧之间自己走时，每收到一帧就用这里的权威值重新锚定（见 CONTEXT.md 的「计时」）。
+   * 入座与离座不写这个值（它们不是牌局动作），所以计时不会被换人重置。
+   */
+  readonly actionAgeMs: number | null;
 }
 
 /**
