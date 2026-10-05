@@ -23,6 +23,8 @@ import {
   BID_GLYPH,
   bidText,
   callText,
+  changedLevelRows,
+  contractText,
   followSuitCards,
   formatElapsed,
   highestCall,
@@ -30,6 +32,7 @@ import {
   kittyHandDelta,
   kittySign,
   lastCall,
+  levelProgression,
   levelRows,
   scoreLineText,
   trickSideBadge
@@ -407,5 +410,118 @@ test('levelRows：座位不重不漏 —— 升级表永远恰好三行', () => 
   // levels 给空数组时（不该发生）回落到起始级别，而不是 undefined
   const fallback = rows.find((row) => row.seat === 0);
   assert.deepEqual(fallback?.from, { rank: 2, cycle: 0 });
+});
+
+/* ---------- 战报：定约+级牌、升级表 ---------- */
+
+test('contractText：定约 + 级牌，花色走字形、A 不写成 14', () => {
+  assert.equal(contractText(summaryOf()), '55♠ · 级 2');
+  assert.equal(
+    contractText(summaryOf({ contract: { points: 45, strain: 'C', declarerSeat: 0 } })),
+    '45♣ · 级 2',
+    '花色必须出字形：战报里不许出现「45C · 级 2」'
+  );
+  assert.equal(
+    contractText(
+      summaryOf({
+        contract: { points: 40, strain: 'NT', declarerSeat: 1 },
+        trump: { strain: 'NT', rank: 14 }
+      })
+    ),
+    '40无主 · 级 A',
+    '无主写文字、级牌 A 写 A'
+  );
+  // 裸花色字母回归：五门都不许漏出 C/D/H/S（无主的 NT 也不许）
+  for (const strain of STRAINS) {
+    const text = contractText(summaryOf({ contract: { points: 40, strain, declarerSeat: 0 } }));
+    assert.equal(/[CDHSNT]/.test(text), false, `${strain} 的定约文本里还有裸字母：${text}`);
+  }
+});
+
+test('changedLevelRows：战报每副卡只列升级者，全部按「升级行」渲染', () => {
+  const lost = changedLevelRows(summaryOf({ levelChanges: defendersUp(1) }));
+  assert.equal(lost.length, 2, '打输时只有两名闲家升级：庄家那一行不许出现（历史里没有它的级别）');
+  assert.deepEqual(
+    lost.map((row) => row.seat),
+    [1, 2],
+    '顺序就是 levelChanges 的顺序（不重排）'
+  );
+  for (const row of lost) {
+    assert.equal(row.changed, true, '每一行都是升级行：LevelTable 才不会给它淡显 +「不变」');
+    assert.deepEqual(row.from, { rank: 2, cycle: 0 });
+    assert.deepEqual(row.to, { rank: 3, cycle: 0 });
+  }
+  assert.deepEqual(changedLevelRows(summaryOf()), [], '没人升级时是空集（那一块整个不渲染）');
+});
+
+test('levelProgression：空战报只有「开局」一行，三家都在起始级别', () => {
+  const rows = levelProgression([]);
+  assert.equal(rows.length, 1, '第 0 行就是开局');
+  assert.equal(rows[0]!.dealNo, 0);
+  assert.deepEqual(rows[0]!.levels, [
+    { rank: 2, cycle: 0 },
+    { rank: 2, cycle: 0 },
+    { rank: 2, cycle: 0 }
+  ]);
+  assert.deepEqual(rows[0]!.changed, [false, false, false], '开局那一行没有人「动了」');
+});
+
+test('levelProgression：逐副累积，没动的座位沿用上一副的级别', () => {
+  const rows = levelProgression([
+    summaryOf({ dealNo: 1, levelChanges: defendersUp(1) }),
+    summaryOf({
+      dealNo: 2,
+      made: true,
+      levelChanges: [
+        { seat: 0, from: { rank: 2, cycle: 0 }, to: { rank: 4, cycle: 0 }, levels: 2 }
+      ]
+    }),
+    summaryOf({ dealNo: 3, levelChanges: [] })
+  ]);
+  assert.deepEqual(
+    rows.map((row) => row.dealNo),
+    [0, 1, 2, 3],
+    '行序必须是 开局 → 第 1 副 → … （升序；与逐副卡的「新→旧」相反，表要从上往下读）'
+  );
+  // 第 1 副：两名闲家各升 1 级
+  assert.deepEqual(rows[1]!.levels, [
+    { rank: 2, cycle: 0 },
+    { rank: 3, cycle: 0 },
+    { rank: 3, cycle: 0 }
+  ]);
+  assert.deepEqual(rows[1]!.changed, [false, true, true]);
+  // 第 2 副：庄家升到 4，两名闲家沿用第 1 副之后的 3
+  assert.deepEqual(rows[2]!.levels, [
+    { rank: 4, cycle: 0 },
+    { rank: 3, cycle: 0 },
+    { rank: 3, cycle: 0 }
+  ]);
+  assert.deepEqual(rows[2]!.changed, [true, false, false]);
+  // 第 3 副没人升级：级别一行都不许回退
+  assert.deepEqual(rows[3]!.levels, rows[2]!.levels);
+  assert.deepEqual(rows[3]!.changed, [false, false, false]);
+});
+
+test('levelProgression：跨 A 的「+过次」原样带进后面的行', () => {
+  const rows = levelProgression([
+    summaryOf({
+      dealNo: 1,
+      made: true,
+      levelChanges: [
+        { seat: 0, from: { rank: 13, cycle: 0 }, to: { rank: 14, cycle: 0 }, levels: 1 }
+      ]
+    }),
+    summaryOf({
+      dealNo: 2,
+      made: true,
+      levelChanges: [
+        { seat: 0, from: { rank: 14, cycle: 0 }, to: { rank: 3, cycle: 1 }, levels: 1 }
+      ]
+    }),
+    summaryOf({ dealNo: 3, levelChanges: defendersUp(1) })
+  ]);
+  assert.deepEqual(rows[1]!.levels[0], { rank: 14, cycle: 0 });
+  assert.deepEqual(rows[2]!.levels[0], { rank: 3, cycle: 1 }, '过 A 之后是 3(+1)，不是 15(+0)');
+  assert.deepEqual(rows[3]!.levels[0], { rank: 3, cycle: 1 }, '这一副没动庄家，徽标要照旧带着 +1');
 });
 

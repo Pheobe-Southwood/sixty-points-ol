@@ -3,18 +3,13 @@
   import type { TableClient } from '$lib/client/table.svelte';
 
   /**
-   * 入座 / 离座按钮。两个变体：
+   * 入座 / 离座按钮（「牌桌」页用），三态齐全：入座 / 离座 / 座位已满。
    *
-   * - `sit-only`：只在页头用 —— 补位是有时限的动作（座位可能被别人占走），
-   *   所以「入座」留在页头；在座或满座时页头这一处什么都不渲染。
-   * - `full`：「我」页用 —— 三态齐全（入座 / 离座 / 座位已满）。离座走 `onLeave` 回调，
-   *   确认弹窗挂在页面级（见 `LeaveConfirm`：抽屉的 transform 会困住 fixed 弹窗）。
+   * 离座走 `onLeave` 回调，确认弹窗挂在页面级（见 `LeaveConfirm`：抽屉的 transform 会困住 fixed 弹窗）。
+   * 页头右上角那处是另一份（`TableHeaderActions`）：页头要的是一步动作，而本页要把「座位已满」
+   * 这种**说明性**状态讲清楚（为什么现在入不了座），所以两边各有各的形状。
    */
-  let {
-    client,
-    variant = 'full',
-    onLeave
-  }: { client: TableClient; variant?: 'full' | 'sit-only'; onLeave?: () => void } = $props();
+  let { client, onLeave }: { client: TableClient; onLeave?: () => void } = $props();
 
   const seats = $derived(client.table?.seats ?? []);
   const seated = $derived(client.you !== null);
@@ -30,11 +25,9 @@
 </script>
 
 {#if seated}
-  {#if variant === 'full'}
-    <button type="button" class={ghost} onclick={() => onLeave?.()}>离座</button>
-  {/if}
+  <button type="button" class={ghost} onclick={() => onLeave?.()}>离座</button>
 {:else if free}
   <button type="button" class={gold} disabled={client.busy} onclick={() => void sit()}>入座</button>
-{:else if variant === 'full'}
+{:else}
   <span class="rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-white/40">座位已满</span>
 {/if}

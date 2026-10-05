@@ -60,6 +60,17 @@ export function trumpText(trump: TrumpModel): string {
   return `级牌 ${rankLabel(trump.rank)} · ${trump.strain === 'NT' ? '无主' : `主打 ${SUIT_LABEL[trump.strain]}`}`;
 }
 
+/**
+ * 一副牌的「定约 + 级牌」：`45♣ · 级 5` / `40无主 · 级 A`。
+ *
+ * 定约给出打的分数与花色，级牌给出这一副的主级点数 —— 两者缺一不可：战报里的旧副
+ * 级牌各不相同，只写定约的话「为什么这张 5 是主牌」在读旧战报时无从判断。
+ * 花色走 `strainGlyph`（与叫品同一套字形），点数走 `rankLabel`（A 不写成 14）。
+ */
+export function contractText(s: DealSummary): string {
+  return `${s.contract.points}${strainGlyph(s.contract.strain)} · 级 ${rankLabel(s.trump.rank)}`;
+}
+
 /** 级别拆分：底数（2..A）与右上角「+过次」，如 5(+2) → { rank: '5', cycle: 2 } */
 export function levelParts(level: Level): { rank: string; cycle: number } {
   return { rank: level.rank === 14 ? 'A' : String(level.rank), cycle: level.cycle };
@@ -266,6 +277,59 @@ export function levelRows(summary: DealSummary, levels: readonly Level[]): Level
       ? { seat, from: now, to: now, changed: false }
       : { seat, from: change.from, to: change.to, changed: true };
   }).sort((a, b) => Number(b.changed) - Number(a.changed));
+}
+
+/**
+ * 战报每副卡的升级行：**只列升级了的座位**。
+ *
+ * 与弹窗的 `levelRows`（三家全列）有意不同：`DealSummary` 只记**变动**，没升级的座位当时是什么
+ * 级别不在负载里（`view.levels` 是当前值，往回套旧副会算错），所以历史这一层能给的就是
+ * 「谁升了、从几到几」。全部行 `changed: true`，`LevelTable` 于是按升级行的样式渲染。
+ */
+export function changedLevelRows(summary: DealSummary): LevelRow[] {
+  return summary.levelChanges.map((change) => ({
+    seat: change.seat,
+    from: change.from,
+    to: change.to,
+    changed: true
+  }));
+}
+
+/** 升级表（「升级表」模式）的一行 */
+export interface ProgressionRow {
+  /** `0` = **开局**那一行（副数从 1 起，所以 0 不可能是真的副）；其余是各副的 `dealNo` */
+  readonly dealNo: number;
+  /** 这一行之后三家的级别（按座位序） */
+  readonly levels: readonly Level[];
+  /** 这一行里动了的是哪几家（开局全 false） */
+  readonly changed: readonly boolean[];
+}
+
+/**
+ * 升级表：把战报从**开局**一路演算到最后一副，给出每副打完时三家的级别。
+ *
+ * 为什么能算出来：`history` 覆盖本局从第 1 副起的每一副（`resume-check` 钉着「条数 = 副数」），
+ * 每副只记**变动**（`levelChanges`）—— 从 `START_LEVEL` 出发逐副套用，就还原出全程。
+ * 历史负载里没有「每副打完时的一整份级别快照」，这是它唯一能走的路（也是不能拿
+ * `view.levels` 往回套的原因：那是**当前**值）。
+ *
+ * 返回的第一行是**开局**（`dealNo: 0`、三家都在 `START_LEVEL`），所以调用方直接把结果铺成表即可，
+ * 不必自己再造一行；空战报时返回的正是这一行。
+ */
+export function levelProgression(history: readonly DealSummary[]): ProgressionRow[] {
+  const levels: Level[] = SEATS.map(() => START_LEVEL);
+  const rows: ProgressionRow[] = [
+    { dealNo: 0, levels: [...levels], changed: SEATS.map(() => false) }
+  ];
+  for (const deal of history) {
+    const changed = SEATS.map(() => false);
+    for (const change of deal.levelChanges) {
+      levels[change.seat] = change.to;
+      changed[change.seat] = true;
+    }
+    rows.push({ dealNo: deal.dealNo, levels: [...levels], changed });
+  }
+  return rows;
 }
 
 /**

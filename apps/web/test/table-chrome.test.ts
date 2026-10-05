@@ -6,21 +6,27 @@
  * （要浏览器 + 真实视口宽度），所以改为对源码断言「页头里只允许出现这几样」，
  * 与 `page-source.test.ts`（观战者不许被当成「你」）是同一套路。
  *
+ * **页头现在允许 桌况簇 这一样**（`TableHeaderActions`：观战人数 + 离座 / 改名 + 入座）——
+ * 它是有界的一枚人数加至多两枚小按钮，且都是「一步动作」；两次爆满堆进去的都是**查阅**入口，
+ * 所以白名单收紧的是那些（战报/教程/叫牌/底牌/结算详情）。
+ *
  * 抽屉侧守两条更硬的边界：
  * - **动作面不进抽屉**：叫牌候选、确认埋底、出牌、发牌都不能在抽屉各页里出现
  *   （查阅面可以进，动作面进去就变成「改一次点两步」）；出牌与确认埋底住在毡面的
  *   `ActionTray` 里 —— 一个绝对定位、居中的独立浮层，不占操作条那一行，也不占文档流。
- * - **「我」页必须常驻 DOM**：它承载 `ui-check` / `spectate-check` 抓 SSR 的两处入口
- *   （「改名 / 换身份」与「座位已满」），一旦被改成 `{#if active === 'me'}`，
+ * - **「牌桌」页必须常驻 DOM**：它承载 `ui-check` / `spectate-check` 抓 SSR 的两处入口
+ *   （「改名 / 换身份」与「座位已满」），一旦被改成 `{#if active === 'table'}`，
  *   那两条端到端守卫就会从「入口真的在页面上」退化成「标签名存在」。
  *
  * 还有一条关于**页头里不该有什么**：连接状态不是常驻指示器，只在 SSE 断开时
  * 于页头下方出一句话 —— 绿点已下线（手机上没有 hover 能解释它），但也不许反过来
  * 改成常显（每次加载闪一条、顶动牌桌）。
  *
- * 第四块是**本副结算弹窗**（`DealSummary`）：它 SSR 里永远不出现（`summaryOpen` 初值是 false，
- * 只在客户端「本副刚结算」那一帧打开），ui-check 够不到 —— 所以它只能落在源码这一层：
- * 算式的加减号（`kittySign` + 着色）、一行的结论（`scoreLineText`）、复用 `LevelBadge` 的升级表。
+ * 第四块是**结算那三件东西**：算式（`ScoreEquation`）、结论（`VerdictBadge`）、升级表
+ * （`LevelTable`）。它们由结算弹窗与**战报的每副卡**共用 —— 复盘时在弹窗里读到的读法就是
+ * 战报里的读法，所以判据落在了组件这一层（弹窗只负责把它们拼起来），另加战报与底牌页
+ * 各自形状的判据。结算弹窗 SSR 里永远不出现（`summaryOpen` 初值是 false，只在客户端
+ * 「本副刚结算」那一帧打开），ui-check 够不到，所以只能落在源码这一层。
  *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
@@ -39,9 +45,10 @@ const bidPanel = read('../src/lib/components/BidPanel.svelte');
 const auctionRecord = read('../src/lib/components/AuctionRecord.svelte');
 const buryPanel = read('../src/lib/components/BuryPanel.svelte');
 const kittyPanel = read('../src/lib/components/KittyPanel.svelte');
-const mePanel = read('../src/lib/components/MePanel.svelte');
+const tablePanel = read('../src/lib/components/TablePanel.svelte');
 const seatCard = read('../src/lib/components/SeatCard.svelte');
 const seatActions = read('../src/lib/components/SeatActions.svelte');
+const tableHeaderActions = read('../src/lib/components/TableHeaderActions.svelte');
 const lobbyPanel = read('../src/lib/components/LobbyPanel.svelte');
 const tableStatus = read('../src/lib/components/TableStatus.svelte');
 const actionBar = read('../src/lib/components/ActionBar.svelte');
@@ -50,6 +57,10 @@ const actionClock = read('../src/lib/components/ActionClock.svelte');
 const trickArea = read('../src/lib/components/TrickArea.svelte');
 const handFan = read('../src/lib/components/HandFan.svelte');
 const dealSummary = read('../src/lib/components/DealSummary.svelte');
+const historyList = read('../src/lib/components/HistoryList.svelte');
+const scoreEquation = read('../src/lib/components/ScoreEquation.svelte');
+const verdictBadge = read('../src/lib/components/VerdictBadge.svelte');
+const levelTable = read('../src/lib/components/LevelTable.svelte');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -68,20 +79,26 @@ function headerOf(source: string): string {
 const pageCode = code(page);
 const header = headerOf(page);
 
-test('页头只留必要信息：别的都在抽屉里，加一样就要在这里显式改白名单', () => {
-  for (const banned of ['战报', '教程', '改名', '离座', '观战', 'HistoryList', 'IdentityQuickEdit']) {
+test('页头只留必要信息：大厅 / 邀请码 / 桌况簇，加一样就要在这里显式改白名单', () => {
+  for (const banned of ['战报', '教程', '叫牌', '底牌', 'HistoryList', 'IdentityQuickEdit', '结算详情']) {
     assert.equal(
       header.includes(banned),
       false,
-      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 观战者的入座）`
+      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 桌况簇）`
     );
   }
-  for (const needed of ['← 大厅', 'InviteCode', 'SeatActions']) {
+  for (const needed of ['← 大厅', 'InviteCode', 'TableHeaderActions']) {
     assert.ok(header.includes(needed), `页头少了「${needed}」（这是页头白名单里必须保留的一项）`);
   }
+  // 桌况簇的两条接线：离座走**页面级**确认弹窗（抽屉的 transform 会困住 fixed 弹窗），
+  // 改名开抽屉的「牌桌」页（表单要输入框，页头放不下）。
   assert.ok(
-    header.includes('variant="sit-only"'),
-    '页头的入座按钮不是 sit-only 变体：页头只该有「入座」，离座与座位已满归「我」页'
+    header.includes('onLeave={() => (leaveOpen = true)}'),
+    '页头的离座没有接到页面级的确认弹窗：挂在抽屉里会被 transform 困住'
+  );
+  assert.ok(
+    header.includes("onRename={() => (active = 'table')}"),
+    '页头的改名不是开抽屉的「牌桌」页：身份表单没有第二个落点'
   );
   // 连接圆点已下线：它只在没事的时候亮着，而手机上没有 hover 解释它。
   // 断线提示必须留在页头**之外**（见下一条测试），不然页头又会被撑高、回到老问题。
@@ -94,6 +111,78 @@ test('页头只留必要信息：别的都在抽屉里，加一样就要在这�
   }
 });
 
+/**
+ * 桌况簇（`TableHeaderActions`）的形状：观战人数 + 一步动作。
+ *
+ * 判据三条，各对应一个具体的坏法：
+ * ① 人数**含 0 常显**（不许被条件包住）—— 否则 0 → 1 时右侧会横跳一下；
+ * ② 在座给「离座」、不在座给「改名」（+ 有空座时「入座」）—— 三态齐全，不给必定失败的按钮；
+ * ③ 入座按钮要禁用 busy（慢网下防双击，与座位卡/座位页同一套判据）。
+ */
+function headerClusterCheck(source: string): string | null {
+  const src = code(source);
+  const span = src.indexOf('data-watch-count');
+  const firstIf = src.indexOf('{#if');
+  if (span < 0) return '桌况簇里找不到观战人数（data-watch-count）：页头又只剩一个入座按钮了';
+  if (firstIf >= 0 && span > firstIf) {
+    return '观战人数被条件包住了：它要含 0 常显，否则 0 → 1 时页头右侧会横跳一下';
+  }
+  if (!src.includes('spectatorCount')) {
+    return '观战人数不是取负载里的 spectatorCount（口径是实时连接数，不是观战记录条数）';
+  }
+  if (!/\{#if seated\}[\s\S]*?离座[\s\S]*?\{:else\}[\s\S]*?改名/.test(src)) {
+    return '三态不对：在座要「离座」、不在座要「改名」（先离座再改名才是一条走得通的路）';
+  }
+  if (!/\{#if free\}[\s\S]*?入座/.test(src)) {
+    return '「入座」不是只在有空座时出现：补位有时限，没有空座时就该没有这个按钮';
+  }
+  // 认「入座那个按钮自己那个标签」：disabled 在标签里排在「入座」二字之前，
+  // 从文字往后截会把它漏掉（第一版就是这么空转的）。
+  const sitTag = tagOf(src, src.indexOf('入座'));
+  if (!sitTag.includes('disabled={client.busy}')) {
+    return '「入座」按钮没有 disabled={client.busy}：慢网下会被人连点两次';
+  }
+  return null;
+}
+
+test('桌况簇：观战人数含 0 常显，在座给离座、不在座给改名（+ 有空座才给入座）', () => {
+  const problem = headerClusterCheck(tableHeaderActions);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：人数被条件包住 / 三态丢失 / 入座不为 busy 禁用，都必须被判出来', () => {
+  const CLUSTER =
+    '<span data-watch-count="true">{client.table?.spectatorCount ?? 0} 人观战</span>' +
+    '{#if seated}<button>离座</button>{:else}<button>改名</button>{#if free}' +
+    '<button disabled={client.busy}>入座</button>{/if}{/if}';
+  assert.equal(headerClusterCheck(CLUSTER), null, '这条守卫对合规的最小簇也报错（过宽）');
+  assert.match(
+    headerClusterCheck(`{#if seated}<button>离座</button>{/if}${CLUSTER}`) ?? '',
+    /条件包住/,
+    '观战人数排在第一个 {#if} 之后（被条件包住）却没有被判出来'
+  );
+  assert.match(
+    headerClusterCheck(CLUSTER.replace('{:else}<button>改名</button>', '')) ?? '',
+    /三态/,
+    '不在座没有「改名」没有被判出来'
+  );
+  assert.match(
+    headerClusterCheck(CLUSTER.replace('{#if free}', '')) ?? '',
+    /入座/,
+    '「入座」不再受有空座约束没有被判出来'
+  );
+  assert.match(
+    headerClusterCheck(CLUSTER.replace('disabled={client.busy}', '')) ?? '',
+    /busy/,
+    '「入座」丢掉 busy 禁用没有被判出来'
+  );
+  assert.match(
+    headerClusterCheck(CLUSTER.replace('client.table?.spectatorCount ?? 0', '0')) ?? '',
+    /spectatorCount/,
+    '观战人数写死成 0（不取负载）没有被判出来'
+  );
+});
+
 test('连接状态只在断线时出声：正常态不占像素，也不许改成常显', () => {
   assert.ok(
     pageCode.includes("client.connection === 'offline'"),
@@ -104,34 +193,34 @@ test('连接状态只在断线时出声：正常态不占像素，也不许改�
 });
 
 test('四个页签与顺序只在 drawer-tabs.ts 里写一次，且与你的清单一致', () => {
-  const order = ["{ key: 'report', label: '战报' }", "{ key: 'auction', label: '叫牌' }", "{ key: 'kitty', label: '底牌' }", "{ key: 'me', label: '我' }"];
+  const order = ["{ key: 'report', label: '战报' }", "{ key: 'auction', label: '叫牌' }", "{ key: 'kitty', label: '底牌' }", "{ key: 'table', label: '牌桌' }"];
   let cursor = -1;
   for (const entry of order) {
     const at = tabs.indexOf(entry);
-    assert.ok(at > cursor, `drawer-tabs.ts 里缺「${entry}」或顺序不对（应为 战报 → 叫牌 → 底牌 → 我）`);
+    assert.ok(at > cursor, `drawer-tabs.ts 里缺「${entry}」或顺序不对（应为 战报 → 叫牌 → 底牌 → 牌桌）`);
     cursor = at;
   }
   assert.ok(code(rail).includes('DRAWER_TABS'), '页签条没有从 drawer-tabs.ts 读清单（会与抽屉各写一份）');
   assert.ok(code(drawer).includes('drawerTabLabel'), '抽屉标题没有从 drawer-tabs.ts 取（会与页签条各写一份）');
 });
 
-test('抽屉默认关闭且「我」页常驻：那两条抓 SSR 的端到端守卫靠它', () => {
+test('抽屉默认关闭且「牌桌」页常驻：那两条抓 SSR 的端到端守卫靠它', () => {
   assert.ok(
     pageCode.includes('let active = $state<DrawerTabKey | null>(null)'),
     '抽屉的初始状态不是「关着」：不许自动打开（纯手动，见 CONTEXT.md）'
   );
   assert.ok(
-    drawer.includes('hidden={active !== \'me\'}'),
-    '「我」页不是常驻的（被写成 {#if active === \'me\'}）：改名/换身份与座位已满就不再出现在观战页的 SSR 里'
+    drawer.includes("hidden={active !== 'table'}"),
+    '「牌桌」页不是常驻的（被写成 {#if active === \'table\'}）：改名/换身份与座位已满就不再出现在观战页的 SSR 里'
   );
   assert.ok(
-    mePanel.includes('改名 / 换身份'),
-    '「我」页里找不到「改名 / 换身份」（ui-check 与 spectate-check 都按这个字符串抓）'
+    tablePanel.includes('改名 / 换身份'),
+    '「牌桌」页里找不到「改名 / 换身份」（ui-check 与 spectate-check 都按这个字符串抓）'
   );
   assert.equal(
     code(drawer).includes('座位已满'),
     false,
-    '座位已满应当由「我」页里的 SeatActions 渲染，不是抽屉自己写'
+    '座位已满应当由「牌桌」页里的 SeatActions 渲染，不是抽屉自己写'
   );
 });
 
@@ -139,7 +228,7 @@ test('查阅面进抽屉，动作面留桌面', () => {
   for (const [name, source] of [
     ['TableDrawer', drawer],
     ['KittyPanel', kittyPanel],
-    ['MePanel', mePanel]
+    ['TablePanel', tablePanel]
   ] as const) {
     for (const action of ['client.bury(', 'client.play(', 'client.bid(', 'client.deal(', 'client.newGame(']) {
       assert.equal(
@@ -582,7 +671,7 @@ test('反证：计时不渲染 / 从页面打开计时 / 不走时，都必须�
   );
 });
 
-/* ---------- 本副结算弹窗：算式的符号、一行的结论、升级表 ---------- */
+/* ---------- 结算的三件东西（弹窗与战报共用）+ 战报页 + 底牌页 ---------- */
 
 /** 取某个位置所在的那个标签（往回找最近的 `<`，往后截到第一个 `>`）—— 与 panel-guard.ts 同一套路 */
 function tagOf(source: string, index: number): string {
@@ -593,51 +682,116 @@ function tagOf(source: string, index: number): string {
 }
 
 /**
- * 本副结算弹窗的形状。四条判据各对应一次真实缺陷：
- * ① 算式里墩分与底牌之间的符号必须来自 `kittySign`（抠底 −、保底 +），与数字同级字号字重，
- *    并按保底/抠底着色 —— 早先这里硬写 `+`，抠底时显示出「60 + 10 × 1 = 50」这种自相矛盾的算式；
- * ② 结论只有一行（`scoreLineText`），不再有「两名闲家各升 ceil(差 / 10) = N 级；庄家级别不变」；
- * ③ 级别表复用座位卡那枚 `LevelBadge`（档位数字 + 金色「+过次」徽标），三家都出现、没升级的那行
- *    写「不变」—— 于是不必再单写一行「庄家级别不变。」，也不再是 `2(+0) → 3(+0)` 文本；
- * ④ 卡片有高度上限与自己的滚动区：结算内容高度不定，短屏上底部的「下一副 / 开新对局」曾在视口外。
- *
- * 这个弹窗**没法**交给 ui-check：`summaryOpen` 初值是 false，它只在客户端「本副刚结算」那一帧
- * 打开，SSR 里永远不出现 —— 所以它由这条源码守卫 + `labels.test.ts` 的纯函数单测两层守。
+ * 算式（`ScoreEquation`）：结算弹窗与战报的每副卡是**同一条算式**，两档尺寸只差 token。
+ * 三条判据各对应一次真实缺陷：
+ * ① 墩分与底分之间的符号必须来自 `kittySign`（抠底 −、保底 +）—— 早先硬写 `+`，
+ *    抠底时显示出「60 + 10 × 1 = 50」这种自相矛盾的算式；
+ * ② 那个符号按保底/抠底着色（绿 / 红），且着色认的是**符号自己那个标签**；
+ * ③ 符号与四个数字**同级字号**：两档尺寸各只有一个 `num` token，五处共用它 ——
+ *    抽成两档之后「同一个 token」才是「同级字号」的真判据（早先这里写死 `text-[26px]`）。
  */
-function settlePanelCheck(source: string): string | null {
+function equationCheck(source: string): string | null {
   const src = code(source);
-  // 认**调用点**（`kittySign(`），不是 import：否则取到的是脚本顶部那行 import 所在的标签
   const call = src.lastIndexOf('kittySign(');
   if (call < 0) {
-    return '结算算式没有用 kittySign：墩分与底牌之间会退回硬写的 `+`（抠底时显示出 60 + 10 = 50）';
+    return '算式没有用 kittySign：墩分与底分之间会退回硬写的 `+`（抠底时显示出 60 + 10 × 1 = 50）';
   }
   const sign = tagOf(src, call);
-  for (const cls of ['text-[26px]', 'font-black', 'text-emerald-300', 'text-rose-300']) {
+  for (const cls of ['font-black', 'text-emerald-300', 'text-rose-300']) {
     if (!sign.includes(cls)) {
-      return `结算算式的加减号缺少 ${cls}：它决定「加还是扣」，要与数字同级字号并按保底/抠底着色 —— ${sign.slice(0, 150)}`;
+      return `算式的加减号缺少 ${cls}：它决定「加还是扣」，要与数字同级字重并按保底/抠底着色 —— ${sign.slice(0, 150)}`;
     }
   }
+  if (!sign.includes('{s.num}')) {
+    return '加减号没有与数字共用同一个字号 token（{s.num}）：「加还是扣」的符号被缩成小字了';
+  }
+  const sizes = src.split('{s.num}').length - 1;
+  if (sizes < 5) {
+    return `只有 ${sizes} 处用 {s.num}：符号与四个数字（墩分/底分/末轮/得分）必须共用同一档字号`;
+  }
+  if (!src.includes('kitty-mini')) return '算式里没有底牌小牌面（.kitty-mini）：底分那一格看不到是哪三张';
+  for (const size of ['text-[26px]', 'text-xl']) {
+    if (!src.includes(size)) {
+      return `算式缺少 ${size} 这一档：弹窗用大字、战报卡用窄幅小字，两档都要在（战报卡放不下大字）`;
+    }
+  }
+  if (!src.includes('底分')) return '底分那一格没有「底分」子标：子标只有一份文案，两档不许各写各的';
+  return null;
+}
+
+/**
+ * 结论（`VerdictBadge`）：**只有一行**（`scoreLineText`），底色与文字色是唯一的输赢着色来源。
+ * 不许回潮成「打输 · 差 N 分」再加一行「两名闲家各升 ceil(差 / 10) = N 级；庄家级别不变」。
+ */
+function verdictCheck(source: string): string | null {
+  const src = code(source);
   if (!src.includes('scoreLineText(')) {
-    return '结算结论没有走 scoreLineText：又会写成「打输 · 差 N 分」再加一行 ceil(差 / 10)';
+    return '结论没有走 scoreLineText：又会写成「打输 · 差 N 分」再加一行 ceil(差 / 10)';
   }
   if (src.includes('两名闲家各升')) {
-    return '结算结论又写回了「两名闲家各升 ceil(差 / 10) = N 级」：结论只有一行';
+    return '结论又写回了「两名闲家各升 ceil(差 / 10) = N 级」：结论只有一行';
   }
-  // 认**用法**而不是 import：否则删掉用法、留着 import 也能过（这条守卫就空转了）
+  if (src.includes('庄家级别不变')) {
+    return '结论里又出现「庄家级别不变」：没升级的那行在升级表里写「不变」';
+  }
+  for (const cls of [
+    'bg-emerald-500/15',
+    'ring-emerald-400/30',
+    'text-emerald-300',
+    'bg-rose-500/15',
+    'ring-rose-400/30',
+    'text-rose-300'
+  ]) {
+    if (!src.includes(cls)) return `结论缺少 ${cls}：底色与文字色是唯一的输赢着色来源`;
+  }
+  return null;
+}
+
+/**
+ * 升级表（`LevelTable`）：级别复用座位卡那枚 `LevelBadge`（档位数字 + 金色「+过次」徽标），
+ * 没升级的那行写「不变」；列模版**只有一份**（表头与数据行共用，否则三列各算各的宽度）。
+ */
+function levelTableCheck(source: string): string | null {
+  const src = code(source);
   if (!src.includes('<LevelBadge')) {
     return '升级表没有复用 LevelBadge（档位数字 + 金色「+过次」徽标）：跨 A 的轮次读不出来';
   }
-  if (src.includes('levelLabel(')) {
-    return '结算弹窗又用了 levelLabel 文本：级别要复用 LevelBadge 那枚徽标';
+  if (src.includes('levelLabel(')) return '升级表用了 levelLabel 文本：级别要复用 LevelBadge 那枚徽标';
+  if (!src.includes('不变')) return '升级表里没有「不变」二字：没升级的那行会被读成没渲染出来';
+  const cols = src.split('grid-cols-[minmax(0,1fr)_3rem_1rem_3rem]').length - 1;
+  if (cols !== 1) {
+    return `列模版出现了 ${cols} 次：表头与数据行必须共用同一份（否则「谁 / 原级别 / 新级别」三列会各算各的宽度）`;
   }
-  if (!src.includes('levelRows(')) {
+  if (!src.includes('heading')) return '升级表没有 heading 开关：战报的每副卡会被迫带上表头';
+  return null;
+}
+
+/**
+ * 结算弹窗（`DealSummary`）自己：只负责把三块**共用组件**拼起来，加卡片的高度上限。
+ *
+ * 「这里没有第二份实现」是这条的要害：算式/结论/升级表都住在组件里，弹窗里再写一遍
+ * 就等于两处会各自过期（战报读的是同一批组件）。这个弹窗**没法**交给 ui-check：
+ * `summaryOpen` 初值是 false，它只在客户端「本副刚结算」那一帧打开，SSR 里永远不出现 ——
+ * 所以它由这条源码守卫 + `labels.test.ts` 的纯函数单测两层守。
+ */
+function settlePanelCheck(source: string): string | null {
+  const src = code(source);
+  for (const [needle, what] of [
+    ['<ScoreEquation', '算式'],
+    ['<VerdictBadge', '结论'],
+    ['<LevelTable', '升级表']
+  ] as const) {
+    if (!src.includes(needle)) {
+      return `结算弹窗没有复用 ${needle}：${what}会出现第二份实现，两处会各自过期`;
+    }
+  }
+  for (const own of ['kittySign(', 'scoreLineText(', '<LevelBadge']) {
+    if (src.includes(own)) {
+      return `结算弹窗里又出现了 ${own}：算式/结论/升级表都该只在共用组件里渲染`;
+    }
+  }
+  if (!src.includes('levelRows(summary, view.levels)')) {
     return '升级表没有走 levelRows：三家不会都出现（没升级的那家会整行消失）';
-  }
-  if (src.includes('庄家级别不变')) {
-    return '又写回了一行「庄家级别不变。」：没升级的那家在表里写「不变」';
-  }
-  if (!src.includes('不变')) {
-    return '升级表里没有「不变」二字：没升级的那行会被读成没渲染出来';
   }
   if (src.includes('保底') || src.includes('抠底')) {
     return '结算弹窗又写回了保底/抠底那句说明：符号的红/绿已经说明了加还是扣';
@@ -650,52 +804,254 @@ function settlePanelCheck(source: string): string | null {
   return null;
 }
 
-test('本副结算弹窗：加减号带色、结论一行、级别表复用 LevelBadge', () => {
+/**
+ * 战报（`HistoryList`）：页内两模式 + 每副卡。
+ * ① 每副卡是结算弹窗的紧凑版 —— 算式/结论/升级行复用同一批组件，另加「定约 · 级牌」
+ *    （旧副的级牌各不相同，只写定约读不出来）；底牌不再用一行文本列出，走 `.kitty-mini` 牌面；
+ * ② 升级行只列**升级者**（`changedLevelRows`）：历史负载只记变动，没升级的座位当时是什么级别
+ *    无从还原 —— 与弹窗三家全列有意不同；
+ * ③ 升级表模式走 `levelProgression`，两模式清单走 `drawer-tabs.ts` 的 `REPORT_MODES`
+ *    （页内切换，不是第五个页签）。
+ */
+function historyCardCheck(source: string): string | null {
+  const src = code(source);
+  if (!src.includes('contractText(')) {
+    return '战报的每副卡没有写「定约 · 级牌」（contractText）：旧副的级牌各不相同，只写定约读不出来';
+  }
+  if (!/<ScoreEquation summary=\{deal\} compact/.test(src)) {
+    return '每副卡没有复用 ScoreEquation 的紧凑档（compact）：算式会有第二份实现，两处会各自过期';
+  }
+  if (!src.includes('<VerdictBadge')) return '每副卡没有复用 VerdictBadge：结论会各写各的';
+  if (!src.includes('<LevelTable')) return '每副卡的升级行没有复用 LevelTable：级别渲染会各写各的';
+  if (!src.includes('changedLevelRows(')) {
+    return '每副卡的升级行没有走 changedLevelRows：会退回「升级：你 +4（6+0）」那种文本流';
+  }
+  if (src.includes('levelLabel(')) return '战报用了 levelLabel 文本：级别要复用 LevelBadge 那枚徽标';
+  if (/deal\.kitty\.map\(cardText\)/.test(src)) {
+    return '战报又用一行文本列底牌（deal.kitty.map(cardText)）：牌面要走 .kitty-mini';
+  }
+  if (src.includes('保底') || src.includes('抠底')) {
+    return '战报每副卡又写回了「抠底 / 保底」那句说明：符号的红/绿已经说明加还是扣';
+  }
+  if (!src.includes('levelProgression(')) return '升级表模式没有走 levelProgression：级别进程会各算各的';
+  if (!src.includes('REPORT_MODES')) {
+    return '两个模式没有从 drawer-tabs.ts 的 REPORT_MODES 渲染：页内切换会出现第二份清单';
+  }
+  return null;
+}
+
+/**
+ * 底牌页（`KittyPanel`）：**七种状态各一行居中提示** + 该看得见的牌面。
+ * 不许回潮：三段解释（保底/抠底怎么算、发牌留下的暗底、结算前只有庄家看得到）与
+ * 毡面待定槽位的镜像 —— 前者归「?」与 /rules，后者毡面上有同一份而且可点。
+ */
+function kittyPanelCheck(source: string): string | null {
+  const src = code(source);
+  for (const text of [
+    '还没发牌',
+    '还没定庄家',
+    '等待你埋底',
+    '等待庄家埋底',
+    '底牌仅你可见',
+    '底牌暂对闲家不可见',
+    '已公开，底'
+  ]) {
+    if (!src.includes(text)) return `底牌页少了「${text}」这一态：七种状态各有自己那一行提示`;
+  }
+  const hint = /const hint = '([^']*)'/.exec(src)?.[1] ?? '';
+  if (!hint.includes('text-center')) {
+    return '底牌页的提示没有一行居中（const hint 缺 text-center）：七态共用同一份居中样式';
+  }
+  if (!src.includes('buriedKitty')) return '「底牌」页没有读 you.buriedKitty（它要的是庄家埋下去的那 3 张）';
+  if (src.includes('originalKitty')) {
+    return '「底牌」页引用了 originalKitty：拿上来的那 3 张只活在毡面的埋底面板里，两处不许混同';
+  }
+  if (src.includes('client.selectedCards')) {
+    return '「底牌」页又镜像了毡面的待定槽位：毡面上有同一份、而且那里可点，抽屉里再摆一份只是重复';
+  }
+  for (const gone of ['暗底', '结算前只有你看得到', '乘末轮张数']) {
+    if (src.includes(gone)) {
+      return `底牌页又写回了「${gone}」那段解释：规则说明归「?」与 /rules，这一页只有一行提示`;
+    }
+  }
+  return null;
+}
+
+test('算式：加减号来自 kittySign、带色、与数字同级字号（两档共用 num）', () => {
+  const problem = equationCheck(scoreEquation);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：硬写 +、符号褪色、符号被缩成小字、丢掉底牌牌面、少一档尺寸，都必须被判出来', () => {
+  assert.ok(
+    equationCheck(scoreEquation.replace('{kittySign(summary.protectedBottom)}', '+')) !== null,
+    '硬写 `+` 的旧算式被判为合规（这条守卫是空转的）'
+  );
+  // 精确性：着色只认**符号自己那个标签**——把符号那处改成灰的，别处的颜色不该救它
+  assert.ok(
+    equationCheck(scoreEquation.replace("'text-rose-300'", "'text-white/40'")) !== null,
+    '符号自己没着色（靠别处的颜色蒙混）被判为合规'
+  );
+  assert.match(
+    equationCheck(
+      scoreEquation.replace(
+        '{s.num} font-black leading-none {summary.protectedBottom',
+        'text-lg font-black leading-none {summary.protectedBottom'
+      )
+    ) ?? '',
+    /s\.num/,
+    '符号被缩成小字（不再与数字共用 num）没有被判出来'
+  );
+  assert.match(
+    equationCheck(scoreEquation.replaceAll('kitty-mini', 'x')) ?? '',
+    /kitty-mini/,
+    '丢掉底牌牌面没有被判出来'
+  );
+  assert.match(
+    equationCheck(scoreEquation.replace('text-[26px]', 'text-2xl')) ?? '',
+    /text-\[26px\]/,
+    '弹窗那一档字号被改掉（两档尺寸不齐）没有被判出来'
+  );
+});
+
+test('结论：只有一行 scoreLineText，底色与文字色是唯一的输赢着色', () => {
+  const problem = verdictCheck(verdictBadge);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：两行结论、丢掉着色、不写「不变」，都必须被判出来', () => {
+  assert.match(
+    verdictCheck(
+      verdictBadge.replace(
+        '{scoreLineText(summary)}',
+        '{scoreLineText(summary)}<p>两名闲家各升 ceil({summary.shortfall} / 10) = 1 级；庄家级别不变</p>'
+      )
+    ) ?? '',
+    /两名闲家各升/,
+    '旧的两行结论被判为合规'
+  );
+  assert.match(
+    verdictCheck(verdictBadge.replaceAll('text-rose-300', 'text-white/40')) ?? '',
+    /text-rose-300/,
+    '结论丢掉打输那一档文字色没有被判出来'
+  );
+  assert.match(
+    levelTableCheck(levelTable.replaceAll('不变', '—')) ?? '',
+    /不变/,
+    '没升级那行不写「不变」被判为合规'
+  );
+});
+
+test('升级表：复用 LevelBadge、没升级写「不变」、列模版只有一份', () => {
+  const problem = levelTableCheck(levelTable);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：退回 levelLabel 文本、不再复用 LevelBadge、列模版写两份，都必须被判出来', () => {
+  assert.match(
+    levelTableCheck(levelTable.replace('<LevelBadge level={row.to} />', '<b>{levelLabel(row.to)}</b>')) ?? '',
+    /levelLabel/,
+    '退回 levelLabel 文本被判为合规'
+  );
+  assert.match(
+    levelTableCheck(levelTable.replaceAll('<LevelBadge', '<span data-old')) ?? '',
+    /LevelBadge/,
+    '升级表不再复用 LevelBadge 被判为合规'
+  );
+  assert.match(
+    levelTableCheck(
+      levelTable.replace(
+        'class="{COLS} rounded-lg px-3 py-1.5',
+        'class="grid grid-cols-[minmax(0,1fr)_3rem_1rem_3rem] items-center gap-x-2 rounded-lg px-3 py-1.5'
+      )
+    ) ?? '',
+    /列模版/,
+    '列模版被写成两份（表头与数据行各一份）没有被判出来'
+  );
+});
+
+test('结算弹窗：三块共用组件 + 卡片高度上限', () => {
   const problem = settlePanelCheck(dealSummary);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：硬写 +、两行结论、levelLabel 文本、没有滚动区、保底说明回潮，都必须被判出来', () => {
-  assert.ok(
-    settlePanelCheck(dealSummary.replace('{kittySign(summary.protectedBottom)}', '+')) !== null,
-    '硬写 `+` 的旧算式被判为合规（这条守卫是空转的）'
-  );
-  // 精确性：着色只认**符号自己那个标签**——把符号那处改成灰的，结论框的 rose 不该救它
-  assert.ok(
-    settlePanelCheck(dealSummary.replace("'text-rose-300'", "'text-white/40'")) !== null,
-    '符号自己没着色（靠结论框的颜色蒙混）被判为合规'
-  );
-  assert.ok(
+test('反证：弹窗里又写一份算式、不是三家都出、没有滚动区、保底说明回潮，都必须被判出来', () => {
+  assert.match(
     settlePanelCheck(
-      dealSummary.replace(
-        '{scoreLineText(summary)}',
-        '{scoreLineText(summary)}<p>两名闲家各升 ceil({summary.shortfall} / 10) = 1 级；庄家级别不变</p>'
-      )
-    ) !== null,
-    '旧的两行结论被判为合规'
+      dealSummary.replace('<ScoreEquation {summary} />', '<div>{kittySign(summary.protectedBottom)}</div>')
+    ) ?? '',
+    /第二份实现|又出现了/,
+    '弹窗里又写一份算式被判为合规'
   );
-  assert.ok(
-    settlePanelCheck(dealSummary.replace('<LevelBadge level={row.to} />', '<b>{levelLabel(row.to)}</b>')) !== null,
-    '退回 levelLabel 文本被判为合规'
-  );
-  assert.ok(
-    settlePanelCheck(dealSummary.replaceAll('<LevelBadge', '<span data-old')) !== null,
-    '升级表不再复用 LevelBadge 被判为合规'
-  );
-  assert.ok(
-    settlePanelCheck(dealSummary.replace('levelRows(summary, view.levels)', 'summary.levelChanges')) !== null,
+  assert.match(
+    settlePanelCheck(dealSummary.replace('levelRows(summary, view.levels)', 'summary.levelChanges')) ?? '',
+    /levelRows/,
     '不是三家都出的旧列表被判为合规'
   );
-  assert.ok(
-    settlePanelCheck(dealSummary.replaceAll('不变', '—')) !== null,
-    '没升级那行不写「不变」被判为合规'
-  );
-  assert.ok(
-    settlePanelCheck(dealSummary.replace('max-h-[92dvh] ', '')) !== null,
+  assert.match(
+    settlePanelCheck(dealSummary.replace('max-h-[92dvh] ', '')) ?? '',
+    /max-h/,
     '卡片没有高度上限被判为合规'
   );
-  assert.ok(
-    settlePanelCheck(dealSummary + '\n<p>抠底 · 末轮被闲家赢走，底分 ×{summary.multiplier} 扣除</p>') !== null,
+  assert.match(
+    settlePanelCheck(dealSummary + '\n<p>抠底 · 末轮被闲家赢走，底分 ×{summary.multiplier} 扣除</p>') ?? '',
+    /保底|抠底/,
     '保底/抠底那句说明回潮被判为合规'
+  );
+});
+
+test('战报：每副卡复用结算那三块，升级表走 levelProgression，模式走 REPORT_MODES', () => {
+  const problem = historyCardCheck(historyList);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：战报不写级牌、用文本列底牌、升级行走文本流、模式清单写死，都必须被判出来', () => {
+  assert.match(
+    historyCardCheck(historyList.replace('{contractText(deal)}', '{deal.contract.points}')) ?? '',
+    /contractText/,
+    '不写「定约 · 级牌」没有被判出来'
+  );
+  assert.match(
+    historyCardCheck(historyList + "\n<p>底牌 {deal.kitty.map(cardText).join(' ')}</p>") ?? '',
+    /kitty-mini/,
+    '用一行文本列底牌没有被判出来'
+  );
+  assert.match(
+    historyCardCheck(historyList.replace('changedLevelRows(deal)', 'deal.levelChanges')) ?? '',
+    /changedLevelRows/,
+    '升级行不走 changedLevelRows 没有被判出来'
+  );
+  assert.match(
+    historyCardCheck(historyList.replaceAll('REPORT_MODES', 'TABS')) ?? '',
+    /REPORT_MODES/,
+    '两模式清单写死（不再从 drawer-tabs.ts 读）没有被判出来'
+  );
+});
+
+test('底牌页：七态各一行居中提示，且不再镜像待定槽位', () => {
+  const problem = kittyPanelCheck(kittyPanel);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：少一态、提示不居中、解释段回潮、镜像槽位回潮，都必须被判出来', () => {
+  assert.match(
+    kittyPanelCheck(kittyPanel.replace('>还没发牌<', '><')) ?? '',
+    /还没发牌/,
+    '少了一态的提示没有被判出来'
+  );
+  assert.match(
+    kittyPanelCheck(kittyPanel.replace("const hint = 'text-center", "const hint = '")) ?? '',
+    /text-center/,
+    '提示不居中（丢掉 text-center）没有被判出来'
+  );
+  assert.match(
+    kittyPanelCheck(kittyPanel + '\n<p>发牌会留下 3 张暗底</p>') ?? '',
+    /暗底/,
+    '解释段回潮没有被判出来'
+  );
+  assert.match(
+    kittyPanelCheck(kittyPanel + '\n<p>{client.selectedCards.length}</p>') ?? '',
+    /待定槽位|selectedCards/,
+    '毡面待定槽位的镜像回潮没有被判出来'
   );
 });

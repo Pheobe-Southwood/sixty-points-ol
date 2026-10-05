@@ -4,7 +4,7 @@
   import { TableClient } from '$lib/client/table.svelte';
   import { BOT_LIMIT } from '$lib/shared';
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
-  import type { DrawerTabKey } from '$lib/drawer-tabs';
+  import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import ActionTray from '$lib/components/ActionTray.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
@@ -15,10 +15,10 @@
   import InviteCode from '$lib/components/InviteCode.svelte';
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
-  import SeatActions from '$lib/components/SeatActions.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
   import TabRail from '$lib/components/TabRail.svelte';
   import TableDrawer from '$lib/components/TableDrawer.svelte';
+  import TableHeaderActions from '$lib/components/TableHeaderActions.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
   import { followSuitCards, kittyHandDelta } from '$lib/labels';
@@ -43,6 +43,8 @@
    * 每副结束自动弹出的结算（`summaryOpen`）与它无关，仍然是整页的模态。
    */
   let active = $state<DrawerTabKey | null>(null);
+  /** 战报页内的模式（逐副 / 升级表）：页面持有，抽屉关掉再开还停在那一页 */
+  let reportMode = $state<ReportMode>('deals');
   let summaryOpen = $state(false);
   let leaveOpen = $state(false);
   /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
@@ -165,9 +167,10 @@
 </script>
 
 <main class="mx-auto flex h-[100dvh] min-h-0 w-full max-w-6xl flex-col overflow-hidden px-3 py-2 sm:px-4">
-  <!-- 页头只留必要信息：大厅、邀请码，以及观战者补位用的「入座」——
+  <!-- 页头只留必要信息：大厅、邀请码，以及右上角那枚**桌况簇**（观战人数 + 离座 / 改名 + 入座）——
        连接正常时页头一个像素都不占（断线才由下面那条提示出声）。
-       战报/叫牌/底牌/我 全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。 -->
+       战报/叫牌/底牌/牌桌 的**查阅面**全在右侧活页签抽屉里；教程已由操作条的「?」弹层承担。
+       桌况簇回到页头是因为它是有界的三个「一步动作」，而页头两次爆满都是堆**查阅**入口堆出来的。 -->
   <header class="flex items-center justify-between gap-2 pb-2 text-sm">
     <div class="flex min-w-0 items-center gap-2 sm:gap-3">
       <a class="shrink-0 text-white/50 hover:text-white" href="/">← 大厅</a>
@@ -178,14 +181,18 @@
       />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
-      <SeatActions {client} variant="sit-only" />
+      <TableHeaderActions
+        {client}
+        onLeave={() => (leaveOpen = true)}
+        onRename={() => (active = 'table')}
+      />
     </div>
   </header>
 
   <!-- 连接异常只在坏的时候出声：`live`（常态）与首帧的 `connecting` 都不占像素 ——
        手机上没有 hover，旧的那枚绿点既解释不了、也没有动作可做；EventSource 自己会重连，
        所以这里只需说明「画面可能停在上一帧」。role="status" 让读屏也能听到重连。
-       被否的替代（常驻圆点 / 挪进「我」页 / connecting 也提示）见 CONTEXT.md。 -->
+       被否的替代（常驻圆点 / 挪进「牌桌」页 / connecting 也提示）见 CONTEXT.md。 -->
   {#if client.connection === 'offline'}
     <p
       role="status"
@@ -284,10 +291,17 @@
 </main>
 
 <!-- 右边缘活页签条：常驻，点一个拉起对应的抽屉页；点当前页签即收起。
-     抽屉**不套 {#if view}**：「我」页（改名/换身份、座位/观战）在没发牌时也要能用，
+     抽屉**不套 {#if view}**：「牌桌」页（座位/身份、改名换身份）在没发牌时也要能用，
      而且它常驻 DOM 正是那两条观战守卫仍然有效的原因。 -->
 <TabRail {active} onSelect={selectTab} />
-<TableDrawer {client} {active} onClose={() => (active = null)} onLeave={() => (leaveOpen = true)} />
+<TableDrawer
+  {client}
+  {active}
+  {reportMode}
+  onReportMode={(mode) => (reportMode = mode)}
+  onClose={() => (active = null)}
+  onLeave={() => (leaveOpen = true)}
+/>
 
 {#if view !== null}
   <DealSummary {client} open={summaryOpen} onClose={() => (summaryOpen = false)} />

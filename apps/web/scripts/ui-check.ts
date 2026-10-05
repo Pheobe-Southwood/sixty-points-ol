@@ -39,12 +39,14 @@
  * 7c. **「距上一步」计时**：未发牌的大厅页没有它（还没有牌局动作）；发牌后玩家页与观战页都有，
  *    并且**真的在走** —— 取两次（中间等 1.2 秒）秒数必须变大、且增幅合理（抓「冻住的时钟」与单位错）。
  * 8. 观战页面：满座第 4 个人看到的是公共信息 —— 不得出现开局/叫牌/埋底按钮，也不得渲染任何牌面。
- * 9. **页头只留必要信息**：`← 大厅`、邀请码（外加观战者补位用的「入座」）—— 战报/教程/改名/
- *    离座/观战人数一律不许再出现在页头，它们属于右侧的活页签抽屉；连接圆点也已下线（正常与首帧
- *    都不占像素，只有 SSE 断开时才在页头下方出一句话）。这条守的是「页头又爆满」这个已经发生过
- *    两次的回归，顺带守住那枚绿点不回来、也守住断线提示不变成常显。
- * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 我` 四项、顺序固定；抽屉默认是关闭态
- *    （`inert` + 滑出屏幕）；而「我」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
+ * 9. **页头只留必要信息**：`← 大厅`、邀请码，外加右上角那枚**桌况簇**（观战人数含 0 常显；
+ *    在座给「离座」、不在座给「改名」+ 有空座才给「入座」）—— 战报/教程/叫牌/底牌/结算详情
+ *    一律不许出现在页头，它们属于右侧的活页签抽屉；连接圆点也已下线（正常与首帧都不占像素，
+ *    只有 SSE 断开时才在页头下方出一句话）。两次「页头爆满」堆进去的都是**查阅**入口，而桌况簇
+ *    是有界的一枚人数加至多两枚小按钮（且都是有时间性的一步动作），所以它回到了页头；
+ *    这条顺带守住那枚绿点不回来、也守住断线提示不变成常显。
+ * 10. **活页签抽屉**：右边缘的页签条是 `战报 / 叫牌 / 底牌 / 牌桌` 四项、顺序固定；抽屉默认是关闭态
+ *    （`inert` + 滑出屏幕）；而「牌桌」页的内容（改名 / 换身份、座位已满）在关闭时也必须留在
  *    SSR 里 —— 否则观战者那两条入口就又从「页面上真的在」退化成「标签名存在」。
  * 另外对 /rules 与 /learn 跑同一套 position 守卫 —— 新写的版面正是最容易踩坑的地方；
  * /learn 还额外守住幻灯机骨架（幻灯片语义、自动播放、每屏 aria-label、无裸花色字母）
@@ -168,8 +170,9 @@ function headerOf(html: string): string {
 }
 
 /**
- * 页头只留必要信息：大厅、邀请码（+ 观战者的「入座」）。
- * 其余一律在右侧活页签抽屉里 —— 这条守的是「手机端页头又爆满」这个已经发生过两次的回归。
+ * 页头只留必要信息：大厅、邀请码，以及右上角那枚**桌况簇**（观战人数 + 一步动作）。
+ * 其余一律在右侧活页签抽屉里 —— 这条守的是「手机端页头又爆满」这个已经发生过两次的回归；
+ * 那两次堆进去的都是**查阅**入口（战报、教程、历史记录），而桌况簇是有界的一行。
  *
  * 连接状态也归在这里管：它不再是常驻指示器（绿点已下线），只在 SSE 断开时出声。
  * 抓的是**出货 SSR HTML**，所以后半条同时证明「提示条没有变成常显」——SSR 首帧的
@@ -177,9 +180,13 @@ function headerOf(html: string): string {
  */
 function assertLeanHeader(html: string, where: string): void {
   const header = headerOf(html);
-  for (const stray of ['战报', '教程', '改名', '离座', '观战']) {
+  for (const stray of ['战报', '教程', '叫牌', '底牌', '结算详情']) {
     assert(!header.includes(stray), `${where}：页头里仍出现「${stray}」（它应当只在右侧活页签抽屉里）`);
   }
+  assert(
+    header.includes('人观战'),
+    `${where}：页头右上角没有观战人数（含 0 常显，所以它任何时候都在）`
+  );
   assert(header.includes('大厅'), `${where}：页头没有回大厅的入口`);
   assert(
     /<button[^>]*aria-label="复制邀请链接"/.test(header),
@@ -195,6 +202,17 @@ function assertLeanHeader(html: string, where: string): void {
   );
 }
 
+/**
+ * 页头右上角的桌况簇按「在不在座」换按钮：在座给「离座」、不在座给「改名」（有空座才多一枚「入座」）。
+ * 这里是**出货 HTML** 上的证据；源码层那三条判据在 `test/table-chrome.test.ts` 的 `headerClusterCheck`。
+ */
+function assertHeaderSeatAction(html: string, where: string, label: '离座' | '改名'): void {
+  const header = headerOf(html);
+  assert(header.includes(label), `${where}：页头桌况簇里没有「${label}」（在座给离座、不在座给改名）`);
+  const other = label === '离座' ? '改名' : '离座';
+  assert(!header.includes(other), `${where}：页头桌况簇同时出现了「${label}」与「${other}」`);
+}
+
 /** 右边缘活页签条：四项、顺序固定（`lib/drawer-tabs.ts` 是唯一真相） */
 function assertTabRail(html: string, where: string): void {
   const rail = /<div[^>]*role="tablist"[\s\S]*?<\/div>/.exec(html)?.[0];
@@ -203,14 +221,14 @@ function assertTabRail(html: string, where: string): void {
     (m) => m[1]
   );
   assert(
-    JSON.stringify(labels) === JSON.stringify(['战报', '叫牌', '底牌', '我']),
-    `${where}：页签应为 战报/叫牌/底牌/我 且顺序固定，实际 [${labels.join(', ')}]`
+    JSON.stringify(labels) === JSON.stringify(['战报', '叫牌', '底牌', '牌桌']),
+    `${where}：页签应为 战报/叫牌/底牌/牌桌 且顺序固定，实际 [${labels.join(', ')}]`
   );
 }
 
 /** 抽屉默认关闭：外壳仍在 DOM 里，但滑出屏幕且 inert（不可聚焦、不读屏） */
 function assertDrawerClosed(html: string, where: string): void {
-  // 只看 aside **自己的开标签**：整段子树里本来就含 inert（常驻的「我」页带自己的 inert），
+  // 只看 aside **自己的开标签**：整段子树里本来就含 inert（常驻的「牌桌」页带自己的 inert），
   // 对着子树断言会变成空转 —— 注入实验里 `inert={false}` 也能通过，就是这么被抓出来的。
   const tag = /<aside[^>]*>/.exec(html)?.[0];
   assert(tag !== undefined, `${where}：找不到抽屉外壳（aside）`);
@@ -350,11 +368,12 @@ async function main(): Promise<void> {
   assertNoCompassLabels(lobby, '未开局页面');
   assertHelpTrigger(lobby, '准备阶段', '未开局页面');
   assertLeanHeader(lobby, '未开局页面');
+  assertHeaderSeatAction(lobby, '未开局页面', '离座');
   assertTabRail(lobby, '未开局页面');
   assertDrawerClosed(lobby, '未开局页面');
   assert(
     lobby.includes('改名 / 换身份'),
-    '未开局页面：常驻的「我」页不见了（改名入口应当始终在页面上）'
+    '未开局页面：常驻的「牌桌」页不见了（改名入口应当始终在页面上）'
   );
 
   // 4) 座位卡必须钉在毡面四角（absolute），不能被自身 relative 覆盖
@@ -384,6 +403,7 @@ async function main(): Promise<void> {
   assert(auction.includes('叫牌'), '发牌后页面没有进入叫牌界面');
   assertHelpTrigger(auction, '叫牌：定庄、定主', '叫牌页面');
   assertLeanHeader(auction, '叫牌页面');
+  assertHeaderSeatAction(auction, '叫牌页面', '离座');
   assertTabRail(auction, '叫牌页面');
   assertDrawerClosed(auction, '叫牌页面');
   assertNoRemovedHints(auction, '叫牌页面');
@@ -530,9 +550,10 @@ async function main(): Promise<void> {
   assert(!watching.includes('补进了空座'), '观战页面出现了「接下手牌」提示（那是补位玩家的）');
   assertHelpTrigger(watching, '观战', '观战页面');
   assertLeanHeader(watching, '观战页面');
+  assertHeaderSeatAction(watching, '观战页面', '改名');
   assertTabRail(watching, '观战页面');
   assertDrawerClosed(watching, '观战页面');
-  assert(watching.includes('座位已满'), '观战页面没有说清座位已满（常驻的「我」页里应当有）');
+  assert(watching.includes('座位已满'), '观战页面没有说清座位已满（常驻的「牌桌」页里应当有）');
   assertNoRemovedHints(watching, '观战页面');
   assertNoCompassLabels(watching, '观战页面');
   assertNoPositionMix(watching, '观战页面');
@@ -831,8 +852,8 @@ async function main(): Promise<void> {
   );
   console.log('底牌：庄家埋底页有「拿上来的底牌」那一行 + 6 处标记；闲家与观战页 0 处标记');
   console.log('触控：悬停上浮只在鼠标设备生效；出牌按钮 .play-btn 带 z-index:20');
-  console.log('页头：只剩 大厅 / 邀请码（+ 观战者的入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/我 四项页签常驻右边缘，抽屉默认 inert');
-  console.log('抽屉：查阅面进抽屉、动作面留桌面；「我」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
+  console.log('页头：大厅 / 邀请码 + 右上角桌况簇（观战人数含 0 常显；在座离座、不在座改名+入座），连接圆点已下线、断线提示不在首帧出现；战报/叫牌/底牌/牌桌 四项页签常驻右边缘，抽屉默认 inert');
+  console.log('抽屉：查阅面进抽屉、动作面留桌面；「牌桌」页常驻 SSR（改名/换身份与座位已满始终在页面上）');
   console.log(`演示：/learn 有幻灯片语义与自动播放；深链 ?s=245-trick-8 直接渲染出 ${trickCards} 张真实牌面；大厅与文字教程都指向它`);
   console.log(`牌局章：三家当前的牌随出牌递减（叫牌 17/17/17 → 第 1 墩 13/13/13 → 末墩 0/0/0），出牌与手牌之间有配对过渡`);
   console.log('UI OK');

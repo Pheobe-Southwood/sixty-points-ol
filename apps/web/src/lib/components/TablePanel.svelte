@@ -5,11 +5,15 @@
   import SeatCard from './SeatCard.svelte';
 
   /**
-   * 「我」页 = **这个座位 + 我的身份**。
+   * 「牌桌」页 = **这张桌现在什么样**：三家座位 + 我的身份。
    *
-   * 为什么把「观战」与「改名 / 换身份」合成一页：它们是同一条领域规则的两面 ——
-   * CONTEXT.md 定死了「改名/换身份只允许在不在座时进行」，所以离座入口与身份表单应当同屏，
-   * 「先离座再改名」才是一条能顺着走完的路，而不是两页之间来回跳。
+   * 为什么观战/离座/改名合成一页：它们是同一条领域规则的两面 —— CONTEXT.md 定死了
+   * 「改名/换身份只允许在不在座时进行」，所以离座入口与身份表单应当同屏，
+   * 「先离座再改名」才是一条能顺着走完的路。
+   *
+   * 页头右上角另外有一枚**桌况簇**（观战人数 + 离座/改名/入座，见 `TableHeaderActions`）：
+   * 一步动作在页头，这里留的是**完整三态与说明**（为什么现在入不了座、离座之后会发生什么），
+   * 两者刻意并存。观战人数只在页头显示一处，本页不重复。
    *
    * 在座时**不给**必定失败的按钮（服务端一律 400）：只说明原因并给出离座入口。
    *
@@ -28,7 +32,6 @@
   const seated = $derived(client.you !== null);
   const mySeat = $derived(client.you?.seat ?? null);
   const free = $derived(seats.some((seat) => seat.userId === null));
-  const watchCount = $derived(client.table?.spectatorCount ?? 0);
 
   const input =
     'min-w-0 flex-1 rounded-lg bg-black/50 px-2.5 py-1.5 text-xs outline-none ring-1 ring-white/15 transition focus:ring-gold';
@@ -62,8 +65,6 @@
   {:else}
     <span class="rounded-md bg-white/10 px-2 py-0.5 text-[11px] text-white/70">观战中</span>
   {/if}
-  <!-- 口径是「正在看」的实时连接数，不是观战记录条数（见 CONTEXT.md 的 观战者） -->
-  <span class="text-[11px] text-white/45">观战人数 {watchCount}</span>
 </div>
 
 <div class="mt-3 space-y-1.5">
