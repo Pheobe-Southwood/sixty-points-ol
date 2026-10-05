@@ -4,6 +4,7 @@
  * 运行：node scripts/resume-check.ts
  */
 import { readFileSync } from 'node:fs';
+import { levelLabel } from '@sixty/engine';
 
 const BASE = process.env['BASE'] ?? 'http://127.0.0.1:5178';
 const FILE = process.env['SMOKE_OUT'] ?? 'data/smoke-run.json';
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
   }
   console.log(
     `续局正常：同桌 ${saved.code} 第 ${reference.dealNo} 副（${reference.deal?.phase}），级别 ` +
-      reference.levels.map((l) => `${l.rank}(+${l.cycle})`).join(' / ')
+      reference.levels.map((l) => levelLabel(l)).join(' / ')
   );
   console.log('RESUME OK');
 }

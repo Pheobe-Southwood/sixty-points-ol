@@ -671,7 +671,7 @@
         {#each LEVEL_DEMO as level, index (index)}
           <div class="text-center">
             <LevelBadge {level} />
-            <p class="mt-1.5 text-[10px] text-white/45">{`${level.rank === 14 ? 'A' : level.rank}(+${level.cycle})`}</p>
+            <p class="mt-1.5 text-[10px] text-white/45">{levelLabel(level)}</p>
           </div>
         {/each}
         <p class="self-center text-[11px] text-white/55">左起：5(+0) 也叫「打 5」、A(+1)、5(+2)</p>
@@ -679,8 +679,8 @@
       <div class="space-y-1.5">
         {#each steps as step, index (index)}
           <p class="rounded-lg bg-black/30 px-3 py-2 text-[11px]">
-            {step.from.rank === 14 ? 'A' : step.from.rank}(+{step.from.cycle}) 升 {step.levels} 级 →
-            <b class="text-gold">{step.to.rank === 14 ? 'A' : step.to.rank}(+{step.to.cycle})</b>
+            {levelLabel(step.from)} 升 {step.levels} 级 →
+            <b class="text-gold">{levelLabel(step.to)}</b>
             <span class="ml-1 text-white/45">（{step.note}）</span>
           </p>
         {/each}

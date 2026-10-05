@@ -3,6 +3,7 @@ import {
   shuffled,
   cardsPoints,
   removeCards,
+  rankLabel,
   SEATS,
   type Card,
   type Rank,
@@ -41,7 +42,9 @@ export function levelFromProgress(p: number): Level {
 }
 
 export function levelLabel(l: Level): string {
-  return `${l.rank === 14 ? 'A' : l.rank}(+${l.cycle})`;
+  // 点数走 `rankLabel`（J/Q/K/A），不在这里自己判 14：那会让 11/12/13 打成「11/12/13」，
+  // 同一枚级别在编排台（StudioInspector 早就用的 rankLabel）与这里就成了两种字形。
+  return `${rankLabel(l.rank)}(+${l.cycle})`;
 }
 
 /** 打成时按最终得分升级：40-59→1，60-69→2，70-79→3，80-89→4，≥90→5+(x-90)/5 */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { rankLabel, type Seat } from '@sixty/engine';
+  import { levelLabel, type Seat } from '@sixty/engine';
   import { copyText } from '$lib/clipboard';
   import type { StudioState } from '$lib/story/studio.svelte.ts';
 
@@ -98,7 +98,7 @@
                 onblur={() => studio.endEdit()}
               />
               <span class="shrink-0 text-[10px] text-white/40">
-                {rankLabel(studio.spec.levels[seat]?.rank ?? 2)}(+{studio.spec.levels[seat]?.cycle ?? 0})
+                {levelLabel(studio.spec.levels[seat] ?? { rank: 2, cycle: 0 })}
               </span>
             </div>
           {/each}

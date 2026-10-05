@@ -73,7 +73,25 @@ export function contractText(s: DealSummary): string {
 
 /** 级别拆分：底数（2..A）与右上角「+过次」，如 5(+2) → { rank: '5', cycle: 2 } */
 export function levelParts(level: Level): { rank: string; cycle: number } {
-  return { rank: level.rank === 14 ? 'A' : String(level.rank), cycle: level.cycle };
+  return { rank: rankLabel(level.rank), cycle: level.cycle };
+}
+
+/**
+ * 轮数（跨过 A 的次数）的**视觉分层**。级别写作 `点数(+轮数)`，数值化是
+ * `13 × 轮数 + 档位序号` —— **轮数权重 13、档位只有 1**。徽标若只放大档位、把轮数塞进
+ * 9px 药丸，跨 A 时 `A(+0)`(=12) → `2(+1)`(=13) 明明是升级，大字却从 A 掉到 2，看着像掉级。
+ * 所以让轮数同时落在**主数字**与药丸上：过 A 越多，金色越实、环越粗。
+ *
+ * 只用**不参与布局**的属性（color / box-shadow）：徽标宽高逐像素不变
+ * （实测 /rules 三枚真徽标 cycle 0/1/2：25.828 / 27 / 25.828 × 31，改前改后一致）。
+ * 正常轮数上限是 3（`FINISH_ONE_AT` 的 2(+3)），更高并入最高档。
+ * 「不许出现布局类」由 test/level-tone.test.ts 钉住。
+ */
+export function levelTone(cycle: number): { rank: string; pill: string } {
+  if (cycle <= 0) return { rank: '', pill: '' };
+  if (cycle === 1) return { rank: 'text-gold', pill: 'ring-1 ring-gold/60' };
+  if (cycle === 2) return { rank: 'text-gold', pill: 'ring-2 ring-gold/60' };
+  return { rank: 'text-gold', pill: 'ring-2 ring-gold/70 shadow-[0_0_8px_rgba(216,180,90,.5)]' };
 }
 
 export function cardText(card: Card): string {

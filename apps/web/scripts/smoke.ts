@@ -8,6 +8,7 @@ const BASE = process.env['BASE'] ?? 'http://127.0.0.1:5178';
 const DEALS_TO_PLAY = Number(process.env['DEALS'] ?? 3);
 
 import { writeFileSync } from 'node:fs';
+import { levelLabel } from '@sixty/engine';
 
 interface Credential {
   name: string;
@@ -268,7 +269,7 @@ async function main(): Promise<void> {
         scoredNos.push(deal.dealNo);
         console.log(
           `第 ${deal.dealNo} 副结算完成（合同 ${deal.contract?.points} ${deal.contract?.strain}，庄 ${deal.contract?.declarerSeat}）` +
-            ` 级别：${reference.levels.map((l) => `${l.rank}(+${l.cycle})`).join(' / ')}`
+            ` 级别：${reference.levels.map((l) => levelLabel(l)).join(' / ')}`
         );
       }
       if (scoredDeals >= DEALS_TO_PLAY || reference.status === 'finished') break;

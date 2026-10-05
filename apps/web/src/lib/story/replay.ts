@@ -14,6 +14,7 @@ import {
   createGame,
   dispatch,
   fullDeck,
+  levelLabel,
   playTurn,
   type Action,
   type Card,
@@ -260,5 +261,5 @@ export function isScored(state: GameState): boolean {
 }
 
 export function levelKey(level: Level): string {
-  return `${level.rank === 14 ? 'A' : level.rank}(+${level.cycle})`;
+  return levelLabel(level);
 }
