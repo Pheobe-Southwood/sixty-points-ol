@@ -31,6 +31,7 @@ export {
   rotateSeats,
   runDealCell,
   runGameCell,
+  runRealDeal,
   stdev
 } from './arena.ts';
 export type {
@@ -41,6 +42,7 @@ export type {
   DealRecord,
   GameCellInput,
   GameRecord,
+  RealDealInput,
   SeatParams
 } from './arena.ts';
 export { Sight, classCards, extractChains } from './sight.ts';

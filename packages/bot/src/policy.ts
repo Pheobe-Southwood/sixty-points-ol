@@ -48,7 +48,7 @@ import {
   type Strain,
   type TrumpModel
 } from '@sixty/engine';
-import { extractChains, Sight } from './sight.ts';
+import { extractChains, classCards, Sight } from './sight.ts';
 
 /** 驱动器要发的动作（座位号由服务端按身份推导，见 ADR-0002） */
 export type BotMove =
@@ -101,6 +101,15 @@ export interface BotParams {
    * 合成一个门槛就只能两件一起调，等于把好的那半让坏的这半吃掉。
    */
   readonly ruffPointThreshold: number;
+  /**
+   * **争墩时把「我要出的这张牌自己带的分」算进去**（历史 false = 只数桌上已有的分）。
+   *
+   * 真实对局（表 8 d4#2）里抓到的活例：庄家领 ♥Q（0 分），我在第二家用 ♥5 垫过去 ——
+   * `trickPoints` 只数到庄家那张 0 分的 Q，于是 `wantWin` 为假，我把**带 5 分**的 ♥5 送进了
+   * 庄家的赢墩。桌上有没有分和我这张牌带不带分，对「该不该赢」是同一件事：
+   * 只要**这一墩最终会归对手、而我又往里塞了分**，那几分的代价就得算进来。
+   */
+  readonly countOwnCardPoints: boolean;
   /** 缺门杀牌：`points-only` = 历史行为（过门槛才杀）；`always` = 能杀就杀；`never` = 不杀 */
   readonly ruffPolicy: 'points-only' | 'always' | 'never';
   /** `noRuffRisk` 的「这门未见牌还够多」余量：庄家 / 闲家各一个（历史 2 / 5） */
@@ -109,6 +118,55 @@ export interface BotParams {
   // ---- 打牌：领出次序与大牌保留 ----
   /** `draw-first` = 历史行为（先顶主吊主）；`side-first` = 先兑现副门同门无敌的分牌 */
   readonly leadPriority: 'draw-first' | 'side-first';
+  /**
+   * **垫牌不送分**（历史 false）：跟牌让利时，在合法的同门候选里挑**送给对手分最少**的那一窗。
+   *
+   * 这是表 8 d4#2 的正解：庄家领 ♥Q，我在第二家手上是 ♥10 ♥K ♥5 ♥6 ♥9 ♥J ♥A —— `buildFollow('bottom')`
+   * 按层号取最低的链，于是挑中 ♥5 把 5 分送进庄家的赢墩；而**同样能跟出、还白送 0 分**的 ♥6/♥9就在手里。
+   * 与 `countOwnCardPoints` 的区别：那个是「为了不送分去争墩」（要花牌力，实战为负），
+   * 这个是「反正都是让利，就挑一张不送分的」—— 不花任何代价。
+   */
+  readonly dumpDiscipline: boolean;
+  /**
+   * **领出兜底不许送牌**（历史 false）。
+   *
+   * 历史兜底是「最短副门的最低张」，而**单张 K 就是那门的最低张** —— 于是它会把副 K 直接
+   * 送给外面还没露面的 A。表 8 抓到 3 例（d4#9 ♠K 丢 20 分、d6#4 ♣K 丢 10、d6#8 ♥K 丢 10），
+   * 三例都是「某门只剩一张 K」。
+   * 打开后兜底改成：① 赢不了的**带分**牌不领；② 有 0 分的牌就不领带分的牌。
+   */
+  readonly noGiftExit: boolean;
+  /**
+   * **吊主时把同门无敌的主牌顺子整段领出去**（默认 **true**，ADR-0018 按实测提升）。
+   *
+   * 单张吊一轮只抽掉每家 1 张主；同长度的主牌顺子一次抽掉 n 张（对手要么拿出更高的同长度顺子、
+   * 要么交出 n 张主牌）。表 8 d6#0/#1 手里有大小王却分两轮单出，白白多花一墩 ——
+   * 用户对真实对局的四条指控里，只有这一条既**确实发生**、改完之后又**确实更强**。
+   *
+   * 实测（单副台 2000 种子 × 两个配比）：+0.0368 / +0.0381；换一批没参与调参的种子
+   * （seed0=30000、6000 种子）：+0.0194 / +0.0221 —— 复现后仍显著。
+   * 整局台（150 种子 × 两个配比）：+1.11 / +1.02 进度/座位，均过 Holm；
+   * 庄家打成率 66.1% → 68.6%，吊主次数 4702 → 2554（每 100 座位-副，因为它一次领一段）。
+   */
+  readonly trumpRunLead: boolean;
+  /**
+   * **主牌够长时，顶主不是「可证必胜」也照样吊主**（历史 false）。
+   *
+   * 吊主分支原本要求顶张 `sureWinner` —— 而**外面还有大王/小王时这条永远不成立**，
+   * 于是「该清主」的局面整个退化到兜底去送副牌。表 8 d3 就是这么打崩的：庄家 8 张主
+   * （含 DA/DK/DQ/DJ）全程没吊过一轮主，最后被闲家的顺子把 DJ DQ DK / DA C4 D5 全部吃掉，
+   * 一副牌只抓 0 分。打开后：手牌主牌数 ≥ 阈值且不少于未见主牌数时，用顶主吊。
+   */
+  readonly drawWhenLong: boolean;
+  /** `drawWhenLong` 的「够长」阈值 */
+  readonly drawWhenLongMinTrumps: number;
+  /**
+   * **只被王压着的顶主也拿来吊主**（历史 false）。
+   *
+   * 与 `drawWhenLong` 分开：那个只看主牌够不够长（实测为负），这个看「压在我头上的只剩王」——
+   * 领出去确实会被王吃掉，但**吃掉的正是那张永远压着我的王**，之后我剩下的主牌就是最大的。
+   */
+  readonly drawIntoJoker: boolean;
   /** 同门无敌的顶主恰是大王时不拿它吊主（留给末轮；闲家看不到底牌，所以这只是钝规则） */
   readonly keepBigJoker: boolean;
   /** 庄家专用：自己埋进底里的牌有分时，不拿同门无敌的顶主吊主（留到末轮护底） */
@@ -166,9 +224,16 @@ export const BASELINE_PARAMS: BotParams = {
   buryGambleStrongTrumps: 10,
   winPointThreshold: 5,
   ruffPointThreshold: 5,
+  countOwnCardPoints: false,
   ruffPolicy: 'points-only',
   leadCaution: { declarer: 1, defender: 2 },
   leadPriority: 'draw-first',
+  noGiftExit: false,
+  trumpRunLead: true,
+  drawWhenLong: false,
+  drawWhenLongMinTrumps: 5,
+  drawIntoJoker: false,
+  dumpDiscipline: false,
   keepBigJoker: false,
   protectPointedKitty: false,
   drawTrumps: 'unseen',
@@ -530,17 +595,50 @@ function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight, p: BotParams): C
   // 顶主吊主：持同门无敌的顶级主牌、且主牌还有没现身的（对手或底牌里），出顶主单张
   // 抽主 —— 庄家抽掉闲家的杀牌资本，闲家抽掉庄家的护底资本。
   //
-  // 两条「留牌」开关（历史行为都是关）：
+  // 三条「清主」开关（历史行为都是关，默认保持旧口径）：
+  // - `drawWhenLong`：原来的判据是顶张**可证必胜**（`sureWinner`），而**外面还有大王/小王时这条
+  //   永远不成立** —— 于是最该清主的局面反而整个失效、退化到兜底去送副牌（表 8 d3 打崩就是这个）。
+  //   打开后：主牌数 ≥ `drawWhenLongMinTrumps` 且不少于未见主牌数时，顶主不是必胜也照样吊。
+  // - `trumpRunLead`：原来永远只领**单张**顶主；打开后若手里有同门无敌的主牌顺子（≥2），
+  //   整段领出去 —— 一次抽掉每家 n 张主，而不是分 n 轮各抽 1 张。
   // - `keepBigJoker`：大王是全场唯一不可被压的牌，把它花在 0 分墩上等于把「铁定一墩」换掉。
-  // - `protectPointedKitty`：**只有庄家**读得到自己底牌的分（`you.buriedKitty`），
-  //   底牌有分时把同门无敌的顶主留到末轮护底。闲家看不到底牌，所以这条对它恒不生效 ——
-  //   「底牌有分才留大王」对闲家不是策略，是猜。
   const drawLead = (): Card[] | null => {
     if (p.drawTrumps === 'never' || trumps.length === 0) return null;
+    const unseenTrumps = sight.unseen('T', t);
+    if (unseenTrumps <= 0) return null;
     const top = trumps.reduce((a, b) => (cardLevel(b, t) > cardLevel(a, t) ? b : a));
-    if (!sight.sureWinner(top, t) || sight.unseen('T', t) <= 0) return null;
-    if (p.keepBigJoker && isJoker(top) && top.joker === 'big') return null;
-    if (p.protectPointedKitty && you.isDeclarer && cardsPoints(you.buriedKitty ?? []) > 0) return null;
+    const sureTop = sight.sureWinner(top, t);
+    const longEnough =
+      p.drawWhenLong && trumps.length >= p.drawWhenLongMinTrumps && trumps.length >= unseenTrumps;
+    // 只被王压着：把那张王钓出来，之后我剩下的主牌就是这门最大的。
+    const intoJoker =
+      p.drawIntoJoker &&
+      !isJoker(top) &&
+      trumps.length >= 3 &&
+      classCards('T', t).every(
+        (other) =>
+          cardLevel(other, t) <= cardLevel(top, t) || isJoker(other) || sight.gone(other)
+      );
+    if (!sureTop && !longEnough && !intoJoker) return null;
+
+    const blocked = (card: Card): boolean => {
+      if (p.keepBigJoker && isJoker(card) && card.joker === 'big') return true;
+      if (p.protectPointedKitty && you.isDeclarer && cardsPoints(you.buriedKitty ?? []) > 0) return true;
+      return false;
+    };
+
+    if (p.trumpRunLead) {
+      // 从长到短找「同门无敌」的主牌顺子；找不到就退回单张顶主。
+      const chains = extractChains(trumps, t).filter((chain) => chain.length >= 2);
+      chains.sort((a, b) => b.length - a.length);
+      for (const chain of chains) {
+        if (chain.length >= hand.length) continue;      // 整手押上的事归上面的 wholeHandLead 管
+        if (!sight.sureRun(chain, t)) continue;
+        if (chain.some(blocked)) continue;
+        return [...chain];
+      }
+    }
+    if (blocked(top)) return null;
     return [top];
   };
 
@@ -579,6 +677,32 @@ function leadPlay(you: PlayerSeat, t: TrumpModel, sight: Sight, p: BotParams): C
 
   // 兜底：最短副门的最低张（省主牌、保大牌）。
   if (sideSuits.length > 0) {
+    if (p.noGiftExit) {
+      // 兜底不许送牌：这两条都来自表 8 的真实亏分（d4#9 ♠K 丢 20、d6#4 ♣K 丢 10、d6#8 ♥K 丢 10）。
+      // ① 「最短副门的最低张」在只剩一张 K 时**就是那张 K** —— 外面 A 还没露面就别领它；
+      // ② 有 0 分的牌可领时，不领带分的牌。
+      const all = sideSuits.flat();
+      // 「送牌」= **赢不了又带分**（副 K 是最典型的：外面 A 还没露面，它必被吃掉，还值 10 分）。
+      const gift = (c: Card): boolean => {
+        const cls = cardClass(c, t);
+        const higherAlive = classCards(cls, t).some(
+          (other) => cardLevel(other, t) > cardLevel(c, t) && !sight.gone(other)
+        );
+        return higherAlive && cardPoints(c) > 0;
+      };
+      const clean = all.filter((c) => !gift(c));
+      if (clean.length > 0) {
+        const zero = clean.filter((c) => cardPoints(c) === 0);
+        const pool = zero.length > 0 ? zero : clean;
+        const shortest = sideSuits
+          .map((cards) => cards.filter((c) => pool.some((x) => x === c)))
+          .filter((cards) => cards.length > 0);
+        if (shortest.length > 0) {
+          const pick = shortest.reduce((a, b) => (b.length < a.length ? b : a));
+          return [pick.reduce((a, b) => (cardLevel(b, t) < cardLevel(a, t) ? b : a))];
+        }
+      }
+    }
     const shortest = sideSuits.reduce((a, b) => (b.length < a.length ? b : a));
     return [shortest.reduce((a, b) => (cardLevel(b, t) < cardLevel(a, t) ? b : a))];
   }
@@ -614,7 +738,6 @@ function followPlay(
   // 跟牌与杀牌用**两个**门槛：实测这两件事的方向相反（见 `BotParams.ruffPointThreshold`）
   const followWant = trickPoints >= p.winPointThreshold || finalTrick || declarerNeeds;
   const ruffWant = trickPoints >= p.ruffPointThreshold || finalTrick || declarerNeeds;
-
   // 同伴概念（`BotParams.partnerAware`）：只有闲家有同伴，庄家恒 null。
   // `last` = 我是第三家 ⇒ 此刻的赢家**就是本墩终局**，后面没人能翻案。
   // 只在这一种局面上做同伴决策：第二家时同伴的赢墩还没定，让利/喂分都可能送给庄家。
@@ -637,11 +760,23 @@ function followPlay(
   if (mode === 'must-follow-class') {
     const profile = bestProfile(holding, t, n);
     const win = buildFollow(holding, t, profile, 'top');
-    const low = buildFollow(holding, t, profile, 'bottom');
+    // `dumpDiscipline` 只在**这一墩正被对手拿着**时才换选窗的方式。
+    // 前两版无条件生效，实测都更差 —— 因为同伴赢墩时"别把分送给对手"这条根本不适用：
+    // 那时把分垫给同伴正是我们要的（`feedPartner` 就是干这个的），无条件省分反而把喂分抵消掉。
+    const mySide = you.isDeclarer ? [you.seat] : [you.seat, partner].filter((s): s is Seat => s !== null);
+    const opponentWinning = currentWinner !== null && !mySide.includes(currentWinner);
+    const low =
+      p.dumpDiscipline && opponentWinning
+        ? buildFollowCheap(holding, t, profile)
+        : buildFollow(holding, t, profile, 'bottom');
+    // `countOwnCardPoints`：让利要垫的那几张牌**自己带的分**也得算进「这一墩值不值得争」——
+    // 桌上 0 分、但我要垫的牌带分时，「不争」等于把那张牌的分送给对手（表 8 d4#2 的 ♥5）。
+    const wantWin =
+      followWant || (p.countOwnCardPoints && trickPoints + cardsPoints(low) >= p.winPointThreshold);
     // 同伴已定的赢墩不抢：本墩已经是本侧的，牌的高低只影响手里留下什么 ⇒ 出最低的。
     // （普通局面下这里可能仍会被迫压过同伴 —— 整门都比同伴那张大时无牌可让，那不是浪费。）
     if (partnerSettled) return verify(low);
-    if (followWant && wouldWin(trick.plays, you.seat, win, t)) return verify(win);
+    if (wantWin && wouldWin(trick.plays, you.seat, win, t)) return verify(win);
     return verify(low);
   }
 
@@ -657,7 +792,16 @@ function followPlay(
     );
     // `ruffPolicy`：`always` = 能杀就杀；`points-only` = 历史行为（过 `ruffPointThreshold` 才杀）；`never` = 不杀。
     // 同伴已定的赢墩优先于它 —— 杀那一墩只是白花一张主牌，本墩归属不会变。
-    const ruffWanted = p.ruffPolicy === 'always' || ruffWant;
+    // `countOwnCardPoints` 在这里同源：不杀就要垫牌，垫的那张若带分，同样该算进代价。
+    const cheapestDiscard = [...hand]
+      .filter((c) => cardClass(c, t) !== info.cardClass)
+      .sort((a, b) => discardValue(a, t, p.discardPointWeight) - discardValue(b, t, p.discardPointWeight))[0];
+    const wantWin =
+      ruffWant ||
+      (p.countOwnCardPoints &&
+        cheapestDiscard !== undefined &&
+        trickPoints + cardPoints(cheapestDiscard) >= p.ruffPointThreshold);
+    const ruffWanted = p.ruffPolicy === 'always' || wantWin;
     if (!partnerSettled && p.ruffPolicy !== 'never' && ruffWanted) {
       for (const run of candidates) {
         if (wouldWin(trick.plays, you.seat, run, t)) return verify(run);
@@ -712,6 +856,39 @@ function buildFollow(
     out.push(...(window === 'top' ? target.slice(target.length - count) : target.slice(0, count)));
     chains.splice(chains.indexOf(target), 1, target.slice(count));
     budget -= count;
+  }
+  return out;
+}
+
+/**
+ * 让利时挑「送分最少」的那条链（`dumpDiscipline`）。
+ *
+ * 与 `buildFollow(…, 'bottom')` 的唯一差别是**选链的键**：那边永远从层号最低的链上取底窗，
+ * 这边先把「这条链的底窗要送多少分」算出来，按「送分少 → 层号低」排序再取。
+ *
+ * **窗仍然只从链的底部取**（`slice(0, count)`），这一点是刻意的：第一版实现在整条链上滑窗、
+ * 取了送分最少的窗口，结果会把 ♥5♥6♥7 里的 ♥6 拿走（从链中间挖洞），把结构优先这条基本原则
+ * 破坏掉了 —— 那一版实测 −0.024/−0.038，不能算作「这条思路不行」的证据。
+ */
+function buildFollowCheap(holding: readonly Card[], t: TrumpModel, pieces: readonly number[]): Card[] {
+  const chains = extractChains(holding, t).map((chain) => [...chain]);
+  const out: Card[] = [];
+  let budget = pieces.reduce((sum, p) => sum + p, 0);
+  for (const piece of pieces) {
+    if (budget <= 0) break;
+    const take = Math.min(piece, budget);
+    let best: { chain: Card[]; window: Card[]; cost: number } | null = null;
+    for (const chain of chains) {
+      if (chain.length === 0) continue;
+      const count = Math.min(take, chain.length);
+      const window = chain.slice(0, count);          // 只取底窗：链的高端是资产的所在，不能挖
+      const cost = cardsPoints(window) * 100 + cardLevel(window[window.length - 1]!, t);
+      if (best === null || cost < best.cost) best = { chain, window, cost };
+    }
+    if (best === null) break;
+    out.push(...best.window);
+    chains.splice(chains.indexOf(best.chain), 1, best.chain.filter((c) => !best!.window.includes(c)));
+    budget -= best.window.length;
   }
   return out;
 }

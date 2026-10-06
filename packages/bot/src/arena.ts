@@ -24,12 +24,14 @@ import {
   cardsPoints,
   classOfSet,
   createGame,
+  dealWith,
   dispatch,
   isJoker,
   levelProgress,
   personalView,
   trickWinner,
   type Action,
+  type Card,
   type Contract,
   type DealSummary,
   type GameState,
@@ -348,6 +350,131 @@ export function runDealCell(input: DealCellInput): readonly DealRecord[] {
     }
   }
   return out;
+}
+
+/**
+ * **只有打牌阶段**的真实牌局重放：定约、将牌、庄家、埋底全部照实（从存档里读），只换参数重打。
+ *
+ * 与 `runRealDeal` 的区别很关键：那个会连叫牌一起重跑，于是庄家与定约都可能变，
+ * 比出来的差异分不清是「打牌变好了」还是「叫牌换了个更划算的定约」。
+ * 这里把叫牌的结果钉死，**唯一变量就是三家怎么打** —— 诊断 → 修 → 在那一副上验证，要的就是这个。
+ */
+export interface RealPlayInput {
+  readonly hands: readonly (readonly Card[])[];
+  readonly originalKitty: readonly Card[];
+  readonly dealerSeat: Seat;
+  readonly dealNo: number;
+  readonly levels: readonly Level[];
+  readonly contract: Contract;
+  readonly buried: readonly Card[];
+  readonly seatParams: SeatParams;
+}
+
+export function runRealPlay(input: RealPlayInput): DealRecord {
+  const dealerSeat = input.dealerSeat;
+  let state = createGame(dealerSeat);
+  state.levels = input.levels.map((l) => ({ ...l }));
+  state.deal = dealWith(input.hands, input.originalKitty, dealerSeat, input.dealNo);
+  // 手动把这一副推到「埋底」阶段，用**存档里的**定约与将牌（引擎的 bid 分支做的就是这件事，
+  // 只是定约来自真实对局而不是重新叫一遍）
+  const deal = state.deal;
+  deal.contract = { ...input.contract };
+  deal.trump = { strain: input.contract.strain, rank: input.levels[input.contract.declarerSeat]!.rank };
+  const declarer = input.contract.declarerSeat;
+  deal.hands[declarer] = [...deal.hands[declarer]!, ...deal.kitty];
+  deal.phase = 'bury';
+
+  const counters = emptySeatCounters();
+  // 先按真实的埋底走一步（这一步也是被检查的对象之一：埋底本身由参数决定）
+  const buryRes = dispatch(state, {
+    type: 'bury',
+    seat: declarer,
+    cards: input.buried.length === KITTY ? input.buried : deal.hands[declarer]!.slice(0, KITTY)
+  }, deadRng);
+  if (!buryRes.ok) throw new Error(`真实重放：埋底被拒 ${buryRes.message}`);
+  state = buryRes.state;
+
+  for (let steps = 0; steps < STEP_CAP; steps++) {
+    const d = state.deal!;
+    if (d.phase === 'scored') {
+      return {
+        seed: input.dealNo,
+        rotation: 0,
+        dealNo: input.dealNo,
+        configOfSeat: [0, 1, 2],
+        contract: d.summary!.contract,
+        trump: d.summary!.trump,
+        summary: d.summary,
+        unreached: false,
+        redeals: 0,
+        levels: input.levels,
+        improvements: improvementsOf(state),
+        counters
+      };
+    }
+    state = step(state, input.seatParams, counters);
+  }
+  throw new Error('真实重放（只打牌）步数超限');
+}
+
+const KITTY = 3;
+
+/**
+ * **真实牌局重放（含叫牌）**：把一副已经结算的牌（三家手牌 + 拿上来的底牌）原样喂给两套参数重打。
+ *
+ * 用途是「诊断 → 修复 → 在**那副牌上**验证」这条回路：竞技场量的是平均效应，
+ * 而用户报的是具体几副牌的毛病（例如表 8 d6#4 把 ♣K 送给外面的 ♣A）。
+ * 只有回到那副牌上重放，才能回答「改完之后它还会不会这么打」。
+ *
+ * `hands` 是**埋底之前**的三家 17 张（庄家在叫牌阶段就是 17 张，合同确定后引擎把底牌并进去），
+ * 所以喂进来的牌必须按这个口径拆分 —— 结算摘要里的 `originalKitty` 正好给出了这个拆分。
+ *
+ * 注意它**连叫牌一起重跑**（庄家与定约都可能变）；要隔离打牌的好差用 `runRealPlay`。
+ */
+export interface RealDealInput {
+  readonly hands: readonly (readonly Card[])[];
+  readonly originalKitty: readonly Card[];
+  readonly dealerSeat: Seat;
+  readonly dealNo: number;
+  readonly levels: readonly Level[];
+  readonly seatParams: SeatParams;
+}
+
+export function runRealDeal(input: RealDealInput): DealRecord {
+  const dealerSeat = input.dealerSeat;
+  let state = createGame(dealerSeat);
+  state.levels = input.levels.map((l) => ({ ...l }));
+  state.deal = dealWith(input.hands, input.originalKitty, dealerSeat, input.dealNo);
+  const counters = emptySeatCounters();
+  let redeals = 0;
+  const configOfSeat: [number, number, number] = [0, 1, 2];
+
+  for (let steps = 0; steps < STEP_CAP; steps++) {
+    const deal = state.deal!;
+    if (deal.phase === 'scored') {
+      return {
+        seed: input.dealNo,
+        rotation: 0,
+        dealNo: input.dealNo,
+        configOfSeat,
+        contract: deal.summary!.contract,
+        trump: deal.summary!.trump,
+        summary: deal.summary,
+        unreached: false,
+        redeals,
+        levels: input.levels,
+        improvements: improvementsOf(state),
+        counters
+      };
+    }
+    const before = deal.dealNo;
+    state = step(state, input.seatParams, counters);
+    if (state.deal!.dealNo !== before) {
+      redeals += 1;
+      throw new Error('真实牌局重放：这副牌全 pass 重发了（重放固定牌，不该发生）');
+    }
+  }
+  throw new Error('真实牌局重放步数超限');
 }
 
 function runDeal(

@@ -578,6 +578,22 @@ test('开关 discardPointWeight：0 时不再为「留住 5 分」而多留一�
   );
 });
 
+test('开关 trumpRunLead：同门无敌的主牌顺子整段领出（默认已开）', () => {
+  // ♥7 将、级牌 7 ⇒ 主牌门 = 双王 + 所有 ♥ + 所有 7；手里 BJ(层18) 与 sj(层17) 正好构成同门无敌的 2 顺
+  const hand = [BJ, SJ, c('S', 14), c('C', 3), c('C', 6)];
+  const base = makePlay({ hand, trump: T });
+  assert.deepEqual(
+    keys(playFor(base, base.you, T, { trumpRunLead: true })),
+    ['j0', 'j1'],
+    '开：整段领出双王（一次抽掉每家 2 张主）'
+  );
+  assert.deepEqual(playFor(base, base.you, T, { trumpRunLead: false }), [BJ], '关：只领单张顶主');
+  // 默认值就是「开」（ADR-0018 按实测提升），所以不传参数时应当拿到整段
+  assert.deepEqual(keys(playFor(base, base.you, T)), ['j0', 'j1'], '默认已开');
+  const lead = playFor(base, base.you, T);
+  assert.equal(checkPlay(hand, lead, T, null), null, '整段领出必须合法（同门等长顺子）');
+});
+
 test('开关 partnerAware / feedPartner：同伴已定赢墩时的两种行为', () => {
   const base = { partnerAware: false, feedPartner: false } as const;
 
