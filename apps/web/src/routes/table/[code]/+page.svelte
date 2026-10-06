@@ -6,6 +6,8 @@
   import { anchorSeatOf, labelSeatOf } from '$lib/role';
   import { fetchReplays, type ReplayResult } from '$lib/replays';
   import type { DrawerTabKey, ReportMode } from '$lib/drawer-tabs';
+  import { SoundBoard } from '$lib/sound/board.svelte';
+  import { soundEvents, soundSnapshot } from '$lib/sound/events';
   import ActionBar from '$lib/components/ActionBar.svelte';
   import ActionTray from '$lib/components/ActionTray.svelte';
   import BidPanel from '$lib/components/BidPanel.svelte';
@@ -17,6 +19,7 @@
   import LeaveConfirm from '$lib/components/LeaveConfirm.svelte';
   import LobbyPanel from '$lib/components/LobbyPanel.svelte';
   import SeatCard from '$lib/components/SeatCard.svelte';
+  import SoundControl from '$lib/components/SoundControl.svelte';
   import TabRail from '$lib/components/TabRail.svelte';
   import TableDrawer from '$lib/components/TableDrawer.svelte';
   import TableHeaderActions from '$lib/components/TableHeaderActions.svelte';
@@ -37,6 +40,13 @@
         data.inherited
       )
   );
+
+  /**
+   * 声音面板：三条通道（背景音乐 / 音效 / 震动）的执行者，见 `$lib/sound/board.svelte.ts`。
+   * 与 client 一样只建一次；构造函数自己从 localStorage 读回上次的开关，
+   * 音频设备要等到真出声那一刻才建（服务端渲染里没有 AudioContext）。
+   */
+  const sound = new SoundBoard();
 
   /**
    * 右侧活页签抽屉：`null` = 关着。
@@ -65,7 +75,12 @@
 
   onMount(() => {
     client.connect();
-    return () => client.disconnect();
+    // 音乐只在牌桌页：起播与「切到别的标签页就暂停」都交给面板自己管，卸载即停
+    const detachSound = sound.attach();
+    return () => {
+      client.disconnect();
+      detachSound();
+    };
   });
 
   const view = $derived(client.view);
@@ -153,6 +168,23 @@
     if (reviewOpen && lastCompletedTrick(deal) === null) reviewOpen = false;
   });
 
+  /**
+   * 声音与震动：把 SSE 帧之间的变化翻成提示音。四条判据本身是纯函数
+   * （`$lib/sound/events.ts`，逐帧可测），这里只负责「取帧、放声、震动」。
+   *
+   * `prevSound` 刻意是**普通变量**（非 `$state`）：它只用来记住上一帧，写它不该引起任何重算。
+   * 观战者没有 `you`，`isMyTurn` 恒为假，所以「该你了」永不触发；出牌 / 收墩 / 结算是公开事件，一样听得到。
+   */
+  let prevSound = soundSnapshot(null, null);
+  $effect(() => {
+    const next = soundSnapshot(client.view, client.you);
+    for (const cue of soundEvents(prevSound, next)) {
+      if (cue === 'turn') sound.buzz();
+      void sound.cue(cue);
+    }
+    prevSound = next;
+  });
+
   function seatAt(index: number) {
     return client.table?.seats[index] ?? null;
   }
@@ -215,6 +247,10 @@
       />
     </div>
     <div class="flex shrink-0 items-center gap-2 text-[11px]">
+      <!-- 声音设置：页头白名单里的第三样（另两样是邀请码与桌况簇）。
+           它是一枚**有界的一步动作**（一枚图标 + 三个开关的弹层），不是查阅入口 ——
+           页头两次爆满堆进去的都是战报/教程这类查阅面（见 table-chrome.test.ts 的白名单）。 -->
+      <SoundControl board={sound} />
       <TableHeaderActions
         {client}
         onLeave={() => (leaveOpen = true)}
