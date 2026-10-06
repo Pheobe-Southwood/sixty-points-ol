@@ -5,7 +5,15 @@
  *   node scripts/arena.ts --mode deal --seeds 1000 --rotations 3
  *   node scripts/arena.ts --mode deal --only partner-aware,partner-feed --seeds 3000 --ratio 2
  *   node scripts/arena.ts --mode game --seeds 120 --rotations 3
+ *   node scripts/arena.ts --mode deal --only _none --mix 'bar-10,ladder-8' --seeds 6000
+ *   node scripts/arena.ts --mode deal --baseline legacy-baseline --only _none --mix 'bar-10,ladder-8'
  *   根目录：`pnpm arena -- --seeds 200 --only ruff-always`
+ *
+ * 几个容易踩的坑，都写在 help 里免得下次再踩：
+ * - `--only` 不给 = **跑整个目录**（几十个 cell）；只要组合 cell 就写 `--only _none` 配 `--mix`。
+ * - `--mix` 按**变体名**合并参数，名字写错会在构造阶段就抛错、整轮不跑（`ladder-6` 其实叫 `bid-ladder-6`）。
+ * - `--baseline <名>` 指定配置 0（默认 = 当前出厂默认）。晋升之后 `undefined` 就是**新**默认，
+ *   所以「晋升前 vs 晋升后」必须用 `--baseline legacy-baseline` 才量得出来。
  *
  * 设计要点（都是为了让「比较」真的成立）：
  * - **同一种子 = 同一副牌**：`rngFactory` 只取决于（种子, 轮换），与 cell 无关，
@@ -79,6 +87,26 @@ const VARIANTS: readonly Variant[] = [
   { name: 'bid-ladder-6', note: '只把**竞叫阶梯原点**降到 6（开叫门槛不动）', params: { bidLadderBase: 6 }, evidence: ['competitions'] },
   { name: 'bid-both-8', note: '门槛 8 + 阶梯 8（找拐点）', params: { bidBar: 8, bidLadderBase: 8 }, evidence: ['openings', 'competitions'] },
   { name: 'bid-both-10', note: '门槛 10 + 阶梯 10（找拐点）', params: { bidBar: 10, bidLadderBase: 10 }, evidence: ['openings', 'competitions'] },
+
+  // ---- 叫牌精细扫描（ADR-0017 之后追加）----
+  // 晋升时只量过阶梯原点 6 与 12 两个点，等于在一条没画过的曲线上取了一个点就当最优。
+  // 下面这一组把曲线画出来：先扫原点（竞叫上限），再扫门槛（够不够格开叫）、阶梯斜率与封顶。
+  { name: 'ladder-0', note: '竞叫阶梯原点 0（最凶：任何牌都愿意加到 60~85）', params: { bidLadderBase: 0 }, evidence: ['competitions'] },
+  { name: 'ladder-2', note: '竞叫阶梯原点 2', params: { bidLadderBase: 2 }, evidence: ['competitions'] },
+  { name: 'ladder-3', note: '竞叫阶梯原点 3', params: { bidLadderBase: 3 }, evidence: ['competitions'] },
+  { name: 'ladder-4', note: '竞叫阶梯原点 4', params: { bidLadderBase: 4 }, evidence: ['competitions'] },
+  { name: 'ladder-8', note: '竞叫阶梯原点 8（比默认温和）', params: { bidLadderBase: 8 }, evidence: ['competitions'] },
+  { name: 'ladder-10', note: '竞叫阶梯原点 10', params: { bidLadderBase: 10 }, evidence: ['competitions'] },
+  { name: 'bar-8', note: '开叫门槛 8（阶梯仍是默认 6）', params: { bidBar: 8 }, evidence: ['openings', 'competitions'] },
+  { name: 'bar-10', note: '开叫门槛 10', params: { bidBar: 10 }, evidence: ['openings', 'competitions'] },
+  { name: 'bar-11', note: '开叫门槛 11', params: { bidBar: 11 }, evidence: ['openings', 'competitions'] },
+  { name: 'bar-13', note: '开叫门槛 13', params: { bidBar: 13 }, evidence: ['openings', 'competitions'] },
+  { name: 'bar-14', note: '开叫门槛 14', params: { bidBar: 14 }, evidence: ['openings', 'competitions'] },
+  { name: 'step-strength-2', note: '阶梯更陡（每 2 点牌力上一档，更早叫到高分）', params: { bidStepStrength: 2 }, evidence: ['competitions'] },
+  { name: 'step-strength-4', note: '阶梯更缓（每 4 点上一档）', params: { bidStepStrength: 4 }, evidence: ['competitions'] },
+  { name: 'step-points-10', note: '阶梯每档 10 分（上限爬得更快）', params: { bidStepPoints: 10 }, evidence: ['competitions'] },
+  { name: 'max-willing-95', note: '愿意分数封顶 85 → 95', params: { maxWilling: 95 }, evidence: ['competitions'] },
+  { name: 'ladder-0-cap-95', note: '原点 0 且封顶 95（把「更凶」推到极限的那一版）', params: { bidLadderBase: 0, maxWilling: 95 }, evidence: ['competitions'] },
   { name: 'bid-16', note: '叫牌更保守（门槛 16，对照）', params: { bidBar: 16 }, evidence: ['openings'] },
   { name: 'bid-jump', note: '跳叫到愿意分数（对照：ADR-0015 认为买不到级数）', params: { bidJump: true }, evidence: ['openings', 'competitions'] },
   { name: 'no-bury-gamble', note: '埋底一分不埋（对照）', params: { buryGamble: false }, evidence: [] },
@@ -173,29 +201,29 @@ function assignFrom(seatConfigs: Triple): (rotation: number) => Triple {
 /** 轮换前「谁坐哪个配置」：ratio 1 = 1 变体 + 2 基线；ratio 2 = 2 变体 + 1 基线 */
 const seatConfigsFor = (ratio: number): Triple => (ratio === 2 ? [1, 1, 0] : [1, 0, 0]);
 
-function variantCell(variant: Variant, ratio: number): CliCell {
+function variantCell(variant: Variant, ratio: number, base: ArenaConfig): CliCell {
   return {
     name: variant.name,
     note: variant.note,
-    configs: [undefined, variant.params],
+    configs: [base, variant.params],
     seatConfigs: seatConfigsFor(ratio),
     compare: { variant: 1, baseline: 0 },
     evidence: variant.evidence
   };
 }
 
-function aaCell(ratio: number): CliCell {
+function aaCell(ratio: number, base: ArenaConfig): CliCell {
   return {
     name: 'A/A',
     note: '零假设标定：两侧同配置，效应应恒为 0；离散度用来算 MDE',
-    configs: [undefined, undefined],
+    configs: [base, base],
     seatConfigs: seatConfigsFor(ratio),
     compare: { variant: 1, baseline: 0 },
     evidence: []
   };
 }
 
-function mixedCell(names: readonly string[], ratio: number): CliCell {
+function mixedCell(names: readonly string[], ratio: number, base: ArenaConfig): CliCell {
   const chosen = names.map((name) => {
     const found = VARIANTS.find((v) => v.name === name);
     if (found === undefined) {
@@ -208,11 +236,27 @@ function mixedCell(names: readonly string[], ratio: number): CliCell {
   return {
     name: `mix(${names.join('+')})`,
     note: `组合：${chosen.map((v) => v.note).join('；')}`,
-    configs: [undefined, merged as Partial<BotParams>],
+    configs: [base, merged as Partial<BotParams>],
     seatConfigs: seatConfigsFor(ratio),
     compare: { variant: 1, baseline: 0 },
     evidence: [...new Set(chosen.flatMap((v) => v.evidence))]
   };
+}
+
+/**
+ * 把 `--baseline` 解析成「配置 0」。
+ *
+ * 默认是 `undefined`（= 当前出厂默认）。但**精细化调参**要问的是「A 与 B 谁强」这类任意配对 ——
+ * 尤其「晋升前 vs 晋升后」「精调后的候选 vs 当前默认」，而 `undefined` 只能当其中一侧。
+ * 只能写成变体的那一侧（配置 1）会把方向锁死，也会让「谁更贴人类陪练」这种对照写不出来。
+ */
+function baselineOf(name: string | undefined): ArenaConfig {
+  if (name === undefined) return undefined;
+  const found = VARIANTS.find((v) => v.name === name);
+  if (found === undefined) {
+    throw new Error(`未知 --baseline：${name}（可选：${VARIANTS.map((v) => v.name).join(',')}）`);
+  }
+  return found.params;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,13 +555,14 @@ function main(): void {
   const reportArg = one('report');
   const reportPath = reportArg === undefined ? undefined : resolve(repoRoot, reportArg);
 
+  const base = baselineOf(one('baseline'));
   const selected = VARIANTS.filter((v) => only.length === 0 || only.includes(v.name));
   if (selected.length === 0 && mixes.length === 0) throw new Error('没有选中的变体（检查 --only）');
 
   const cells: CliCell[] = [];
-  if (calibrate) cells.push(aaCell(ratio));
-  for (const variant of selected) cells.push(variantCell(variant, ratio));
-  for (const names of mixes) cells.push(mixedCell(names, ratio));
+  if (calibrate) cells.push(aaCell(ratio, base));
+  for (const variant of selected) cells.push(variantCell(variant, ratio, base));
+  for (const names of mixes) cells.push(mixedCell(names, ratio, base));
 
   // `--seed0` 偏移种子区间：**复现实验**要用没跑过的那一段（换个种子重跑一遍才叫复现，
   // 在同一批种子上重跑只是把同一份数字再算一遍）。
