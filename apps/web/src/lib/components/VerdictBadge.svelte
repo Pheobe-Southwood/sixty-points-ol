@@ -9,16 +9,35 @@
    *
    * 底色与文字色（emerald / rose）是**唯一**的输赢着色来源。弹窗与战报共用这一枚 ——
    * 复盘时在弹窗里读到的那一句，就是战报里那一句。
+   *
+   * 两档音量（`ghost`）：`solid` 给弹窗与战报的每副卡，`ghost` 给机器重演展开体（ADR-0016）——
+   * 展开体是那张卡的枝干，字号更小、底与环退到近乎透明，免得与主卡那枚并列时两枚一起抢眼。
+   * 退火**只降音量、不改色相**：赢仍绿、输仍红，唯一的输赢着色来源不许被降权改掉。
    */
-  let { summary, class: klass = '' }: { summary: DealSummary; class?: string } = $props();
+  let {
+    summary,
+    class: klass = '',
+    ghost = false
+  }: { summary: DealSummary; class?: string; ghost?: boolean } = $props();
+
+  const TONES = {
+    solid: {
+      box: 'rounded-xl px-4 py-2',
+      text: 'text-sm font-bold',
+      made: 'bg-emerald-500/15 ring-emerald-400/30 text-emerald-300',
+      lost: 'bg-rose-500/15 ring-rose-400/30 text-rose-300'
+    },
+    ghost: {
+      box: 'rounded-lg px-3 py-1.5',
+      text: 'text-[11px] font-semibold',
+      made: 'bg-emerald-500/5 ring-emerald-400/15 text-emerald-300/70',
+      lost: 'bg-rose-500/5 ring-rose-400/15 text-rose-300/70'
+    }
+  } as const;
+  const t = $derived(ghost ? TONES.ghost : TONES.solid);
+  const tone = $derived(t[summary.made ? 'made' : 'lost']);
 </script>
 
-<div
-  class="rounded-xl px-4 py-2 text-center ring-1 {klass} {summary.made
-    ? 'bg-emerald-500/15 ring-emerald-400/30'
-    : 'bg-rose-500/15 ring-rose-400/30'}"
->
-  <p class="text-sm font-bold {summary.made ? 'text-emerald-300' : 'text-rose-300'}">
-    {scoreLineText(summary)}
-  </p>
+<div class="text-center ring-1 {t.box} {klass} {tone}">
+  <p class="{t.text}">{scoreLineText(summary)}</p>
 </div>

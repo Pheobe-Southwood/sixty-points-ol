@@ -31,8 +31,11 @@
  *
  * 第五块是**机器重演入口**（`ReplayPanel`，ADR-0016）：它同时挂在战报逐副卡与结算弹窗上，
  * 但**升级表没有** —— 升级表说的是真实进度，重演是每副的对照；展开体复用结算那三件套，
- * 数据通道由页面持有（组件自己发请求就是第二条取数路径）。战报按需渲染（`active === 'report'`
- * 才在 DOM 里），所以 ui-check 同样够不到它，判据也只能在这一层。
+ * 数据通道由页面持有（组件自己发请求就是第二条取数路径）。它还是**主卡的枝干**：左引导线 +
+ * 缩进，里面一律走那三件套的 `ghost` 档（数字 20px → 16px、结论只留淡边框与同色淡字），
+ * 首行压成一枚 9px 徽章 —— 早先它与主卡同形同档（`bg-black/20` + `ring-1` 外壳、同档算式、
+ * 又一枚同色实心胶囊，头行在弹窗里还按 16px 继承），四项并列就是「喧宾夺主」。
+ * 战报按需渲染（`active === 'report'` 才在 DOM 里），所以 ui-check 同样够不到它，判据也只能在这一层。
  *
  * 第六块是**「上一轮」回看**（`TrickReview`）：机器人出手只有 0.5–1.5 秒，收墩后赢家立刻领出，
  * 上一墩的三家出牌一眨眼就没了 —— 入口是状态条「第 N 轮」旁边那枚 chip，内容是 `trickHistory`
@@ -700,13 +703,16 @@ function tagOf(source: string, index: number): string {
 }
 
 /**
- * 算式（`ScoreEquation`）：结算弹窗与战报的每副卡是**同一条算式**，两档尺寸只差 token。
- * 三条判据各对应一次真实缺陷：
+ * 算式（`ScoreEquation`）：结算弹窗、战报的每副卡、机器重演展开体是**同一条算式**，
+ * 三档尺寸只差 token。
+ * 四条判据各对应一次真实缺陷：
  * ① 墩分与底分之间的符号必须来自 `kittySign`（抠底 −、保底 +）—— 早先硬写 `+`，
  *    抠底时显示出「60 + 10 × 1 = 50」这种自相矛盾的算式；
  * ② 那个符号按保底/抠底着色（绿 / 红），且着色认的是**符号自己那个标签**；
- * ③ 符号与四个数字**同级字号**：两档尺寸各只有一个 `num` token，五处共用它 ——
- *    抽成两档之后「同一个 token」才是「同级字号」的真判据（早先这里写死 `text-[26px]`）。
+ * ③ 符号与四个数字**同级字号**：各档尺寸各只有一个 `num` token，五处共用它 ——
+ *    抽成档位之后「同一个 token」才是「同级字号」的真判据（早先这里写死 `text-[26px]`）；
+ * ④ **ghost 档必须在**（机器重演展开体用）：数字比 `compact` 再小一档、底牌小牌面淡一档 ——
+ *    少了它，展开体的算式就与主卡同档，喧宾夺主。
  */
 function equationCheck(source: string): string | null {
   const src = code(source);
@@ -734,12 +740,25 @@ function equationCheck(source: string): string | null {
     }
   }
   if (!src.includes('底分')) return '底分那一格没有「底分」子标：子标只有一份文案，两档不许各写各的';
+  if (!/ghost:\s*\{/.test(src)) {
+    return '算式没有 ghost 档（机器重演展开体用）：展开体里那三格会与主卡同档，喧宾夺主';
+  }
+  if (!src.includes('text-base')) {
+    return 'ghost 档没有把数字降下来（text-base）：它要比 compact（text-xl）小一档才叫降权';
+  }
+  if (!src.includes('opacity-75')) {
+    return 'ghost 档没有把底牌小牌面淡一档（opacity-75）：三张白牌会成为展开体里最响的东西';
+  }
   return null;
 }
 
 /**
  * 结论（`VerdictBadge`）：**只有一行**（`scoreLineText`），底色与文字色是唯一的输赢着色来源。
  * 不许回潮成「打输 · 差 N 分」再加一行「两名闲家各升 ceil(差 / 10) = N 级；庄家级别不变」。
+ *
+ * 另有 ghost 档（机器重演展开体用）：它**只许降音量、不许改色相** —— 少了这一档，展开体里
+ * 会与主卡那枚并列出两枚同尺寸同色的实心胶囊，一起抢眼；而改成中性色就等于把「唯一的输赢
+ * 着色来源」从展开体里拿掉，读数会退回「差 N 分」那串字。
  */
 function verdictCheck(source: string): string | null {
   const src = code(source);
@@ -761,6 +780,19 @@ function verdictCheck(source: string): string | null {
     'text-rose-300'
   ]) {
     if (!src.includes(cls)) return `结论缺少 ${cls}：底色与文字色是唯一的输赢着色来源`;
+  }
+  if (!/ghost:\s*\{/.test(src)) {
+    return '结论没有 ghost 档（机器重演展开体用）：两枚同尺寸同色的胶囊并列，重演那枚会和主卡抢眼';
+  }
+  for (const cls of ['text-emerald-300/70', 'text-rose-300/70']) {
+    if (!src.includes(cls)) {
+      return `结论的 ghost 档丢了 ${cls}：降权只许降音量，赢绿 / 输红是唯一的输赢着色来源`;
+    }
+  }
+  for (const cls of ['bg-emerald-500/5', 'bg-rose-500/5']) {
+    if (!new RegExp(`${cls}(?![0-9])`).test(src)) {
+      return `结论的 ghost 档底色不是 ${cls}：那一档要是近乎透明的淡底，而不是另一枚实心胶囊`;
+    }
   }
   return null;
 }
@@ -900,7 +932,7 @@ test('算式：加减号来自 kittySign、带色、与数字同级字号（两�
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：硬写 +、符号褪色、符号被缩成小字、丢掉底牌牌面、少一档尺寸，都必须被判出来', () => {
+test('反证：硬写 +、符号褪色、符号被缩成小字、丢掉底牌牌面、少一档尺寸、ghost 档退化，都必须被判出来', () => {
   assert.ok(
     equationCheck(scoreEquation.replace('{kittySign(summary.protectedBottom)}', '+')) !== null,
     '硬写 `+` 的旧算式被判为合规（这条守卫是空转的）'
@@ -930,6 +962,16 @@ test('反证：硬写 +、符号褪色、符号被缩成小字、丢掉底牌牌
     /text-\[26px\]/,
     '弹窗那一档字号被改掉（两档尺寸不齐）没有被判出来'
   );
+  assert.match(
+    equationCheck(scoreEquation.replace('text-base', 'text-lg')) ?? '',
+    /text-base/,
+    'ghost 档不再比 compact 小一档（digit 与主卡同档）没有被判出来'
+  );
+  assert.match(
+    equationCheck(scoreEquation.replace('opacity-75', 'opacity-100')) ?? '',
+    /opacity-75/,
+    'ghost 档的底牌小牌面不再淡一档没有被判出来'
+  );
 });
 
 test('结论：只有一行 scoreLineText，底色与文字色是唯一的输赢着色', () => {
@@ -952,6 +994,16 @@ test('反证：两行结论、丢掉着色、不写「不变」，都必须被�
     verdictCheck(verdictBadge.replaceAll('text-rose-300', 'text-white/40')) ?? '',
     /text-rose-300/,
     '结论丢掉打输那一档文字色没有被判出来'
+  );
+  assert.match(
+    verdictCheck(verdictBadge.replace('text-rose-300/70', 'text-white/40')) ?? '',
+    /text-rose-300\/70/,
+    'ghost 档被调成中性色（降权顺手把输赢色相也拿掉了）没有被判出来'
+  );
+  assert.match(
+    verdictCheck(verdictBadge.replace('ghost:', 'xx:')) ?? '',
+    /ghost/,
+    '结论的 ghost 档整档消失没有被判出来'
   );
   assert.match(
     levelTableCheck(levelTable.replaceAll('不变', '—')) ?? '',
@@ -1075,12 +1127,14 @@ test('反证：少一态、提示不居中、解释段回潮、镜像槽位回�
 });
 
 /**
- * 机器重演入口（`ReplayPanel`，ADR-0016）：两个入口 + 一条数据通道 + 复用结算那三件套。
+ * 机器重演入口（`ReplayPanel`，ADR-0016）：两个入口 + 一条数据通道 + 复用结算那三件套 + 枝干降权。
  *
- * 判据分四层：① **入口只在逐副卡与结算弹窗**，升级表**没有** —— 升级表说的是真实进度，
+ * 判据分五层：① **入口只在逐副卡与结算弹窗**，升级表**没有** —— 升级表说的是真实进度，
  * 重演是每副的对照；② 逐副卡按 `deal.dealNo` 显式取存档；③ 展开体**复用**
  * `contractText` / `ScoreEquation` / `VerdictBadge` —— 弹窗、战报、重演三处读法不可能各走各的；
- * ④ **数据通道归页面**（`fetchReplays` + `onOpenReplay`）：组件自己发请求就是第二条取数路径。
+ * ④ **数据通道归页面**（`fetchReplays` + `onOpenReplay`）：组件自己发请求就是第二条取数路径；
+ * ⑤ 展开体是**枝干**（左引导线 + 缩进）且一律走 ghost 档、正文 11px —— 与主卡同形同档就会
+ * 喧宾夺主（外壳、算式、结论、头行四样都曾与主卡并列）。
  * 两种「没有」也要如实说（全 pass / 老副无记录），不许退化成按钮消失 —— 那看起来像功能坏了。
  */
 function replayEntryCheck(
@@ -1117,6 +1171,25 @@ function replayEntryCheck(
     return '重演面板没有复用 ScoreEquation 的紧凑档（compact）：算式会有第二份实现';
   }
   if (!panel.includes('<VerdictBadge')) return '重演面板没有复用 VerdictBadge：结论会各写各的';
+  // 展开体是**枝干**，不是又一张同级卡：左引导线 + 缩进；同级卡那套外壳不许回潮
+  if (!panel.includes('border-l')) {
+    return '重演展开体没有左侧引导线（border-l）：它会被读成又一张同级卡，而不是这张牌的枝干';
+  }
+  if (!/pl-\d/.test(panel)) return '重演展开体没有跟着引导线缩进（pl-*）';
+  if (/bg-black\/20|ring-1 ring-white\/10/.test(panel)) {
+    return '重演展开体又长回了同级卡的外壳（bg-black/20 + ring-1 ring-white/10）：喧宾夺主正是那个盒子';
+  }
+  // 里面一律走 ghost 档：算式与结论都降一档，头行不再靠继承字号（弹窗里是 16px）。
+  // 认的是**那一枚标签自己**带 ghost（`[^>]*`）—— 只看「附近有没有 ghost」会被旁边那枚救掉
+  if (!/<ScoreEquation[^>]*ghost/.test(panel)) {
+    return '重演没有走算式的 ghost 档：展开体与主卡同档字号';
+  }
+  if (!/<VerdictBadge[^>]*ghost/.test(panel)) {
+    return '重演没有走结论的 ghost 档：两枚同尺寸同色的结论会一起抢眼';
+  }
+  if (!panel.includes('text-[11px]')) {
+    return '重演展开体的正文没有降一档（text-[11px]）：在弹窗里它会按 16px 继承，比弹窗标题还大';
+  }
   if (!panel.includes('机器重演')) return '重演入口没有「机器重演」这枚按钮';
   if (!panel.includes('全 pass')) return '全 pass 那句话没了：约 5% 的副是合法终态，要如实说';
   if (!panel.includes('没有机器重演记录')) {
@@ -1132,12 +1205,12 @@ function replayEntryCheck(
   return null;
 }
 
-test('机器重演：入口只在逐副卡与结算弹窗，复用结算那三件套，通道归页面', () => {
+test('机器重演：入口只在逐副卡与结算弹窗，复用那三件套的 ghost 档，通道归页面', () => {
   const problem = replayEntryCheck(historyList, dealSummary, replayPanel, page);
   assert.equal(problem, null, problem ?? '');
 });
 
-test('反证：升级表也加入口、弹窗丢入口、重演里自写算式、面板自发请求、页面丢通道，都必须被判出来', () => {
+test('反证：升级表也加入口、弹窗丢入口、重演里自写算式、面板自发请求、页面丢通道、枝干退化，都必须被判出来', () => {
   assert.match(
     replayEntryCheck(
       historyList.replace(
@@ -1166,13 +1239,58 @@ test('反证：升级表也加入口、弹窗丢入口、重演里自写算式�
       historyList,
       dealSummary,
       replayPanel.replace(
-        '<ScoreEquation summary={replay.summary} compact />',
+        '<ScoreEquation summary={replay.summary} compact ghost />',
         '<p>{replay.summary.finalScore}</p>'
       ),
       page
     ) ?? '',
     /ScoreEquation/,
     '重演面板自写一份算式没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel.replace('compact ghost', 'compact'),
+      page
+    ) ?? '',
+    /ghost/,
+    '重演没有走 ghost 档（回到与主卡同档字号）没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel.replace('class="mt-2" ghost', 'class="mt-2"'),
+      page
+    ) ?? '',
+    /结论的 ghost/,
+    '重演没有走结论的 ghost 档（靠算式那枚蒙混）没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel.replace('border-l border-white/20', 'bg-black/20 ring-1 ring-white/10'),
+      page
+    ) ?? '',
+    /外壳|引导线/,
+    '重演展开体长回同级卡外壳（喧宾夺主那个盒子）没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(historyList, dealSummary, replayPanel.replace('border-l', ''), page) ?? '',
+    /引导线/,
+    '重演展开体丢掉左侧引导线（不再是枝干）没有被判出来'
+  );
+  assert.match(
+    replayEntryCheck(
+      historyList,
+      dealSummary,
+      replayPanel.replaceAll('text-[11px]', 'text-base'),
+      page
+    ) ?? '',
+    /text-\[11px\]/,
+    '重演展开体的正文又按继承字号（弹窗里 16px）出现没有被判出来'
   );
   assert.match(
     replayEntryCheck(
