@@ -22,7 +22,10 @@
  *    sticky 页脚浮在历史行上（压掉半行叫牌记录 —— 截图里那半行就是这么丢的）。
  * 6b. 叫牌面板的内容：头部只写「第 N 副」（发牌人文案已删 ——「发牌」对新手不透明，
  *    谁先叫由轮次 chip 说）、历史是**三列表格**（一行塞几个人不再由昵称长度决定）、
- *    候选叫品**只摆三档**（正常不跳叫，多余档位只会把面板撑高）。
+ *    候选叫品是**固定五槽**（♣ ♦ ♥ ♠ NT 恒定位；不可叫的花色留隐形占位、绝不补位 ——
+ *    免得同一横向位置在不同档之间换了花色，判据 `checkBidSlots`）＋**跳叫显式化**
+ *    （默认只摆非跳叫档，其余收在「▶ 跳叫」触发钮后面，点开后共五档；更大的跳叫走 API/MCP）。
+ *    档位与触发形态的取值由 labels.ts 的 `bidTiers` 定（四场景表在 labels.test.ts）。
  *    「信息面 → 候选档位 → 历史（自己滚） → 页脚」这个顺序由源码守卫钉住。
  * 7. 底牌可见性：庄家的埋底页要有「拿上来的底牌」那一行（`data-taken-kitty` 钩子）；闲家与观战者
  *    的同一页不能出现它。这一条同时守着引擎 personalView 的规则（拿上来的底牌只给庄家）。
@@ -58,7 +61,7 @@
  * 运行：BASE=http://127.0.0.1:5178 node scripts/ui-check.ts
  */
 import { cardClass, cardKey, checkPlay, type Card, type TrumpModel } from '@sixty/engine';
-import { checkBidPanelReachability } from '../src/lib/panel-guard.ts';
+import { checkBidPanelReachability, checkBidSlots } from '../src/lib/panel-guard.ts';
 
 // BASE 优先取环境变量；没有 env 注入的场景（例如沙箱里通过 bridge 跑）可以直接把地址当参数传：
 //   node scripts/ui-check.ts http://127.0.0.1:3000
@@ -534,12 +537,28 @@ async function main(): Promise<void> {
     assert(secondBidder.includes(glyph), `叫牌候选按钮里缺花色字形 ${glyph}`);
   }
   assert(secondBidder.includes('40♣'), `叫牌历史里应看到「40♣」，实际页面里没有`);
-  // 三档：候选只摆基准、+5、+10（正常情况不跳叫）；更大的跳叫只能走 API/MCP
+  // 候选区：**固定五槽**（♣ ♦ ♥ ♠ NT，不可叫的花色隐形占位、不补位）+ 跳叫触发钮。
+  // 此刻最高叫品是 40♣（花色）⇒ 非跳叫档是 40、45 两档，第二档行末一枚「▶ 跳叫」；
+  // 50 起属于跳叫，点开之前不出现在页面上（那张页面的 HTML 是未展开态）。
   const panelMine = bidPanelMarkup(secondBidder);
-  for (const points of ['>40<', '>45<', '>50<']) {
-    assert(panelMine.includes(points), `候选档位缺 ${points}（应恰有三档：基准 +5/+10）`);
+  for (const points of ['>40<', '>45<']) {
+    assert(panelMine.includes(points), `候选档位缺 ${points}（最高 40♣ 时应摆 40、45 两档非跳叫）`);
   }
-  assert(!panelMine.includes('>55<'), '候选档位出现了第四档（>55<）：面板只应摆三档');
+  assert(!panelMine.includes('>50<'), '候选区出现了 >50<：跳叫档位不该在点开触发钮之前出现');
+  assert(
+    panelMine.includes('data-bid-trigger="row-end"'),
+    '最高叫品是花色时，触发钮应在第二档行末（data-bid-trigger="row-end"）'
+  );
+  assert(panelMine.includes('▶ 跳叫'), '候选区没有跳叫触发钮（「▶ 跳叫」）');
+  assert(panelMine.includes('>NT<'), '候选区第 5 槽不是 NT 字形（无主必须写成 NT）');
+  const slotGuard = checkBidSlots(panelMine);
+  assert(slotGuard.ok, `候选区固定五槽守卫没过：${slotGuard.reason}`);
+  // 40♣ 之下：40 档只有 ♣ 不可叫（1 个隐形占位），其余 4 格 + 45 档 5 格 = 9 个可叫档位。
+  // 数目对不上就说明槽位在补位（少一格）或多出了不存在的档位。
+  const invisibleSlots = (panelMine.match(/data-bid-slot="invisible"/g) ?? []).length;
+  assert(invisibleSlots === 1, `40♣ 之下应恰好 1 个隐形占位（40 档的 ♣），实际 ${invisibleSlots}`);
+  const legalSlots = (panelMine.match(/data-bid-slot="legal"/g) ?? []).length;
+  assert(legalSlots === 9, `固定五槽下应是 4 + 5 = 9 个可叫档位，实际 ${legalSlots}`);
   assert(thCount(panelMine) === 3, '叫牌历史表头不是 3 列（三位玩家）');
   await act(code, players[nextIndex]!.credential, { type: 'bid', call: 'pass' });
   await act(code, players[(dealerIndex + 2) % 3]!.credential, { type: 'bid', call: 'pass' });
