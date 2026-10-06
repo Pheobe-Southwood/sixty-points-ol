@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { importedModules, violationsOf, type GuardRule } from './import-scan.ts';
+import { importedModules, stripComments, violationsOf, type GuardRule } from './import-scan.ts';
 
 const MUSIC_DIR = new URL('../src/lib/music/', import.meta.url);
 const ROUTE = '../src/routes/table/[code]/+page.svelte';
@@ -117,10 +117,30 @@ const ALLOWED_REFERRERS = new Set([
   'src/lib/music-adapters.ts'
 ]);
 
+/**
+ * 一个文件里有没有**真的**引用音乐模块。
+ *
+ * 判据是 **import 声明**（剥掉注释后再看），不是「源码里出现过 `music/` 这几个字」——
+ * 后者会把**注释里的提及**当成引用。真实教训：`sound/board.svelte.ts` 里三行注释写着
+ * 「本模块刻意不 import `$lib/music/`」，旧的判据当场把它报成越界文件（CI 上红的）。
+ * 这类守卫扫的必须是语法结构，不是文本。
+ *
+ * 两种写法都要认：
+ * - `$lib/music/...`（SvelteKit 别名）；
+ * - 相对过去时的 `'../music/x'`（在 `src/lib/components/` 下指的就是音乐模块）。
+ *   这里要求路径片段正好是 `music/`（带斜杠），所以 `../music-adapters.ts` 不会被误伤。
+ */
+function referencesMusic(source: string): boolean {
+  const code = stripComments(source);
+  return /(?:from|export)\s+['"][^'"]*(?:\$lib\/music\/|(?:^|\/)music\/)/m.test(code) || /import\s+['"][^'"]*music\//.test(code);
+}
+
 test('出向：除牌桌页与适配层，没有第三方引用音乐', () => {
   const roots = [
     new URL('../src/lib/', import.meta.url),
     new URL('../src/routes/', import.meta.url),
+    // 脚本只有一个目录（`apps/web/scripts/`）；别顺手加 `src/scripts/`，那里不存在 ——
+    // `readdirSync` 会直接 ENOENT 把这条守卫变成一条「环境错」。
     new URL('../scripts/', import.meta.url)
   ];
   const offenders: string[] = [];
@@ -136,16 +156,41 @@ test('出向：除牌桌页与适配层，没有第三方引用音乐', () => {
       if (!entry.endsWith('.ts') && !entry.endsWith('.svelte')) continue;
       const path = relative(child);
       if (ALLOWED_REFERRERS.has(path)) continue;
-      const source = readFileSync(child, 'utf8');
-      // 两种写法都要认：`$lib/music/...`，以及从别处相对过去时路径里带 `music/` 那一段的
-      // （`../music/x` 在 `src/lib/components/` 下指的就是音乐模块）。
-      // 注意**不能**写成 `\.\./music/`：音乐模块自己内部也有 `../icons.ts` 这种写法，
-      // 一刀切会把模块内部正常的引用当成越界（第一版就是这么误报的）。
-      if (/\$lib\/music\//.test(source) || /from\s+['"][^'"]*music\//.test(source)) offenders.push(path);
+      if (referencesMusic(readFileSync(child, 'utf8'))) offenders.push(path);
     }
   };
   for (const root of roots) walk(root);
   assert.deepEqual(offenders, [], `这些文件引用了音乐模块（应当只有牌桌页与适配层）：${offenders.join(', ')}`);
+});
+
+test('反证：判据认的是 import 声明 —— 注释里提到不算，真引用必须被抓出来', () => {
+  // ① 注释里的提及不算（这正是 CI 上误报的那一行）
+  assert.equal(
+    referencesMusic("// 这里刻意不 import `$lib/music/`：两个模块互不认识\nconst X = 1;\n"),
+    false,
+    '注释里提到 $lib/music/ 又被当成引用了（守卫会误报）'
+  );
+  assert.equal(
+    referencesMusic("/** 见 `$lib/music/bus.ts` 的 MUSIC_EVENT */\nexport const Y = 1;\n"),
+    false,
+    '块注释里的提及也被当成了引用'
+  );
+  // ② 真引用：四种写法都要抓到
+  for (const [name, snippet] of [
+    ['别名 import', "import { X } from '$lib/music/types.ts';"],
+    ['相对 import', "import type { Track } from '../music/types.ts';"],
+    ['副作用 import', "import '$lib/music/bus.ts';"],
+    ['re-export', "export { X } from '$lib/music/queue.ts';"]
+  ] as const) {
+    assert.equal(referencesMusic(snippet), true, `${name} 没被抓出来`);
+  }
+  // ③ 相邻但不同的模块不许误伤
+  assert.equal(
+    referencesMusic("import { buildUpstreamRequest } from '$lib/music-adapters.ts';"),
+    false,
+    'music-adapters.ts 不是音乐模块内部（它是共用适配层），不该算越界'
+  );
+  assert.equal(referencesMusic("import { soundEvents } from './events.ts';"), false, '同目录相对引用被误伤了');
 });
 
 test('服务端那半：`lib/server/music.ts` 只许 import 纯配置、纯适配层与 kit 的类型', () => {
