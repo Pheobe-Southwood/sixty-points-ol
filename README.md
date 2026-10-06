@@ -195,8 +195,11 @@ SIXTY_MUSIC_API=http://127.0.0.1:4000 pnpm dev
 - 用预构建镜像或 Coolify 的 **Docker Image** 资源（不走本仓库 compose）时**没有自带边车**：要么自己另起一个
   `moefurina/ncm-api` 并把 `SIXTY_MUSIC_API` 指过去，要么直接设 `SIXTY_MUSIC=off`；否则悬浮窗里只会显示
   「连不上音乐服务（边车没起来？）」。
-- 牌桌页若已合并本地背景音乐与音效（PR #7 的 `$lib/sound`），它与本播放器会**同时出声**：这次只留了
-  `document` 上的 `sixty:music` 事件当接口，联动留给 `$lib/sound` 一侧决定（本次不含 import 联动）。
+- 牌桌页的另一条音频通道是**本地背景音乐**（页头声音图标里的 `$lib/sound`，见 `docs/audio-sources.md`）。
+  两者由「**点播让位**」协调：音乐悬浮窗开始出声时，背景音乐暂停；悬浮窗停下（或离开牌桌）就按**原来的音量**
+  接回来。音量滑块值不会被让位改掉。
+  接法只是一个 `document` 事件：悬浮窗播 `sixty:music`（detail `{ playing }`），背景音乐那一侧监听它 ——
+  两个模块**互不 import**，谁不在都不影响对方（守卫见 `apps/web/test/sound.test.ts` 的「让位事件的契约」）。
 
 ## 界面约定
 

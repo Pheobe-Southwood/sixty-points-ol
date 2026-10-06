@@ -18,7 +18,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 
 const BUILT_SERVER = 'build/index.js';
 const REAL_UPSTREAM = process.env['SIXTY_MUSIC_API'] ?? null;
@@ -231,12 +231,27 @@ async function main(): Promise<void> {
     throw new Error(`找不到 ${BUILT_SERVER}：先跑 \`pnpm build\`（这个脚本打的是构建产物）`);
   }
 
+  /**
+   * 每次跑都用一个独立的库文件，跑完删掉。
+   *
+   * 不删的后果实测过一次：连续跑几轮之后 `/tmp` 里堆着一串 `sixty-music-check-*.db`
+   * 没人认领（SQLite 还会捎带 `-wal` / `-shm`）。这个脚本是给别人反复跑的，
+   * 收尾就该由它自己负责。
+   */
+  const dbPath = `/tmp/sixty-music-check-${Date.now() % 1e6}.db`;
+  const dropDb = (): void => {
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        rmSync(`${dbPath}${suffix}`, { force: true });
+      } catch {
+        // 删不掉不影响结论：这是收尾，不是断言
+      }
+    }
+  };
+
   const stub = startStub();
   await new Promise<void>((resolve) => stub.server.listen(STUB_PORT, '127.0.0.1', resolve));
-  const app = await startApp(APP_PORT, {
-    SIXTY_MUSIC_API: STUB_BASE,
-    SIXTY_DB: `/tmp/sixty-music-check-${Date.now() % 1e6}.db`
-  });
+  const app = await startApp(APP_PORT, { SIXTY_MUSIC_API: STUB_BASE, SIXTY_DB: dbPath });
   const base = app.base;
 
   try {
@@ -354,6 +369,7 @@ async function main(): Promise<void> {
   } finally {
     await app.stop();
     await new Promise<void>((resolve) => stub.server.close(() => resolve()));
+    dropDb();
   }
 
   // ⑩ SIXTY_MUSIC=off：整块功能下线（路由 404 + 页面里没有悬浮窗）
