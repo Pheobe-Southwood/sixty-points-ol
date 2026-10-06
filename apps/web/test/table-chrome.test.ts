@@ -6,8 +6,9 @@
  * （要浏览器 + 真实视口宽度），所以改为对源码断言「页头里只允许出现这几样」，
  * 与 `page-source.test.ts`（观战者不许被当成「你」）是同一套路。
  *
- * **页头现在允许 桌况簇 这一样**（`TableHeaderActions`：观战人数 + 离座 / 改名 + 入座）——
- * 它是有界的一枚人数加至多两枚小按钮，且都是「一步动作」；两次爆满堆进去的都是**查阅**入口，
+ * **页头现在允许两样**：桌况簇（`TableHeaderActions`：观战人数 + 离座 / 改名 + 入座）与
+ * 声音图标（`SoundControl`：背景音乐 / 音效 / 震动三个开关的弹层）——
+ * 两者都是有界的「一步动作」；两次爆满堆进去的都是**查阅**入口，
  * 所以白名单收紧的是那些（战报/教程/叫牌/底牌/结算详情）。
  *
  * 抽屉侧守两条更硬的边界：
@@ -94,15 +95,17 @@ function headerOf(source: string): string {
 const pageCode = code(page);
 const header = headerOf(page);
 
-test('页头只留必要信息：大厅 / 邀请码 / 桌况簇，加一样就要在这里显式改白名单', () => {
+test('页头只留必要信息：大厅 / 邀请码 / 桌况簇 / 声音图标，加一样就要在这里显式改白名单', () => {
   for (const banned of ['战报', '教程', '叫牌', '底牌', 'HistoryList', 'IdentityQuickEdit', '结算详情']) {
     assert.equal(
       header.includes(banned),
       false,
-      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 桌况簇）`
+      `页头里出现了「${banned}」：它属于右侧活页签抽屉（页头只剩 大厅 / 邀请码 / 桌况簇 / 声音）`
     );
   }
-  for (const needed of ['← 大厅', 'InviteCode', 'TableHeaderActions']) {
+  // 声音设置的落点（`SoundControl`）是**有界的一步动作**：一枚图标 + 三个开关的弹层。
+  // 它与 桌况簇 同类（页头两次爆满堆进去的都是战报/教程这类**查阅**面），所以在这里显式备案。
+  for (const needed of ['← 大厅', 'InviteCode', 'TableHeaderActions', 'SoundControl']) {
     assert.ok(header.includes(needed), `页头少了「${needed}」（这是页头白名单里必须保留的一项）`);
   }
   // 桌况簇的两条接线：离座走**页面级**确认弹窗（抽屉的 transform 会困住 fixed 弹窗），
