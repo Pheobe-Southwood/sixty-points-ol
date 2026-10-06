@@ -22,7 +22,8 @@
   import TableHeaderActions from '$lib/components/TableHeaderActions.svelte';
   import TableStatus from '$lib/components/TableStatus.svelte';
   import TrickArea from '$lib/components/TrickArea.svelte';
-  import { followSuitCards, kittyHandDelta } from '$lib/labels';
+  import TrickReview from '$lib/components/TrickReview.svelte';
+  import { followSuitCards, kittyHandDelta, lastCompletedTrick } from '$lib/labels';
   import type { PageProps } from './$types';
 
   let { data }: PageProps = $props();
@@ -52,6 +53,11 @@
    */
   let replays = $state<Record<number, ReplayResult>>({});
   let summaryOpen = $state(false);
+  /**
+   * 「上一轮」回看（`TrickReview`）：纯手动状态，默认关着 —— 与抽屉、结算弹窗同一条纪律
+   * （SSE 每帧都不碰它）。入口是状态条上那枚「上一轮」，只在收过墩之后才出现。
+   */
+  let reviewOpen = $state(false);
   let leaveOpen = $state(false);
   /** 要请离的机器人座位（null = 弹窗关着）；弹窗必须挂在页面级，见 BotRemoveConfirm */
   let botRemoveSeat = $state<number | null>(null);
@@ -134,6 +140,17 @@
       openedFor = summary.dealNo;
       summaryOpen = true;
     }
+  });
+
+  /**
+   * 回看的那一墩已经不存在了（换副、全 pass 重发）⇒ 关掉浮层。
+   *
+   * 少了这一句，玩家在结算屏开着回看、按「下一副」之后，浮层会**自己**在下一副第一墩落地时
+   * 弹出来（`reviewOpen` 还留着 true）：那时它盖住毡面，像出了故障。收敛只要一轮 ——
+   * 这一轮把 reviewOpen 写成 false，下一轮条件不成立。
+   */
+  $effect(() => {
+    if (reviewOpen && lastCompletedTrick(deal) === null) reviewOpen = false;
   });
 
   function seatAt(index: number) {
@@ -271,6 +288,8 @@
              由 BuryPanel 自己 `pointer-events-auto` 接回来（见 `BuryPanel.svelte` 与
              `test/table-chrome.test.ts` 的「横跨毡面的覆盖层必须让开点击」）。 -->
         <div class="pointer-events-none absolute inset-x-0 top-[4.5rem] flex flex-col items-center gap-3 px-2 sm:top-6">
+          <!-- 埋底阶段不接回看入口：那时 `trickHistory` 必然是空的（还没有人出过牌），
+               接了也永远不渲染 —— 顺带让这一条在埋底阶段仍然是纯信息条。 -->
           <TableStatus {view} />
           <BuryPanel {client} />
         </div>
@@ -278,11 +297,16 @@
         <BidPanel {client} />
       {:else}
         <div class="pointer-events-none absolute inset-x-0 top-[5.5rem] flex justify-center px-2 sm:top-6">
-          <TableStatus {view} />
+          <TableStatus {view} onReviewTrick={() => (reviewOpen = true)} />
         </div>
         <TrickArea {view} seat={anchor} mySeat={label} {names} />
       {/if}
     {/if}
+
+    <!-- 「上一轮」回看：**住在毡面里**（`absolute inset-0`）而不是整屏 ——
+         手牌因此始终可见、可继续选牌；bot 出手再快，收掉的那一墩也还找得回来。
+         默认关着（`reviewOpen` 初值 false），所以 SSR 首帧里没有这一层。 -->
+    <TrickReview {client} open={reviewOpen} onClose={() => (reviewOpen = false)} />
   </div>
 
   <!-- 操作条与动作托盘是**同一块版面**：托盘绝对定位悬在这一条上、再居中于手牌正上方。

@@ -33,6 +33,14 @@
  * 数据通道由页面持有（组件自己发请求就是第二条取数路径）。战报按需渲染（`active === 'report'`
  * 才在 DOM 里），所以 ui-check 同样够不到它，判据也只能在这一层。
  *
+ * 第六块是**「上一轮」回看**（`TrickReview`）：机器人出手只有 0.5–1.5 秒，收墩后赢家立刻领出，
+ * 上一墩的三家出牌一眨眼就没了 —— 入口是状态条「第 N 轮」旁边那枚 chip，内容是 `trickHistory`
+ * 末项。它同样**默认关着**（`reviewOpen` 初值 false，SSR 里够不到），所以判据落在这里：
+ * 入口必须 `pointer-events-auto`（外层是让开点击的信息条）、浮层必须是**毡面内**的
+ * （`absolute`，不许 `fixed` —— 改成整屏就盖住手牌，而手牌必须一直可见可点）、
+ * 牌面必须复用 `TrickCluster`、三条关闭路径（背景 / × / Esc）都要在，
+ * 且「上一轮」的定义只有 `labels.ts` 的 `lastCompletedTrick` 一处。
+ *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
 import assert from 'node:assert/strict';
@@ -67,6 +75,7 @@ const scoreEquation = read('../src/lib/components/ScoreEquation.svelte');
 const verdictBadge = read('../src/lib/components/VerdictBadge.svelte');
 const levelTable = read('../src/lib/components/LevelTable.svelte');
 const replayPanel = read('../src/lib/components/ReplayPanel.svelte');
+const trickReview = read('../src/lib/components/TrickReview.svelte');
 
 /** 剥掉注释再断言：注释里提到旧写法不构成引用（同 page-source.test.ts 的理由） */
 function code(source: string): string {
@@ -1220,4 +1229,184 @@ test('座位卡上的名字不许被裁剪：机器人名字曾在卡上只剩�
   assert.ok(source.includes('>机器人</span'), '座位卡上少了「机器人」徽标');
   assert.ok(source.includes('请离'), '座位卡上少了「请离」入口');
   assert.ok(source.includes('<LevelBadge'), '座位卡上少了级别徽标');
+});
+
+/* ---------- 「上一轮」回看（bot 出牌太快，收掉的那一墩要还找得回来） ---------- */
+
+/**
+ * 「上一轮」回看：入口 / 层级 / 复用 / 关闭路径 / 唯一定义，五组判据各有一次真实缺陷对应。
+ *
+ * - **入口**（`TableStatus`）：收过墩才出现，且必须 `pointer-events-auto` —— 整条状态条是
+ *   `pointer-events-none`（横跨毡面，要让座位卡上的按钮点得到），少了这一句按钮就看得见点不到
+ *   （`BuryPanel` 记过这个坑）。
+ * - **状态归页面、默认关着**：`reviewOpen` 初值 false ⇒ SSR 首帧里没有这一层；且它必须住在
+ *   `.felt` **里面**（`<TrickReview` 排在 `felt` 之后）—— 浮层只覆盖毡面，手牌与操作条留在外面。
+ * - **浮层的层**：根节点横跨毡面 ⇒ 必须让开点击；且**不许 `fixed`** —— 一旦整屏，手牌就看不见了，
+ *   而回看最需要的恰恰是「一边看上一墩、一边看自己的牌」。
+ * - **复用**：牌面走 `TrickCluster`（与毡面、/rules 同一份），徽标走 `trickSideBadge`，
+ *   称呼走 `whoLabel`，取墩走 `lastCompletedTrick` —— 这一墩的读法不许有第二份。
+ * - **关闭路径**：背景按钮、× 、Esc 三条都在（`TrickReview` 一律只在这三条里关）。
+ */
+function trickReviewCheck(
+  pageSource: string,
+  statusSource: string,
+  reviewSource: string,
+  trickAreaSource: string
+): string | null {
+  const page = code(pageSource);
+  const status = code(statusSource);
+  const review = code(reviewSource);
+
+  // ① 入口：状态条上、收过墩才有、自己接回点击
+  if (!status.includes('onReviewTrick')) {
+    return '状态条里没有「上一轮」回看入口（onReviewTrick）：上一墩的牌又只剩毡面上那一瞬';
+  }
+  if (!status.includes('trickHistory')) {
+    return '「上一轮」入口不看 trickHistory：还没收过墩（叫牌/埋底/刚换副）也会出现这个按钮';
+  }
+  if (!status.includes('pointer-events-auto')) {
+    return '「上一轮」入口缺 pointer-events-auto：外层让开点击，按钮会看得见点不到';
+  }
+  // 折行的落点也是一条判据：这枚 chip 必须排在「庄已抓」**之后**（即状态条最后一项）。
+  // 375px 上这一条逼近可用宽度（定约与庄已抓都两位数时约 325px / 可用 335px），万一折行，
+  // 排在末尾时被挤到第二行的是这枚小 chip —— 落进左右两块出牌点之间的空带；排在前面的话，
+  // 被挤下去的是「庄已抓」那枚大字，正好压在左上那堆牌上。
+  const statusReviewAt = status.indexOf('上一轮');
+  const pointsAt = status.indexOf('庄已抓');
+  if (pointsAt < 0 || statusReviewAt < pointsAt) {
+    return '「上一轮」入口没有排在「庄已抓」之后：窄屏折行时被挤下去的是那枚大字，会压在左上那堆牌上';
+  }
+
+  // ② 状态归页面、默认关着、且浮层住在毡面里
+  if (!page.includes('let reviewOpen = $state(false)')) {
+    return '回看状态不是 `let reviewOpen = $state(false)`：默认必须关着（SSR 首帧不许有这一层）';
+  }
+  if (!page.includes('onReviewTrick={() => (reviewOpen = true)}')) {
+    return '页面没有把打开回看的回调接给状态条：入口是死的';
+  }
+  if (!page.includes('<TrickReview')) return '页面没有渲染 TrickReview';
+  // 渲染位置：毡面开标签之后、操作条之前 —— 也就是毡面那一块版面的最后（DOM 里排在座位卡与出牌区后面，
+  // 于是 `absolute inset-0` 的参照物是 `.felt` 自己，而不是 `<main>` 或操作条那一行）。
+  // 真正的几何（375px 上不盖手牌、不压座位卡）由 tool-bridge 的 UI 走查量，这里只钉住结构。
+  const feltAt = page.indexOf('<div class="felt');
+  const reviewAt = page.indexOf('<TrickReview');
+  const barAt = page.indexOf('<ActionBar');
+  if (feltAt < 0) return '牌桌页里找不到 .felt 容器：回看浮层的参照物不明';
+  if (!(feltAt < reviewAt && reviewAt < barAt)) {
+    return '回看浮层不在毡面里（<TrickReview 应排在 .felt 之后、操作条 <ActionBar 之前）：它会盖住手牌与操作条';
+  }
+
+  // ③ 浮层的层：毡面内 + 让开点击
+  const root = /<div[^>]*data-trick-review="true"[^>]*>/.exec(review)?.[0] ?? '';
+  if (root === '') {
+    return '回看的根节点丢了 data-trick-review 钩子：ui-check 靠它认这一层（也靠它证明默认关着）';
+  }
+  if (/\bfixed\b/.test(root)) {
+    return '回看浮层改成了 fixed：它会盖住手牌 —— 手牌必须始终可见可点（所以它不是整屏、也不是抽屉）';
+  }
+  for (const cls of ['pointer-events-none', 'absolute', 'inset-0']) {
+    if (!root.includes(cls)) {
+      return `回看浮层的根节点缺少 ${cls}：横跨毡面的层会吃掉座位卡上的点击（或定位塌回文档流）`;
+    }
+  }
+
+  // ④ 复用：牌面/徽标/称呼/取墩各只有一份
+  for (const need of ['TrickCluster', 'trickSideBadge', 'whoLabel', 'lastCompletedTrick(']) {
+    if (!review.includes(need)) {
+      return `回看浮层没有走 ${need}：这一墩的读法会出现第二份实现`;
+    }
+  }
+  if (review.includes('<CardView')) {
+    return '回看浮层自己拼了一份牌堆（<CardView）：牌面要走 TrickCluster';
+  }
+
+  // ⑤ 三条关闭路径
+  if (!review.includes('Escape') || !review.includes('onkeydown')) {
+    return '回看浮层没有 Esc 关闭：键盘用户只能去够右上角那个 ×';
+  }
+  if (!review.includes('aria-label="关闭回看"')) {
+    return '回看浮层没有「点背景关闭」的键（缺 aria-label="关闭回看"）：手机上没有 hover 可解释';
+  }
+
+  // ⑥「上一轮」只有一处定义
+  if (!code(trickAreaSource).includes('lastCompletedTrick(')) {
+    return '毡面出牌区没有走 lastCompletedTrick：出牌区与回看浮层会各写一份「上一轮」';
+  }
+  return null;
+}
+
+test('「上一轮」回看：入口在状态条上、浮层只在毡面内、复用同一份牌面与徽标', () => {
+  const problem = trickReviewCheck(page, tableStatus, trickReview, trickArea);
+  assert.equal(problem, null, problem ?? '');
+});
+
+test('反证：入口点不动 / 默认就开着 / 浮层整屏 / 丢掉让开点击 / 自拼牌堆 / 少了关闭路径 / 第二份「上一轮」，都必须被判出来', () => {
+  const cases: readonly (readonly [string, string | null, RegExp])[] = [
+    [
+      '入口丢掉 pointer-events-auto',
+      trickReviewCheck(page, tableStatus.replaceAll('pointer-events-auto', 'pointer-events-none'), trickReview, trickArea),
+      /pointer-events-auto/
+    ],
+    [
+      '入口不看 trickHistory',
+      trickReviewCheck(page, tableStatus.replaceAll('trickHistory', 'hands'), trickReview, trickArea),
+      /trickHistory/
+    ],
+    [
+      '入口挪到「庄已抓」之前（折行落点会变）',
+      trickReviewCheck(
+        page,
+        tableStatus.replace('{#if contract}', '<span>上一轮</span>\n  {#if contract}'),
+        trickReview,
+        trickArea
+      ),
+      /庄已抓/
+    ],
+    [
+      '回看默认就开着（SSR 首帧出现浮层）',
+      trickReviewCheck(page.replace('let reviewOpen = $state(false)', 'let reviewOpen = $state(true)'), tableStatus, trickReview, trickArea),
+      /默认必须关着/
+    ],
+    [
+      '浮层搬到毡面之外（渲染在 .felt 之前）',
+      trickReviewCheck(
+        page.replace(
+          '  <div class="felt relative',
+          '  <TrickReview {client} open={reviewOpen} />\n  <div class="felt relative'
+        ),
+        tableStatus,
+        trickReview,
+        trickArea
+      ),
+      /毡面里/
+    ],
+    [
+      '浮层改成整屏 fixed（盖住手牌）',
+      trickReviewCheck(page, tableStatus, trickReview.replace('absolute inset-0 z-20', 'fixed inset-0 z-20'), trickArea),
+      /fixed/
+    ],
+    [
+      '浮层根节点不再让开点击',
+      trickReviewCheck(page, tableStatus, trickReview.replace('pointer-events-none absolute inset-0', 'absolute inset-0'), trickArea),
+      /pointer-events-none/
+    ],
+    [
+      '浮层自己拼牌堆',
+      trickReviewCheck(page, tableStatus, trickReview + '\n<CardView card={play.cards[0]} />', trickArea),
+      /CardView/
+    ],
+    [
+      '少了 Esc 关闭',
+      trickReviewCheck(page, tableStatus, trickReview.replace(/Escape/g, 'Enter'), trickArea),
+      /Esc/
+    ],
+    [
+      '出牌区退回自己那一份「上一轮」',
+      trickReviewCheck(page, tableStatus, trickReview, trickArea.replace('lastCompletedTrick(deal)', 'deal.trickHistory[deal.trickHistory.length - 1]')),
+      /lastCompletedTrick/
+    ]
+  ];
+  for (const [name, problem, pattern] of cases) {
+    assert.match(problem ?? '', pattern, `${name}：没有被判出来（守卫空转）`);
+  }
 });

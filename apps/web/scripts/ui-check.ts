@@ -34,7 +34,9 @@
  *    `left-1/2` 的绝对定位盒在 shrink-to-fit 下只有半个容器宽，没有 `w-max` 时子项被压缩、
  *    中文按钮会竖排，所以每个按钮还要自带 `whitespace-nowrap`），操作条只剩
  *    「?」、状态句与右端的计时；跟牌时手牌把**领出那一门**标成蓝框（数量必须等于该门在手里
- *    的张数，期望值从 `/view` 现算，不写死花色）；收墩后的徽标只说「庄 +N 分 / 闲 +N 分」。
+ *    的张数，期望值从 `/view` 现算，不写死花色）；收墩后的徽标只说「庄 +N 分 / 闲 +N 分」，
+ *    并且收墩那一刻状态条上多出一枚「上一轮」回看入口（bot 出手太快时靠它把上一墩三家出的牌
+ *    找回来；浮层默认关着，所以这里同时断言 SSR 首帧里没有 `data-trick-review`）。
  *    轮空的人与观战者既没有托盘、也没有任何蓝框。
  * 7c. **「距上一步」计时**：未发牌的大厅页没有它（还没有牌局动作）；发牌后玩家页与观战页都有，
  *    并且**真的在走** —— 取两次（中间等 1.2 秒）秒数必须变大、且增幅合理（抓「冻住的时钟」与单位错）。
@@ -269,6 +271,17 @@ function bidPanelMarkup(html: string): string {
   const end = html.indexOf('</section>', marker);
   assert(end > marker, '叫牌面板的 <section> 没有闭合');
   return html.slice(marker, end);
+}
+
+/**
+ * 「上一轮」回看入口那枚 chip 的开标签（状态条内、紧跟「第 N 轮」）。
+ *
+ * 它必须是 `pointer-events-auto`：整条状态条 `pointer-events-none`（横跨毡面，要让座位卡上的
+ * 「+ 机器人」/「请离」点得到），少了这一句按钮就看得见点不到 —— `BuryPanel` 记过这个坑。
+ * 形状判据的源码那一半在 `test/table-chrome.test.ts` 的 `trickReviewCheck`。
+ */
+function reviewEntry(html: string): string | null {
+  return /<button[^>]*class="[^"]*pointer-events-auto[^"]*"[^>]*>上一轮<\/button>/.exec(html)?.[0] ?? null;
 }
 
 /** 定约状态块的 HTML 片段：从金色描边的容器起取一段（只为断言那个数字的字号够大） */
@@ -697,10 +710,14 @@ async function main(): Promise<void> {
     );
   }
   assert(follower.includes('出 牌'), '跟牌者页面没有出牌按钮');
-  assert(
-    !follower.includes('上一轮') && !follower.includes('赢墩'),
-    '出牌页面还在写「上一轮 / 赢墩」：徽标只报这 N 分归庄方还是闲方'
-  );
+  // 徽标只报「这 N 分归庄方还是闲方」，不许回潮成「上一轮 · 赢墩 +N 分」。
+  // 判的是**那一句徽标文案**，不是「上一轮」这四个字 —— 它另有正当去处：状态条上那枚回看入口
+  // （收墩后出现，见下面两条）。把整页的「上一轮」一律禁掉会让新入口一起被判红。
+  for (const gone of ['上一轮 · 赢墩', '赢墩 +']) {
+    assert(!follower.includes(gone), `出牌页面还在写「${gone}」：徽标只报这 N 分归庄方还是闲方`);
+  }
+  // 还没收墩 ⇒ 没有「上一轮」可回看：入口必须还没出现（否则它指向一墩不存在的牌）
+  assert(!reviewEntry(follower), '还没收墩就跟牌者的页面上出现了「上一轮」回看入口');
   const marks = (follower.match(/data-marked="true"/g) ?? []).length;
   assert(
     marks === expectedMarks,
@@ -729,9 +746,17 @@ async function main(): Promise<void> {
   const badge = /(庄|闲) \+\d+ 分/.exec(afterTrick);
   assert(badge !== null, '收墩后没有出现「庄/闲 +N 分」的赢墩徽标');
   assert(!afterTrick.includes('赢墩'), '收墩后的徽标里又出现了「赢墩」');
+  // 收墩后必须能回看这一墩：bot 出手只有 0.5–1.5 秒，赢家立刻领出下一轮，毡面出牌区只剩当前墩
+  // —— 上一墩的三家出牌只有这枚入口找得回来（浮层本身是客户端那一帧才渲染的，见源码守卫）。
+  assert(reviewEntry(afterTrick) !== null, '收墩后毡面上没有「上一轮」回看入口（或它点不动）');
+  assert(
+    !afterTrick.includes('data-trick-review'),
+    '回看浮层出现在 SSR 首帧：它默认应当是关闭的（否则每次进桌都盖住毡面）'
+  );
   console.log(
     '出牌阶段：动作托盘是**钉在操作条正上方**的一条单行浮层（bottom-full、不占流、w-max 宽度、'
-      + `按钮各自 nowrap）；跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」`
+      + `按钮各自 nowrap）；跟牌蓝框 ${marks} 处 = 下家领出门张数；收墩徽标「${badge[0]}」；`
+      + '收墩后状态条上出现「上一轮」回看入口（浮层默认关着）'
   );
 
   // 8) 教程页：新版面跑同一套 position 守卫，且小节与真实牌面都在

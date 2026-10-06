@@ -14,6 +14,7 @@ import {
   STRAINS,
   type BidEntry,
   type Card,
+  type CompletedTrick,
   type DealSummary,
   type Level,
   type PersonalView
@@ -32,6 +33,7 @@ import {
   kittyHandDelta,
   kittySign,
   lastCall,
+  lastCompletedTrick,
   levelProgression,
   levelRows,
   scoreLineText,
@@ -191,6 +193,36 @@ test('trickSideBadge：只说这 N 分归庄方还是闲方', () => {  // 庄家
     '闲 +10 分',
     '定约未定时不该抛错：没有庄家就没有庄方'
   );
+});
+
+test('lastCompletedTrick：「上一轮」= trickHistory 末项，没打过牌就是 null', () => {
+  // 还没收过墩（发牌、叫牌、埋底、刚换副）：没有「上一轮」可说
+  assert.equal(lastCompletedTrick(null), null, '没有牌局时不该编出一墩来');
+  assert.equal(lastCompletedTrick({ trickHistory: [] }), null, '还没收过墩');
+
+  const first: CompletedTrick = {
+    leaderSeat: 0,
+    plays: [
+      { seat: 0, cards: [{ suit: 'S', rank: 3 }] },
+      { seat: 1, cards: [{ suit: 'S', rank: 9 }] },
+      { seat: 2, cards: [{ suit: 'S', rank: 14 }] }
+    ],
+    winnerSeat: 2,
+    points: 10
+  };
+  const second: CompletedTrick = {
+    leaderSeat: 2,
+    plays: [
+      { seat: 2, cards: [{ suit: 'C', rank: 5 }] },
+      { seat: 0, cards: [{ suit: 'C', rank: 7 }] },
+      { seat: 1, cards: [{ suit: 'C', rank: 13 }] }
+    ],
+    winnerSeat: 1,
+    points: 15
+  };
+  // 两处消费者（毡面出牌区的回显、回看浮层）读的必须是**同一份**：末项，不是首项也不是全部
+  assert.deepEqual(lastCompletedTrick({ trickHistory: [first, second] }), second);
+  assert.deepEqual(lastCompletedTrick({ trickHistory: [second, first] }), first);
 });
 
 test('followSuitCards：只标领出那一门，领出与缺门都是空集', () => {

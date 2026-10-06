@@ -12,6 +12,7 @@ import {
   type Bid,
   type BidCall,
   type Card,
+  type CompletedTrick,
   type DealSummary,
   type Level,
   type PublicView,
@@ -223,6 +224,22 @@ export function trickSideBadge(
   points: number
 ): string {
   return `${winnerSeat === declarerSeat ? '庄' : '闲'} +${points} 分`;
+}
+
+/**
+ * 「上一轮」的**唯一定义**：最近收掉的那一墩（`trickHistory` 的末项），还没收过墩时为 `null`。
+ *
+ * 两处都在读它：毡面出牌区（当前墩还没有出牌时回显上一墩，`TrickArea`）与回看浮层
+ * （`TrickReview`，bot 出手太快时靠它把那一墩找回来）。定义只此一处 —— 两边各写一次
+ * `trickHistory[trickHistory.length - 1]` 就是两处会各自过期。
+ *
+ * 入参取结构类型而不是 `PublicView`：调用方手上多半只有 `deal`，少一层解构。
+ */
+export function lastCompletedTrick(
+  deal: { readonly trickHistory: readonly CompletedTrick[] } | null
+): CompletedTrick | null {
+  const history = deal?.trickHistory ?? [];
+  return history.length === 0 ? null : history[history.length - 1]!;
 }
 
 /**

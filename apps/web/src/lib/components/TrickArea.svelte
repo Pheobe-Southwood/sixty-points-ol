@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PublicView } from '@sixty/engine';
-  import { trickSideBadge, whoLabel } from '$lib/labels';
+  import { lastCompletedTrick, trickSideBadge, whoLabel } from '$lib/labels';
   import TrickCluster from './TrickCluster.svelte';
 
   let {
@@ -22,9 +22,8 @@
 
   /** 我正在看的一墩：当前墩已有出牌就看当前，否则回看上一条已完成的墩 */
   const current = $derived(deal?.trick ?? null);
-  const previous = $derived(
-    deal !== null && deal.trickHistory.length > 0 ? deal.trickHistory[deal.trickHistory.length - 1]! : null
-  );
+  // 「上一轮」只有一处定义（labels.ts）：bot 领出得再快，回看浮层读的也是同一份
+  const previous = $derived(lastCompletedTrick(deal));
   const showingCurrent = $derived(current !== null && current.plays.length > 0);
   const plays = $derived(showingCurrent ? current!.plays : (previous?.plays ?? []));
   const winnerSeat = $derived(showingCurrent ? null : (previous?.winnerSeat ?? null));
