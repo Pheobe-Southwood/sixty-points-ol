@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TableClient } from '$lib/client/table.svelte';
   import { SPECTATOR_LABEL_SEAT } from '$lib/role';
-  import { BID_GLYPH, bidCandidates, isRedStrain } from '$lib/labels';
+  import { BID_GLYPH, bidTiers, isRedStrain, type BidLayout } from '$lib/labels';
   import AuctionHistory from './AuctionHistory.svelte';
   import AuctionInfo from './AuctionInfo.svelte';
 
@@ -14,11 +14,26 @@
   const names = $derived((client.table?.seats ?? []).map((seat) => seat.name));
   const myTurn = $derived(deal !== null && deal.phase === 'auction' && deal.auctionTurn === mySeat);
   /**
-   * 候选档位只给**三档**（基准 = 当前最高分，再 +5、+10）：正常情况不跳叫（见 /rules），
-   * 再往后排只是把面板撑高。更大的跳叫仍可由 API / MCP 叫出 —— 引擎的合法集没变，
-   * 这里少的只是「界面上一次摆几档」。`bidCandidates` 的第二参是 spread，档位数 = spread + 1。
+   * 档位基准是引擎负载里的**最高叫品**（`deal.highestBid`，由 `highestNonPass` 从叫牌史算出）。
+   * 这里读的是**一个字段**，不是自己遍历叫牌史 —— 面板不许变成第二份叫牌记录面
+   * （记录面是 `AuctionInfo` / `AuctionHistory`，见 test/table-chrome.test.ts）。
    */
-  const rows = $derived(view === null ? [] : bidCandidates(view, 2));
+  const top = $derived(deal?.highestBid ?? null);
+  /**
+   * 展开状态的复位判据：记住「为哪一副、哪个最高叫品展开过」。
+   * 最高叫品一变（别人抬价）或进入新一副，基准键就跟着变，`expanded` 自动落回 false ——
+   * 不需要 `$effect` 或 `{#key}` 重建，也不会把上一轮的展开带进下一轮。
+   */
+  const baseKey = $derived(`${deal?.dealNo ?? 0}:${top?.points ?? 0}:${top?.strain ?? ''}`);
+  let expandedFor = $state<string | null>(null);
+  const expanded = $derived(expandedFor === baseKey);
+  /**
+   * 档位与触发形态全在 `labels.ts` 的 `bidTiers` 里算（纯函数，四场景表与反证在 labels.test.ts）：
+   * 固定五槽（不可叫的花色留隐形占位、**不补位**）、默认只摆非跳叫档 + 触发钮、展开后共五档。
+   * 面板自己不判断「哪些花色合法」—— 那个判断有两份实现就迟早会不一致。
+   */
+  const emptyLayout: BidLayout = { tiers: [], trigger: 'none' };
+  const layout = $derived(view === null ? emptyLayout : bidTiers(view, expanded));
 </script>
 
 <!-- 面板是一个 flex 列，里面**只有叫牌历史那一块**会滚（min-h-0 + flex-1 = 先被压缩、
@@ -29,7 +44,7 @@
      2. 上一版改成「面板自己滚 + 不叫 sticky 贴底」：按钮点得到，但它是**浮**在内容上的，
         滚动时压住排在最后的历史行（手机上那半行叫牌记录就是这么被切掉的）——sticky 页脚
         的语义就是遮挡，换个顺序只是换谁被挡，所以这一版把它整个去掉。
-     面板自己仍留 overflow-y-auto 兜底：万一固定块（信息面 + 三档档位 + 页脚）本身就超过
+     面板自己仍留 overflow-y-auto 兜底：万一固定块（信息面 + 候选档位 + 页脚）本身就超过
      max-h（很矮的视口），整个面板可滚，按钮滚一下就到 —— 这是可滚，不是被裁。
      判据落在 `src/lib/panel-guard.ts`（`test/bid-panel.test.ts` 与 ui-check 共用同一份）。
      外层几何（top-[22%] / max-h-[56%]）不动：手机上面板底边已经正好贴着左下「我」座位卡
@@ -44,24 +59,56 @@
     </div>
 
     {#if myTurn}
-      <!-- 候选行固定高度（shrink-0）：抬高叫品时整块往下长，被压缩的是历史区 -->
-      <div class="mt-3 shrink-0 space-y-1.5">
-        {#each rows as row (row.points)}
+      <!-- 候选区：**花色恒定位**（♣ ♦ ♥ ♠ NT 五槽，不可叫的花色是隐形占位、绝不让后面往前补位），
+           默认只摆非跳叫档，其余收在「▶ 跳叫」触发钮后面（展开后共 BID_TIER_LIMIT 档）。
+           形状由 labels.ts 的 bidTiers 给出，这里不自己判断 —— 四场景判据见 test/labels.test.ts。
+           shrink-0：抬高叫品时整块往下长，被压缩的是历史区。 -->
+      <div data-bid-trigger={layout.trigger} class="mt-3 shrink-0 space-y-1.5">
+        {#each layout.tiers as tier, tierIndex (tier.points)}
           <div class="flex items-center gap-1.5">
-            <span class="w-7 shrink-0 text-right text-xs tabular-nums text-white/55">{row.points}</span>
-            {#each row.strains as strain (strain)}
+            <span class="w-7 shrink-0 text-right text-xs tabular-nums text-white/55">{tier.points}</span>
+            {#each tier.slots as slot (slot.strain)}
+              {#if slot.legal}
+                <button
+                  type="button"
+                  data-bid-slot="legal"
+                  class={['bidbtn w-9 rounded-lg bg-white/10 py-1.5 text-center text-[13px] hover:bg-white/20',
+                    isRedStrain(slot.strain) && 'text-rose-300']}
+                  disabled={client.busy}
+                  onclick={() => void client.bid({ points: tier.points, strain: slot.strain })}
+                >
+                  {BID_GLYPH[slot.strain]}
+                </button>
+              {:else}
+                <!-- 不可叫的花色：**同尺寸隐形占位**（visibility:hidden —— 不占命中区、读屏也跳过）。
+                     绝不让后面的槽往前补位：补位之后同一个横向位置在不同档之间换了花色，手快就是误触。 -->
+                <span
+                  data-bid-slot="invisible"
+                  aria-hidden="true"
+                  class="invisible w-9 py-1.5 text-center text-[13px]"
+                >{BID_GLYPH[slot.strain]}</span>
+              {/if}
+            {/each}
+            {#if layout.trigger === 'row-end' && tierIndex === layout.tiers.length - 1}
               <button
                 type="button"
-                class={['bidbtn rounded-lg bg-white/10 px-2.5 py-1.5 text-[13px] hover:bg-white/20',
-                  isRedStrain(strain) && 'text-rose-300']}
+                data-bid-jump="row-end"
+                class="bidbtn ml-auto shrink-0 rounded-lg border border-white/25 px-2 py-1.5 text-[11px] text-white/70 hover:bg-white/10 disabled:opacity-40"
                 disabled={client.busy}
-                onclick={() => void client.bid({ points: row.points, strain })}
-              >
-                {BID_GLYPH[strain]}
-              </button>
-            {/each}
+                onclick={() => (expandedFor = baseKey)}
+              >▶ 跳叫</button>
+            {/if}
           </div>
         {/each}
+        {#if layout.trigger === 'full-row'}
+          <button
+            type="button"
+            data-bid-jump="full-row"
+            class="bidbtn flex w-full shrink-0 items-center justify-center rounded-lg border border-white/25 px-2 py-1.5 text-[11px] text-white/70 hover:bg-white/10 disabled:opacity-40"
+            disabled={client.busy}
+            onclick={() => (expandedFor = baseKey)}
+          >▶ 跳叫</button>
+        {/if}
       </div>
     {/if}
 

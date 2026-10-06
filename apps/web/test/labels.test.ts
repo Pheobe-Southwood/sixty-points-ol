@@ -1,9 +1,10 @@
 /**
- * 叫品显示单测：界面上叫品一律写「分数 + 花色字形」。
+ * 叫品显示单测：界面上叫品一律写「分数 + 花色字形」，无主写 `NT`。
  *
  * 被修掉的缺陷：叫牌历史走引擎的 `bidLabel`，页面上打着 `40 梅花`、`45 梅花`……
  * 而同一屏的候选按钮用的是 `strainGlyph`（♣）—— 同一种东西两种写法。
- * 这里把「不许出现裸花色字母」钉成回归。
+ * 这里把「四门花色不许出现裸字母 C/D/H/S」钉成回归；无主从「无主」改成 `NT`
+ * （与 MCP 工具面的合法叫品串 `55NT` 同一套写法，也是叫牌面板固定五槽能等宽的前提）。
  *
  * 沙箱内按包运行：node --test --test-isolation=none "test/*.test.ts"
  */
@@ -12,17 +13,21 @@ import test from 'node:test';
 
 import {
   STRAINS,
+  type Bid,
   type BidEntry,
   type Card,
   type CompletedTrick,
   type DealSummary,
   type Level,
-  type PersonalView
+  type PersonalView,
+  type Strain
 } from '@sixty/engine';
 
 import {
   BID_GLYPH,
+  BID_TIER_LIMIT,
   bidText,
+  bidTiers,
   callText,
   changedLevelRows,
   contractText,
@@ -37,8 +42,13 @@ import {
   levelProgression,
   levelRows,
   scoreLineText,
-  trickSideBadge
+  trickSideBadge,
+  type BidTier,
+  type BidTrigger
 } from '../src/lib/labels.ts';
+
+/** 四门花色（不含无主）：裸字母回归只针对它们 —— 无主的字形本来就是 `NT` */
+const SUIT_STRAINS = STRAINS.filter((strain) => strain !== 'NT');
 
 /** 只关心叫牌历史的个人视图；其余字段填最小可用值 */
 function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
@@ -73,24 +83,35 @@ function viewWithAuction(auction: readonly BidEntry[]): PersonalView {
   };
 }
 
+/** 最高叫品已知的视图：`bidTiers` 读的是引擎侧的 `deal.highestBid`，不是历史末项 */
+function viewWithHighest(highest: Bid | null): PersonalView {
+  const base = viewWithAuction(highest === null ? [] : [{ seat: 0, call: highest }]);
+  return { ...base, deal: { ...base.deal!, highestBid: highest } };
+}
+
 test('bidText：不叫用文字，叫品用「分数 + 花色字形」', () => {
   assert.equal(bidText('pass'), '不叫');
   assert.equal(bidText({ points: 40, strain: 'C' }), '40♣');
   assert.equal(bidText({ points: 45, strain: 'D' }), '45♦');
   assert.equal(bidText({ points: 80, strain: 'H' }), '80♥');
   assert.equal(bidText({ points: 100, strain: 'S' }), '100♠');
-  assert.equal(bidText({ points: 60, strain: 'NT' }), '60无主');
+  assert.equal(bidText({ points: 60, strain: 'NT' }), '60NT');
 });
 
-test('回归：叫品文本里不许出现裸花色字母（C/D/H/S/NT）', () => {
-  for (const strain of STRAINS) {
+test('回归：叫品文本里花色只出字形（不许裸字母 C/D/H/S）；无主写 NT', () => {
+  for (const strain of SUIT_STRAINS) {
     const text = bidText({ points: 40, strain });
     assert.equal(
-      /[CDHSNT]/.test(text),
+      /[CDHS]/.test(text),
       false,
-      `${strain} 的叫品文本里还有裸字母：${text}（应走 strainGlyph）`
+      `${strain} 的叫品文本里还有裸花色字母：${text}（应走 strainGlyph）`
     );
   }
+  assert.equal(
+    bidText({ points: 60, strain: 'NT' }),
+    '60NT',
+    '无主写 NT：与 MCP 工具面的合法叫品串同一套写法'
+  );
 });
 
 test('callText 是 bidText 的别名，两处不会再各写一份', () => {
@@ -98,20 +119,118 @@ test('callText 是 bidText 的别名，两处不会再各写一份', () => {
   assert.equal(callText('pass'), '不叫');
 });
 
-test('BID_GLYPH：五个花色都有字形，无主用文字，红色只给 ♦♥', () => {
+test('BID_GLYPH：五个花色都有字形，无主写 NT，红色只给 ♦♥', () => {
   for (const strain of STRAINS) {
     assert.equal(typeof BID_GLYPH[strain], 'string');
     assert.ok(BID_GLYPH[strain].length > 0, `${strain} 没有字形`);
   }
   assert.deepEqual(
     STRAINS.map((s) => BID_GLYPH[s]),
-    ['♣', '♦', '♥', '♠', '无主']
+    ['♣', '♦', '♥', '♠', 'NT']
   );
-  // 裸字母不该出现在任何字形里
-  for (const strain of STRAINS) assert.equal(/[CDHSNT]/.test(BID_GLYPH[strain]), false);
+  // 四门花色不许出现裸字母；无主那一槽恰好就是 NT（它是**字形**，不是被禁的「40 C」那种拼法）
+  for (const strain of SUIT_STRAINS) {
+    assert.equal(/[CDHS]/.test(BID_GLYPH[strain]), false, `${strain} 的字形里有裸字母`);
+  }
+  assert.equal(BID_GLYPH.NT, 'NT');
   assert.deepEqual(
     STRAINS.map((s) => isRedStrain(s)),
     [false, true, true, false, false]
+  );
+});
+
+/**
+ * 一档的速记：可叫的花色写字形、不可叫的写 `·` —— 一眼看出**有没有补位**。
+ * 固定五槽是「· ♦ ♥ ♠ NT」；补位后的旧形状是「♦ ♥ ♠ NT」（少一格、整排左移）。
+ */
+function slotSketch(tier: BidTier): string {
+  return tier.slots.map((slot) => (slot.legal ? BID_GLYPH[slot.strain] : '·')).join(' ');
+}
+
+test('bidTiers：每档永远五个槽、序恒为 ♣ ♦ ♥ ♠ NT（不可叫的花色留占位，绝不补位）', () => {
+  const highests: readonly (Bid | null)[] = [
+    null,
+    { points: 40, strain: 'C' },
+    { points: 40, strain: 'H' },
+    { points: 40, strain: 'S' },
+    { points: 40, strain: 'NT' },
+    { points: 55, strain: 'NT' }
+  ];
+  for (const highest of highests) {
+    for (const expanded of [false, true]) {
+      const { tiers } = bidTiers(viewWithHighest(highest), expanded);
+      assert.ok(tiers.length > 0, '任何最高叫品下都至少要给一档');
+      for (const tier of tiers) {
+        assert.deepEqual(
+          tier.slots.map((slot) => slot.strain),
+          ['C', 'D', 'H', 'S', 'NT'],
+          `${tier.points} 档的槽序不是 ♣♦♥♠NT：补位就是这么来的`
+        );
+      }
+    }
+  }
+});
+
+test('bidTiers：四场景的档位与触发形态（判定基准 = 当前最高叫品，pass 不进判定）', () => {
+  const cases: readonly {
+    readonly name: string;
+    readonly highest: Bid | null;
+    readonly trigger: BidTrigger;
+    readonly tiers: readonly string[];
+  }[] = [
+    { name: '没人叫', highest: null, trigger: 'full-row', tiers: ['40: ♣ ♦ ♥ ♠ NT'] },
+    {
+      name: '最高 40♣',
+      highest: { points: 40, strain: 'C' },
+      trigger: 'row-end',
+      tiers: ['40: · ♦ ♥ ♠ NT', '45: ♣ ♦ ♥ ♠ NT']
+    },
+    {
+      name: '最高 40♠',
+      highest: { points: 40, strain: 'S' },
+      trigger: 'row-end',
+      tiers: ['40: · · · · NT', '45: ♣ ♦ ♥ ♠ NT']
+    },
+    { name: '最高 40NT', highest: { points: 40, strain: 'NT' }, trigger: 'full-row', tiers: ['45: ♣ ♦ ♥ ♠ NT'] }
+  ];
+  for (const item of cases) {
+    const layout = bidTiers(viewWithHighest(item.highest), false);
+    assert.equal(layout.trigger, item.trigger, `${item.name} 的触发形态不对`);
+    assert.deepEqual(
+      layout.tiers.map((tier) => `${tier.points}: ${slotSketch(tier)}`),
+      [...item.tiers],
+      `${item.name} 的档位不对`
+    );
+  }
+});
+
+test('bidTiers：最便宜档满五格（NT / 没人叫）时只给这一档 —— 再上一档就已经是跳叫', () => {
+  // 最高 40NT：同分没有可压的花色，45 是「照旧抬 5 分」，50 才是跳叫
+  const afterNT = bidTiers(viewWithHighest({ points: 40, strain: 'NT' }), false);
+  assert.deepEqual(afterNT.tiers.map((tier) => tier.points), [45], '40NT 之后未展开时只该有一档（45）');
+  // 没人叫：40 是标准开叫，45 起就是跳叫
+  const opening = bidTiers(viewWithHighest(null), false);
+  assert.deepEqual(opening.tiers.map((tier) => tier.points), [40], '没人叫时未展开只该摆 40 一档');
+});
+
+test('bidTiers：展开后共五档、触发钮消失（没有收回按钮）；前两档与展开前逐字相同', () => {
+  const collapsed = bidTiers(viewWithHighest({ points: 40, strain: 'H' }), false);
+  const expanded = bidTiers(viewWithHighest({ points: 40, strain: 'H' }), true);
+  assert.equal(expanded.trigger, 'none', '展开后不该再有触发钮');
+  assert.equal(expanded.tiers.length, BID_TIER_LIMIT, `展开后应恰好 ${BID_TIER_LIMIT} 档`);
+  assert.deepEqual(expanded.tiers.map((tier) => tier.points), [40, 45, 50, 55, 60]);
+  assert.deepEqual(expanded.tiers.slice(0, collapsed.tiers.length), collapsed.tiers, '展开只加档，不改前面几档');
+});
+
+test('反证：旧的「只摆合法花色」形状与固定五槽必须判得出不同（否则上面几条守卫是空转的）', () => {
+  const oldShape = (points: number, strains: readonly Strain[]): string =>
+    `${points}: ${strains.map((strain) => BID_GLYPH[strain]).join(' ')}`;
+  const tier = bidTiers(viewWithHighest({ points: 40, strain: 'H' }), false).tiers[0]!;
+  assert.equal(oldShape(40, ['S', 'NT']), '40: ♠ NT', '旧形状就是这个：后面的花色往前补位');
+  assert.notEqual(
+    oldShape(40, ['S', 'NT']),
+    slotSketch(tier),
+    '固定五槽的速记与补位形状相同 —— 这条守卫没有分辨力'
   );
 });
 
@@ -460,14 +579,19 @@ test('contractText：定约 + 级牌，花色走字形、A 不写成 14', () => 
         trump: { strain: 'NT', rank: 14 }
       })
     ),
-    '40无主 · 级 A',
-    '无主写文字、级牌 A 写 A'
+    '40NT · 级 A',
+    '无主写 NT、级牌 A 写 A'
   );
-  // 裸花色字母回归：五门都不许漏出 C/D/H/S（无主的 NT 也不许）
-  for (const strain of STRAINS) {
+  // 裸花色字母回归：四门不许漏出 C/D/H/S；无主写的就是 NT（与 strainGlyph 同一份来源）
+  for (const strain of SUIT_STRAINS) {
     const text = contractText(summaryOf({ contract: { points: 40, strain, declarerSeat: 0 } }));
-    assert.equal(/[CDHSNT]/.test(text), false, `${strain} 的定约文本里还有裸字母：${text}`);
+    assert.equal(/[CDHS]/.test(text), false, `${strain} 的定约文本里还有裸字母：${text}`);
   }
+  assert.equal(
+    contractText(summaryOf({ contract: { points: 55, strain: 'NT', declarerSeat: 0 } })),
+    '55NT · 级 2',
+    '无主定约走 strainGlyph：与候选按钮、叫牌历史同一套写法'
+  );
 });
 
 test('changedLevelRows：战报每副卡只列升级者，全部按「升级行」渲染', () => {

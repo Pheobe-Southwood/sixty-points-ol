@@ -15,6 +15,7 @@
     "smoke": "node scripts/smoke.ts",
     "resume": "node scripts/resume-check.ts",
     "ui": "node scripts/ui-check.ts",
+    "shot": "node scripts/shot-auction.ts",
     "lobby": "node scripts/lobby-check.ts",
     "spectate": "node scripts/spectate-check.ts",
     "bot": "node scripts/bot-check.ts"

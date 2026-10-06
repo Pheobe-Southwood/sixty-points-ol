@@ -6,7 +6,7 @@
  * 1. 「flex 列 + `overflow-hidden` + `shrink-0` 候选区」：固定开销超过面板高度时，
  *    `overflow-hidden` 从底部裁掉最后一行（正是「不叫」），它又不在任何滚动区里，滚也滚不回来。
  * 2. 「面板自己滚 + 「不叫」sticky 贴底」：按钮确实点得到，但它是**浮**在内容上的 ——
- *    滚动时压住排在最后的历史行（手机上那半行「45无主 / 50无主 / 55♥」就是这么被切掉的）。
+ *    滚动时压住排在最后的历史行（手机上那半行「45NT / 50NT / 55♥」就是这么被切掉的）。
  * 现在：面板 `flex flex-col` + `max-h`；历史区 `min-h-0 flex-1 overflow-y-auto`（自己滚、先被压缩）；
  * 「不叫」排在它之后、`shrink-0`、不 sticky。任何视口高度下，页脚都在，且内容的可见部分都不被遮。
  *
@@ -129,6 +129,57 @@ export function checkBidPanelReachability(markup: string, options: PanelCheckOpt
   }
   if (!buttonClass.includes('min-h-11')) {
     return fail('「不叫」的命中区不足 44px（缺 min-h-11）');
+  }
+  return { ok: true, reason: '' };
+}
+
+/**
+ * 叫牌候选区的**固定五槽 + 跳叫触发**守卫：每档五个槽（不可叫的花色留隐形占位）、
+ * 候选区容器带 `data-bid-trigger="row-end|full-row|none"`、且隐形占位**绝不是按钮**。
+ *
+ * 为什么钉在标记与类上：「有没有补位」渲染完就看不出差别了 —— 补位后的四格与占位后的五格
+ * 静态标签长得一样，只差一个 `invisible` 类，而字形的**横向位置**正是误触的来源。
+ * 源码守卫（`test/bid-panel.test.ts`）与 ui-check 的出货 HTML 用同一份判据；
+ * 档位与触发形态的取值由 `labels.ts` 的 `bidTiers` 负责（四场景表与反证在 labels.test.ts）。
+ */
+export function checkBidSlots(markup: string): PanelCheck {
+  const source = markup.replace(/<!--[\s\S]*?-->/g, '');
+  // 源码里它绑的是 `layout.trigger`（Svelte 表达式），出货 HTML 里是三个枚举值之一的字面量
+  const trigger = /data-bid-trigger=(?:"([^"]*)"|\{([^}]*)\})/.exec(source);
+  if (trigger === null) {
+    return fail('候选区缺 data-bid-trigger：面板必须暴露触发钮形态（row-end / full-row / none）');
+  }
+  const literal = trigger[1];
+  const expression = trigger[2];
+  if (literal !== undefined) {
+    if (literal !== 'row-end' && literal !== 'full-row' && literal !== 'none') {
+      return fail(`data-bid-trigger 的值不是 row-end / full-row / none：${literal}`);
+    }
+  } else if (!/layout\.trigger/.test(expression ?? '')) {
+    return fail(
+      `源码里的 data-bid-trigger 必须绑到 labels.ts 给出的 layout.trigger，实际绑的是 {${expression}}`
+    );
+  }
+
+  const legal = source.match(/data-bid-slot="legal"/g)?.length ?? 0;
+  const invisible = source.match(/data-bid-slot="invisible"/g)?.length ?? 0;
+  if (legal === 0) {
+    return fail('候选区里没有 data-bid-slot="legal"：可叫的档位不是按固定槽渲染的');
+  }
+  // 源码形态（含 Svelte 模板）里必须写出隐形占位那一支；出货 HTML 在没有不可叫花色时可以为 0
+  if (source.includes('{#each') && invisible === 0) {
+    return fail('源码里没有 data-bid-slot="invisible"：不可叫的花色没留隐形占位，下一步就是补位');
+  }
+  // 隐形占位绝不能是按钮：不可见的按钮照样吃点击与键盘焦点
+  for (const match of source.matchAll(/data-bid-slot="invisible"/g)) {
+    const tag = tagAt(source, match.index ?? 0);
+    if (tag.startsWith('<button')) {
+      return fail('不可叫的花色被渲染成了 <button>：隐形占位必须不可点（span + invisible）');
+    }
+  }
+  // 旧形状：按「合法花色」逐档摆 —— 后面的花色会往前补位
+  if (/each\s+row\.strains/.test(source)) {
+    return fail('候选区又按「合法花色」摆（each row.strains）：后面会往前补位，同一横向位置换了花色');
   }
   return { ok: true, reason: '' };
 }

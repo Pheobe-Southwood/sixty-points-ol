@@ -8,7 +8,7 @@
  *    滚动区里，滚也滚不回来。当时那条 ui-check 只断言「页面里有 max-h-[56%] 与 overflow-y-auto」，
  *    两个类一直都在，所以它对那次故障完全瞎。
  * 2. 「面板自己滚 + 不叫 sticky 贴底」：按钮点得到了，但 sticky 的语义就是**浮在内容上** ——
- *    历史行从它下面穿过，最后那半行「45无主 / 50无主 / 55♥」被压掉。换顺序只是换谁被挡。
+ *    历史行从它下面穿过，最后那半行「45NT / 50NT / 55♥」被压掉。换顺序只是换谁被挡。
  *
  * 现在的要求：面板 flex 列 + max-h；**唯一可伸缩**的是叫牌历史的滚动区（min-h-0 + flex-1 +
  * overflow-y-auto）；「不叫」排在它之后、正常文档流、shrink-0、不 sticky。于是页脚既不压住内容，
@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { checkBidPanelReachability } from '../src/lib/panel-guard.ts';
+import { checkBidPanelReachability, checkBidSlots } from '../src/lib/panel-guard.ts';
 
 /** 剥掉注释再断言：解释「为什么这么写」的注释里提到 overflow / 发牌 不构成违规（同 table-chrome.test.ts） */
 function strip(source: string): string {
@@ -63,36 +63,85 @@ test('叫牌信息/历史本身不自带滚动区（面板里不许有第二个 
   }
 });
 
-/* ---------- 2.1–2.3 的结构不变式（同样是源码级，CI 可跑） ---------- */
+/* ---------- 候选区形状：固定五槽 + 跳叫触发（源码级，判定在 src/lib/panel-guard.ts） ---------- */
 
-/** 候选档位数 = spread + 1；没写第二参就是引擎默认的 4（= 五档） */
-function bidSpread(source: string): number | null {
-  const match = /bidCandidates\(\s*view\s*(?:,\s*(\d+))?\s*\)/.exec(source);
-  if (match === null) return null;
-  return match[1] === undefined ? 4 : Number(match[1]);
-}
-
-test('候选档位只摆三档（spread = 2）：再往后面排只是把面板撑高', () => {
-  assert.equal(
-    bidSpread(source),
-    2,
-    '叫牌面板的候选档位不是三档：不跳叫是常态（见 /rules），多余档位会把「不叫」的 sticky 页脚顶起来'
+test('候选区是固定五槽 + 跳叫触发，形状来自 labels.ts 的 bidTiers（面板不自己判断）', () => {
+  const result = checkBidSlots(source);
+  assert.equal(result.ok, true, `候选区形状守卫没过：${result.reason}`);
+  assert.ok(
+    source.includes('bidTiers('),
+    '面板没有走 labels.ts 的 bidTiers：固定五槽与跳叫触发必须只有一处实现'
+  );
+  assert.ok(
+    !source.includes('bidCandidates('),
+    '面板又自己拿 bidCandidates 摆档了：那就绕过了固定五槽与跳叫触发'
   );
 });
 
-test('反证：默认档位（引擎的 spread=4 → 五档）与手写的更多档都必须被判出来', () => {
-  assert.equal(bidSpread(source.replace('bidCandidates(view, 2)', 'bidCandidates(view)')), 4, '默认档位没被认出来');
-  assert.equal(bidSpread('bidCandidates(view, 4)'), 4, '手写的 spread 没被认出来');
-  assert.equal(bidSpread('<div>没有候选行</div>'), null, '找不到 bidCandidates 时应返回 null 而不是当作合规');
+/**
+ * 这次要修的旧形状：按「合法花色」逐档摆 —— 后面的花色会往前补位，
+ * 于是「上一档第 3 个按钮」与「下一档第 3 个按钮」不再是同一个花色。
+ */
+const OLD_COLLAPSED = `<div class="mt-3 shrink-0 space-y-1.5">
+  {#each rows as row (row.points)}
+    <div class="flex items-center gap-1.5">
+      <span class="w-7 shrink-0 text-right">{row.points}</span>
+      {#each row.strains as strain (strain)}
+        <button class="bidbtn px-2.5 py-1.5">{BID_GLYPH[strain]}</button>
+      {/each}
+    </div>
+  {/each}
+</div>`;
+
+test('反证：旧的补位形状必须被判出来（它连固定槽标记都没有）', () => {
+  const result = checkBidSlots(OLD_COLLAPSED);
+  assert.equal(result.ok, false, '旧形状被判为通过：这条守卫是空转的');
+});
+
+/** 近似形状：槽标记齐全，却仍按「合法花色」摆 —— 必须被单列的那条规则抓住 */
+const PADDED_SLOTS = `<div data-bid-trigger="row-end">
+  {#each rows as row (row.points)}
+    {#each row.strains as strain (strain)}
+      <span data-bid-slot="legal">{BID_GLYPH[strain]}</span>
+      <span data-bid-slot="invisible" class="invisible">·</span>
+    {/each}
+  {/each}
+</div>`;
+
+test('反证：标记齐全但仍按合法花色摆放（补位）必须被判出来', () => {
+  const result = checkBidSlots(PADDED_SLOTS);
+  assert.equal(result.ok, false, '补位形状混过了守卫');
+  assert.match(result.reason, /row\.strains/);
+});
+
+test('反证：不可叫的花色渲染成 <button>（隐形但可点）必须被判出来', () => {
+  const clickablePlaceholder = `<div data-bid-trigger="row-end">
+  <button data-bid-slot="legal">♣</button>
+  <button data-bid-slot="invisible" class="invisible">♦</button>
+</div>`;
+  const result = checkBidSlots(clickablePlaceholder);
+  assert.equal(result.ok, false, '可点的隐形占位被判为通过：那正是误触的来源');
+  assert.match(result.reason, /不可点/);
+});
+
+test('反证：缺 data-bid-trigger、或取值不在枚举里，都必须被判出来', () => {
+  assert.match(
+    checkBidSlots('<div><span data-bid-slot="legal">♣</span></div>').reason,
+    /data-bid-trigger/
+  );
+  assert.match(
+    checkBidSlots('<div data-bid-trigger="maybe"><span data-bid-slot="legal">♣</span></div>').reason,
+    /row-end/
+  );
 });
 
 /**
- * 面板里三块的先后：信息面 → 候选档位 → 历史表（「不叫」在历史之后，且仍是 sticky）。
- * sticky 页脚压住的是排在它前面的最后一块内容 —— 顺序错了就会重现「不叫遮住叫品档位」。
+ * 面板里三块的先后：信息面 → 候选档位 → 历史表（「不叫」是历史之后、正常文档流里的页脚）。
+ * 页脚排错位置就会压住排在它前面的最后一块内容 —— 顺序错了会重现「不叫遮住叫品档位」。
  */
 function panelOrder(markup: string): 'ok' | 'missing' | 'wrong' {
   const info = markup.indexOf('<AuctionInfo');
-  const tiers = markup.indexOf('{#each rows as row');
+  const tiers = markup.indexOf('{#each layout.tiers as tier');
   const history = markup.indexOf('<AuctionHistory');
   if (info < 0 || tiers < 0 || history < 0) return 'missing';
   return info < tiers && tiers < history ? 'ok' : 'wrong';
@@ -102,14 +151,14 @@ test('候选档位排在信息面之后、历史表之前（「不叫」只能�
   assert.equal(
     panelOrder(source),
     'ok',
-    'BidPanel 里三块的顺序不对：候选档位必须夹在信息面与历史表之间，否则 sticky「不叫」会压住要点的按钮'
+    'BidPanel 里三块的顺序不对：候选档位必须夹在信息面与历史表之间，否则「不叫」会压住要点的按钮'
   );
 });
 
 test('反证：旧的「历史 → 档位 → 不叫」顺序必须被判为错序', () => {
   const OLD_ORDER = `<AuctionInfo />
 <AuctionHistory />
-{#each rows as row}
+{#each layout.tiers as tier}
 <button class="sticky bottom-4 min-h-11">不叫</button>`;
   assert.equal(panelOrder(OLD_ORDER), 'wrong', '旧顺序被判为合规：这条守卫是空转的');
   assert.equal(panelOrder('<AuctionInfo />'), 'missing', '缺块时应返回 missing');

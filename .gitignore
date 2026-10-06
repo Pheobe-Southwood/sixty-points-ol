@@ -7,6 +7,7 @@ build/
 *.db-shm
 *.db-wal
 data/
+.shots/
 .env
 .env.*
 !.env.example

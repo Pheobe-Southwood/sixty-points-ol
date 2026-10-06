@@ -12,6 +12,8 @@
     "test:mcp": "pnpm --filter @sixty/mcp test",
     "mcp-check": "pnpm --filter @sixty/mcp mcp-check",
     "bot-check": "pnpm --filter web bot",
+    "ui-check": "pnpm --filter web ui",
+    "shot": "pnpm --filter web shot",
     "arena": "pnpm --filter @sixty/bot arena",
     "check": "pnpm -r check",
     "deal": "pnpm --filter web deal",

@@ -1,4 +1,6 @@
 import {
+  bidCandidates,
+  bidOptions,
   cardClass,
   cardKey,
   checkPlay as engineCheckPlay,
@@ -8,9 +10,11 @@ import {
   rankLabel,
   SEATS,
   START_LEVEL,
+  STRAINS,
   SUIT_LABEL,
   type Bid,
   type BidCall,
+  type BidOption,
   type Card,
   type CompletedTrick,
   type DealSummary,
@@ -32,9 +36,15 @@ export function whoLabel(names: readonly (string | null)[], mySeat: number, seat
   return names[seat] ?? '空座';
 }
 
-/** 花色字形：用于紧凑的状态条与定约显示（无主用文字） */
+/**
+ * 花色字形：用于紧凑的状态条、定约与叫品显示。
+ *
+ * 无主写成 `NT`（不再写「无主」）：与 MCP 工具面的合法叫品串（`55NT`）同一套写法，
+ * 也是**叫牌面板固定五槽**能等宽的前提 —— 两个汉字比一个花色字形宽 60% 以上，
+ * 第五槽要么加宽（行与行对不齐）要么压字。行文（`/rules`、`/learn` 的叙述句）仍写「无主」。
+ */
 export function strainGlyph(strain: Strain): string {
-  return strain === 'NT' ? '无主' : SUIT_LABEL[strain];
+  return strain === 'NT' ? 'NT' : SUIT_LABEL[strain];
 }
 
 /** 叫品按钮上的字形，与 `strainGlyph` 同源；牌桌与编排台共用一份，不许各写各的 */
@@ -52,17 +62,17 @@ export function isRedStrain(strain: Strain): boolean {
 }
 
 /**
- * 将牌环境的一句话说明：`级牌 5 · 主打 ♥` / `级牌 5 · 无主`。
+ * 将牌环境的一句话说明：`级牌 5 · 主打 ♥` / `级牌 5 · NT`。
  *
  * 教程里凡是「3-4-6 是顺子」「副级三张相等」这类例子，都只有在级牌点数已知时才成立，
  * 所以每个示例块都要带上这句，读者不必往上翻去找级牌是几。
  */
 export function trumpText(trump: TrumpModel): string {
-  return `级牌 ${rankLabel(trump.rank)} · ${trump.strain === 'NT' ? '无主' : `主打 ${SUIT_LABEL[trump.strain]}`}`;
+  return `级牌 ${rankLabel(trump.rank)} · ${trump.strain === 'NT' ? 'NT' : `主打 ${SUIT_LABEL[trump.strain]}`}`;
 }
 
 /**
- * 一副牌的「定约 + 级牌」：`45♣ · 级 5` / `40无主 · 级 A`。
+ * 一副牌的「定约 + 级牌」：`45♣ · 级 5` / `40NT · 级 A`。
  *
  * 定约给出打的分数与花色，级牌给出这一副的主级点数 —— 两者缺一不可：战报里的旧副
  * 级牌各不相同，只写定约的话「为什么这张 5 是主牌」在读旧战报时无从判断。
@@ -103,7 +113,7 @@ export function cardText(card: Card): string {
 /**
  * 叫品的显示文本：`不叫` 或 `40♣`。
  *
- * 花色一律走 `strainGlyph`（字形/无主），界面任何位置都不许再拼 `STRAIN_LABEL` ——
+ * 花色一律走 `strainGlyph`（字形 / NT），界面任何位置都不许再拼 `STRAIN_LABEL` ——
  * 引擎的 `bidLabel` 是给日志和测试看的（`40 梅花`），不是给牌桌看的。
  */
 export function bidText(call: BidCall): string {
@@ -368,10 +378,68 @@ export function levelProgression(history: readonly DealSummary[]): ProgressionRo
 }
 
 /**
+ * 叫牌面板的**固定槽位**与**跳叫触发形态** —— 面板摆哪些档、每档五个槽谁可点，全在这里算，
+ * `BidPanel` 不自己判断（四场景表与反证在 `test/labels.test.ts`）。
+ *
+ * 两条 UI 不变式：
+ *
+ * 1. **花色恒定位**：每档永远给出 `STRAINS` 全序（♣ ♦ ♥ ♠ NT）的五个槽，不可叫的花色 `legal: false`。
+ *    面板把它渲染成**隐形占位**，绝不让后面的槽往前补位 —— 一旦补位，「上一档第 3 个按钮」
+ *    与「下一档第 3 个按钮」就不再是同一个花色，手快就是误触（这正是这次要修的形状）。
+ *
+ * 2. **跳叫显式化**：默认只给非跳叫档 —— 最便宜合法档，外加（该档不满五格时）再一档 +5；
+ *    最便宜档已满五格（最高叫品是 NT，或还没人叫）时**只给这一档**，第二行整行让给触发钮。
+ *    判定基准是**当前最高叫品**，不是字面上「前一个人」：他可能只是 pass，而 pass 不改变叫牌空间。
+ *    点开后共 `BID_TIER_LIMIT` 档，触发钮消失（没有收回按钮）。更大的跳叫仍可由 API / MCP 叫出 ——
+ *    引擎的合法集没变，这里少的只是「面板上一次摆几档」。
+ */
+export const BID_TIER_LIMIT = 5;
+
+/** 一档里的一个花色槽：`legal: false` = 面板渲染隐形占位（占位，但不补位） */
+export interface BidSlot {
+  readonly strain: Strain;
+  readonly legal: boolean;
+}
+
+/** 一档 = 一个分数 + 五个固定槽（严格按 ♣ ♦ ♥ ♠ NT 序） */
+export interface BidTier {
+  readonly points: number;
+  readonly slots: readonly BidSlot[];
+}
+
+/**
+ * 跳叫触发钮的形态：
+ * - `row-end`：最便宜档不满五格（最高叫品是花色），第二档行末一枚窄钮；
+ * - `full-row`：最便宜档已满五格（NT / 没人叫），整个第二行是一枚宽钮；
+ * - `none`：已经展开，不再有触发钮。
+ */
+export type BidTrigger = 'row-end' | 'full-row' | 'none';
+
+export interface BidLayout {
+  readonly tiers: readonly BidTier[];
+  readonly trigger: BidTrigger;
+}
+
+export function bidTiers(view: PublicView, expanded: boolean): BidLayout {
+  const rows = bidCandidates(view, expanded ? BID_TIER_LIMIT - 1 : 1);
+  const tiers = rows.map((row): BidTier => ({
+    points: row.points,
+    slots: STRAINS.map((strain): BidSlot => ({ strain, legal: row.strains.includes(strain) }))
+  }));
+  if (expanded) return { tiers, trigger: 'none' };
+  const first = tiers[0];
+  // 最便宜档满五格 = 同分没有可压的花色，再上一档就已经是跳叫 —— 第二行整行让给触发钮
+  if (first !== undefined && first.slots.every((slot) => slot.legal)) {
+    return { tiers: [first], trigger: 'full-row' };
+  }
+  return { tiers, trigger: 'row-end' };
+}
+
+/**
  * 叫牌合法集只有一处实现：引擎包（`bidOptions` 是纯规则，`bidCandidates` 只是从视图里取最高叫品）。
  *
  * 牌桌的叫牌面板、牌局编排台与 MCP 工具面的 `legal_bids` 都走这一份 ——
  * 合法集不允许有第二个来源，否则改规则时会出现「工具面说合法、服务端说非法」。
  * 这里保留同名转出，调用方不必改 import。
  */
-export { bidCandidates, bidOptions, type BidOption } from '@sixty/engine';
+export { bidCandidates, bidOptions, type BidOption };

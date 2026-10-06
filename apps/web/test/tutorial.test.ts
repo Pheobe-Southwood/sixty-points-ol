@@ -462,7 +462,7 @@ test('升级步进示例用引擎的进度换算核对（含 A 之后进 2(+1)�
 
 test('trumpText：每个示例都能一句话说清将牌环境', () => {
   assert.equal(trumpText(TRUMP_HEARTS), '级牌 5 · 主打 ♥');
-  assert.equal(trumpText(TRUMP_NT), '级牌 5 · 无主');
+  assert.equal(trumpText(TRUMP_NT), '级牌 5 · NT');
   assert.equal(trumpText({ strain: 'C', rank: 14 }), '级牌 A · 主打 ♣');
-  assert.equal(trumpText({ strain: 'NT', rank: 2 }), '级牌 2 · 无主');
+  assert.equal(trumpText({ strain: 'NT', rank: 2 }), '级牌 2 · NT');
 });
